@@ -8,23 +8,96 @@ YAML is human-friendly to read and write. YMX uses that property to let authors 
 
 The project provides a tool/compiler that turns YAML source files into documents, PDFs, and HTML, while keeping the authoring experience simple and declarative.
 
+## Terminology
+
+- **Document**: a single YAML source file parsed by YMX.
+- **Component**: each top-level key-value pair in a document defines a component. The key is the component's name and the value gives its content (rule 1).
+- **Property**: a key-value pair inside a component. Properties are also the arguments the component accepts when called.
+- **Argument**: a value passed to a component when it is called. Arguments are referenced in component bodies as `$name` (named) or `$0`, `$1`, `$2`, … (positional).
+- **Template component**: a component whose name starts with `$` (e.g. `$box`). Templates are applied automatically after the component that uses them is called (rule 8). Templates can chain indefinitely (`$a`, `$$a`, `$$$a`, …).
+- **Entry**: the top-level component chosen for compilation. Defaults to `main`; overridable with `--entry`.
+- **Namespace**: the scope a component lives in. The project root is the global namespace; each subdirectory is a sub-namespace addressed by a dotted path (e.g. `subdir.comp`).
+
 ## Technologies
 
 The project is written in Rust. Rust provides type and memory safety without a garbage collector, which suits a long-lived, performance-sensitive tool.
 
+## Scope
+
+YMX is being built in versions. The rules in this document describe the language and are stable across versions; the *output targets* arrive incrementally.
+
+**v1 (current)**: the resolver for rules 1–14, emits JSON. CLI and library only. HTML, PDF, and WEB are intentionally not in v1.
+
+**v2**: HTML renderer + CLI flag to pick the target.
+
+**v3**: PDF renderer (backend choice deferred until needed).
+
+**Future**: WEB service; swappable math/engine backends (Lua, Python, JavaScript); user-defined builtins via a plugin system.
+
+## Architecture
+
+The project is a Cargo workspace of multiple crates:
+
+```
+ymx/
+├── Cargo.toml
+├── crates/
+│   ├── ymx-core/    # parser, resolver, diagnostics, builtins (no I/O)
+│   ├── ymx-lib/     # re-exports ymx-core as stable public API
+│   ├── ymx-cli/     # binary: arg parsing, dir walking, JSON emit
+│   └── ymx-web/     # stub crate (v3+)
+└── tests/
+    └── cases/
+        └── rule-NN/<scenario>.yml   # insta snapshots
+```
+
+- **YAML parsing**: `yaml-rust2` is used directly so source spans (line/column) are preserved on every scalar for diagnostics.
+- **Output**: YAML → intermediate JSON-like `Value` IR → serialize to JSON (v1). HTML/PDF renderers consume the same IR in later versions.
+- **Math**: a `MathEngine` trait evaluates `${...}`. v1 uses dynamic numeric coercion (operands parse as numbers when possible; `+` falls back to string concatenation otherwise). The trait is the boundary for swapping to a Lua/Python/JavaScript engine in the future.
+- **Builtins**: a `Builtin` trait. v1 ships `$map`, `$reduce`, `$merge`. The trait is the future plugin boundary.
+- **Diagnostics**: structured `Diagnostic { line, col, component, code, message }` rendered to stderr. Designed so a richer "bug report" mode can be added later without breaking the API.
+- **Cycles**: no precise cycle detection in v1; a configurable depth cap (`--max-depth`, default 256) prevents runaway recursion and surfaces as a "max depth exceeded" diagnostic.
+
+## Multi-file projects
+
+A project is a directory. Namespaces are directory-scoped:
+
+- Top-level files in the project root share one global namespace.
+- Subdirectories form sub-namespaces, accessed via a dotted path (e.g. `subdir.comp`).
+- Two definitions of the same component name in the same namespace are a hard error.
+- Each `.yml` / `.yaml` file is one document. Multi-document YAML streams (`---`) inside a single file are not supported in v1.
+
+## CLI
+
+```
+ymx <path> [flags]
+```
+
+- `--entry <name>`: component to compile (default `main`).
+- `--from-keyword <kw>`: override the `from` keyword (default `from`).
+- `--default-keyword <kw>`: override the `$default` keyword (default `default`).
+- `--max-depth <n>`: limit on template/call recursion (default `256`).
+- `--output <file>`: write JSON to a file instead of stdout.
+- `--pretty`: pretty-print the JSON output.
+- `--format <json|diagnostics>`: output style (v1: `json`; `diagnostics` lists errors only).
+
 ## Features
 
-- Compile bug reports showing the line, column, and component name where the issue occurred.
-- Configurable compile flags.
-- Compile multi-file projects.
+**v1**
 
-## Terminology
+- Compile a directory of YAML files into a JSON document, applying rules 1–14.
+- Configurable compile flags (see CLI).
+- Compile multi-file, directory-scoped projects.
+- Structured diagnostics reporting line, column, and component name where an issue occurred, plus an error code.
+- Usable as a CLI tool and as a Rust library (`ymx-lib`).
 
-- **Document**: a single YAML source file parsed by YMX.
-- **Component**: each top-level key-value pair in a document defines a component. The key is the component's name and the value is its content (rule 1).
-- **Property**: a key-value pair inside a component. Properties are also the arguments the component accepts when called.
-- **Argument**: a value passed to a component when it is called. Arguments are referenced in component bodies as `$name` (named) or `$0`, `$1`, `$2`, … (positional).
-- **Template component**: a component whose name starts with `$` (e.g. `$box`). Templates are applied automatically after the component that uses them is called (rule 7).
+**Later**
+
+- HTML and PDF renderers.
+- WEB service (REST endpoint that compiles submitted YAML).
+- Swappable math/engine backends.
+- User-defined builtins via a plugin system.
+- Rich "bug report" mode with full call-stack and local-argument dump.
 
 ## Compiling Rules
 
