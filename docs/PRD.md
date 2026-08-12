@@ -329,9 +329,10 @@ Example
 
 ```yml
 $a:
-  - ${x + y}
+  - {sum: ${x + y}, x: 0}
+  - ${sum + x + y}
   - a: $x
-    b: $y
+    b: ${2*y}
     sum: $last
 a:
   - x: 1
@@ -340,16 +341,18 @@ a:
     y: 4
 ```
 
-Calling `a` runs a two-step reduce of each element through `$a`:
+Calling `a` runs a three-step reduce of each element through `$a`:
 
 1. The first element `a[0]={x:1, y:2}`:
-   - Step 1: `${x + y}` with the initial `x=1, y=2` → the number `3`, which becomes `$last`. Since the result is a non-object, no overwrite carries forward (rule 12).
-   - Step 2: `a: $x, b: $y, sum: $last` runs with the original `x=1, y=2` and `$last=3` → `{"a": 1, "b": 2, "sum": 3}`.
-2. The second element `a[1]={x:3, y:4}` runs the same two-step reduce:
-   - Step 1: `${x + y}` → `7` (becomes `$last`).
-   - Step 2: `a: $x, b: $y, sum: $last` with `x=3, y=4` and `$last=7` → `{"a": 3, "b": 4, "sum": 7}`.
+   - Step 1: `{sum: ${x + y}, x: 0}` runs with the initial `x=1, y=2` → `{"sum": 3, "x": 0}`. This returns an object with `sum` and `x`, so `x` (and `sum`) overwrite the initial for the next step **only**.
+   - Step 2: `${sum + x + y}` runs with `x=0` (overwritten), `y=2` (initial), `sum=3` → the number `5`, which becomes `$last`. Since the result is a non-object, no overwrite carries forward.
+   - Step 3: `{a: $x, b: ${2*y}, sum: $last}` runs with the original `x=1, y=2` and `$last=5` → `{"a": 1, "b": 4, "sum": 5}`.
+2. The second element `a[1]={x:3, y:4}` runs the same three-step reduce:
+   - Step 1: `{sum: ${x + y}, x: 0}` → `{"sum": 7, "x": 0}` (overwrites `x`, adds `sum`).
+   - Step 2: `${sum + x + y}` with `sum=7, x=0, y=4` → `11` (becomes `$last`). Reverts.
+   - Step 3: `{a: $x, b: ${2*y}, sum: $last}` with `x=3, y=4` and `$last=11` → `{"a": 3, "b": 8, "sum": 11}`.
 
-So calling `a` produces `[{"a": 1, "b": 2, "sum": 3}, {"a": 3, "b": 4, "sum": 7}]`.
+So calling `a` produces `[{"a": 1, "b": 4, "sum": 5}, {"a": 3, "b": 8, "sum": 11}]`.
 
 #### Edge cases (lenient)
 
