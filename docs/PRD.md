@@ -52,9 +52,9 @@ ymx/
 ```
 
 - **YAML parsing**: `yaml-rust2` is used directly so source spans (line/column) are preserved on every scalar for diagnostics.
-- **Output**: YAML → intermediate JSON-like `Value` IR → serialize to JSON (v1). HTML/PDF renderers consume the same IR in later versions.
+- **Output**: YAML → intermediate `Value` IR → serialize to JSON (v1). Numbers are tagged `i64` (integer fast path) / `f64` (float fallback); object keys preserve YAML insertion order. HTML/PDF renderers consume the same IR in later versions.
 - **Math**: a `MathEngine` trait evaluates `${...}`. v1 uses dynamic numeric coercion (operands parse as numbers when possible; `+` falls back to string concatenation otherwise). The trait is the boundary for swapping to a Lua/Python/JavaScript engine in the future.
-- **Builtins**: a `Builtin` trait. v1 ships `$map`, `$reduce`, `$merge`. The trait is the future plugin boundary.
+- **Builtins**: a `Builtin` trait. v1 ships `$map`, `$reduce`, `$merge`. Each builtin is a *special form* that declares its own argument-evaluation strategy (e.g. `$map`/`$reduce` keep their first argument unevaluated as a callable component). The trait is the future plugin boundary.
 - **Diagnostics**: structured `Diagnostic { line, col, component, code, message }` rendered to stderr. Designed so a richer "bug report" mode can be added later without breaking the API.
 - **Cycles**: no precise cycle detection in v1; a configurable depth cap (`--max-depth`, default 256) prevents runaway recursion and surfaces as a "max depth exceeded" diagnostic.
 
@@ -75,7 +75,7 @@ ymx <path> [flags]
 
 - `--entry <name>`: component to compile (default `main`).
 - `--from-keyword <kw>`: override the `from` keyword (default `from`).
-- `--default-keyword <kw>`: override the `$default` keyword (default `default`).
+- `--default-keyword <kw>`: override the `$default` keyword name (default `default`); the engine always prefixes the name with `$`.
 - `--max-depth <n>`: limit on template/call recursion (default `256`).
 - `--output <file>`: write JSON to a file instead of stdout.
 - `--pretty`: pretty-print the JSON output.
@@ -212,6 +212,8 @@ b: [$default,$y,$z]
 
 Calling `a` returns `[1, 3, 5]`. The leading value passed through `$default` corresponds to the property named after the target component; its name is configurable.
 
+> If more than one property's name matches a component, it is a hard error (ambiguous shortcut).
+
 ### 8. Components can have template components
 
 A component whose name starts with `$` is a template. When a component with a matching (non-`$`) name is called, the template is applied afterwards automatically.
@@ -338,14 +340,28 @@ a:
     y: 4
 ```
 
-Calling `a`:
+Calling `a` runs a two-step reduce of each element through `$a`:
 
-1. The first element `a[0]={x:1, y:2}` is reduced through `$a`. The single template item `a: $x, b: $y` is a pass-through with `x=1, y=2`, so the first result is `{"a": 1, "b": 2, "sum": 3}`.
-2. The second element `a[1]={x:3, y:4}` is reduced through the same `$a`, producing `{"a": 3, "b": 4, "sum": 7}`.
+1. The first element `a[0]={x:1, y:2}`:
+   - Step 1: `${x + y}` with the initial `x=1, y=2` → the number `3`, which becomes `$last`. Since the result is a non-object, no overwrite carries forward (rule 12).
+   - Step 2: `a: $x, b: $y, sum: $last` runs with the original `x=1, y=2` and `$last=3` → `{"a": 1, "b": 2, "sum": 3}`.
+2. The second element `a[1]={x:3, y:4}` runs the same two-step reduce:
+   - Step 1: `${x + y}` → `7` (becomes `$last`).
+   - Step 2: `a: $x, b: $y, sum: $last` with `x=3, y=4` and `$last=7` → `{"a": 3, "b": 4, "sum": 7}`.
 
 So calling `a` produces `[{"a": 1, "b": 2, "sum": 3}, {"a": 3, "b": 4, "sum": 7}]`.
 
+#### Edge cases (lenient)
+
+The following lenient fallbacks apply to rules 11–13:
+
+- An **empty array** `a` produces an **empty array** output.
+- An **empty `$a` template** is a **pass-through**: it returns its input unchanged.
+- A **non-array `$a`** applied to a **non-array `a`** simply calls `$a` with `a` as `$0` (per rule 8's chain semantics).
+
 ### 14. `map` and `reduce` operations via `$map` and `$reduce`
+
+`$map`, `$reduce`, and `$merge` (rule 15) are **special forms**: each declares its own argument-evaluation strategy, rather than uniformly receiving all arguments pre-evaluated. `$map` and `$reduce` keep their first argument unevaluated (a callable component) and evaluate the array argument eagerly; `$merge` evaluates both arguments eagerly.
 
 `$map(object, array)` applies an object component to each item of an array, returning an array of results.
 
