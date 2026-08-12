@@ -66,6 +66,7 @@ A project is a directory. Namespaces are directory-scoped:
 - Subdirectories form sub-namespaces, accessed via a dotted path (e.g. `subdir.comp`).
 - Two definitions of the same component name in the same namespace are a hard error.
 - Each `.yml` / `.yaml` file is one document. Multi-document YAML streams (`---`) inside a single file are not supported in v1.
+- A component or template whose name starts with `_` is restricted to file scope: it does not participate in the namespace merge and is not visible from other documents.
 
 ## CLI
 
@@ -111,6 +112,18 @@ Inside a string value, `$` triggers interpolation; `\` is the escape character.
 - `$0`, `$1`, … `$N` reference positional arguments.
 - `${...}` enters math context (rule 6).
 - `\$` produces a literal `$`; `\\` produces a literal `\`.
+
+### Component visibility
+
+By default, components and templates are visible across the entire project (global namespace). A name whose effective identifier starts with `_` is restricted to **file scope** — it is only visible from the document that defines it.
+
+- `_a` is a file-scoped component: only callable from within the same document.
+- `$_a` is a file-scoped template: only applied to matching components defined in the same document.
+- The same applies to chained templates: `$$a` and `$$$a` chain through the global `a`; `$_a` / `$$_a` chain through the file-scoped `_a`.
+
+Matching between a component and its template is unaffected — `_a` matches `$_a`, just as `a` matches `$a`. They are distinct names: a document may define both `a` (global) and `_a` (file-scoped).
+
+Referencing a file-scoped component from outside its document is a hard error.
 
 ### 1. Top-level keys are components
 
@@ -233,7 +246,7 @@ Calling `a` returns `[1, 3, 5]`. The leading value passed through `$default` cor
 
 A component whose name starts with `$` is a template. When a component with a matching (non-`$`) name is called, the template is applied afterwards automatically.
 
-> Templates are looked up in the **global namespace** regardless of which namespace the calling component lives in.
+> Templates are looked up in the **global namespace** regardless of which namespace the calling component lives in. A template whose effective identifier starts with `_` (e.g. `$_a`) is instead restricted to file scope (see *Component visibility*).
 
 ```yml
 $box:
