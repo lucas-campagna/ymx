@@ -26,7 +26,7 @@ The project is written in Rust. Rust provides type and memory safety without a g
 
 YMX is being built in versions. The rules in this document describe the language and are stable across versions; the *output targets* arrive incrementally.
 
-**v1 (current)**: the resolver for rules 1–14, emits JSON. CLI and library only. HTML, PDF, and WEB are intentionally not in v1.
+**v1 (current)**: the resolver for rules 1–15, emits JSON. CLI and library only. HTML, PDF, and WEB are intentionally not in v1.
 
 **v2**: HTML renderer + CLI flag to pick the target.
 
@@ -85,7 +85,7 @@ ymx <path> [flags]
 
 **v1**
 
-- Compile a directory of YAML files into a JSON document, applying rules 1–14.
+- Compile a directory of YAML files into a JSON document, applying rules 1–15.
 - Configurable compile flags (see CLI).
 - Compile multi-file, directory-scoped projects.
 - Structured diagnostics reporting line, column, and component name where an issue occurred, plus an error code.
@@ -292,21 +292,6 @@ a:
 
 Calling `a` produces `["1 + 2", "3 + 4"]`.
 
-Example 3
-
-```yml
-$a:
-  - "values are $x and $y"
-  - {x:$y,y:$x}
-a:
-  - x: 1
-    y: 2
-  - x: 3
-    y: 4
-```
-
-Calling `a` produces `[["values are 1 and 2", {"x": 2, "y": 1}], ["values are 3 and 4", {"x": 4, "y": 3}]]`.
-
 ### 12. An array template component reduces over its sibling component
 
 When the template is an array, the sibling component supplies the initial arguments. The template iterates over its own items; on each step the previous item's result is available as `$last`.
@@ -334,7 +319,33 @@ Calling `a`:
 
 So calling `a` returns `"1 + 2 < 6"`.
 
-### 13. `map` and `reduce` operations via `$map` and `$reduce`
+### 13. When both the component and its template are arrays, reduce each element independently
+
+When both `a` and `$a` are arrays, `$a` is treated as a reduce sequence (per rule 12) that is applied independently to **each element** of `a`. The result is an array with one reduced entry per element of `a`. Each element of `a` starts its own reduce run with that element's properties as the initial arguments, using the same overwrite and `$last` semantics as rule 12.
+
+Example
+
+```yml
+$a:
+  - ${x + y}
+  - a: $x
+    b: $y
+    sum: $last
+a:
+  - x: 1
+    y: 2
+  - x: 3
+    y: 4
+```
+
+Calling `a`:
+
+1. The first element `a[0]={x:1, y:2}` is reduced through `$a`. The single template item `a: $x, b: $y` is a pass-through with `x=1, y=2`, so the first result is `{"a": 1, "b": 2, "sum": 3}`.
+2. The second element `a[1]={x:3, y:4}` is reduced through the same `$a`, producing `{"a": 3, "b": 4, "sum": 7}`.
+
+So calling `a` produces `[{"a": 1, "b": 2, "sum": 3}, {"a": 3, "b": 4, "sum": 7}]`.
+
+### 14. `map` and `reduce` operations via `$map` and `$reduce`
 
 `$map(object, array)` applies an object component to each item of an array, returning an array of results.
 
@@ -369,7 +380,7 @@ Calling `c` produces `"1 + 2 = 3"`:
 1. The first item calls component `a` with `a=1, b=2`, returning the string `"1 + 2"`. This becomes `$last` for the next step.
 2. The second (and last) item has body `$last = ${last}`. Substituting `$last` gives `"1 + 2"`, and math-evaluating `last` (the string `"1 + 2"`) gives the number `3`. The result is `"1 + 2 = 3"`.
 
-### 14. Merging objects and arrays with `$merge`
+### 15. Merging objects and arrays with `$merge`
 
 `$merge(a, b)` merges two values. Arrays are concatenated; objects are shallow-merged (later keys overwrite earlier ones).
 
