@@ -125,6 +125,63 @@ Matching between a component and its template is unaffected — `_a` matches `$_
 
 Referencing a file-scoped component from outside its document is a hard error.
 
+### Resolution order
+
+Resolving a component runs in three steps, in this fixed order:
+
+1. **Property resolution (before template)** — every property value of the component is fully resolved. A property value is a *nested call-site* when it is an object containing the `from` key, or any value containing an inline `$comp(...)` call (rule 4) or a `${...}` interpolation (rule 6). Nested call-sites resolve **bottom-up**: the deepest nested call is evaluated first, its return value bubbles up to its parent, and so on, until every property of the component has a fully resolved value. Bare `$name` (no parens) resolves as: (a) a named argument `name` in scope → that argument's value; (b) else if a regular component `name` exists → call it with no args and use its return value (its own template chain applies first); (c) else → hard error (rule 10). `$name(...)` unconditionally calls the component `name` (rule 4) and bypasses the argument lookup. Inside `${...}` (math context) there is **no fallback**: a bare identifier refers to an argument or the math result of the previous step (`last`); to call a component inside math, use the `name(...)` form (rule 6).
+2. **Template chain (rule 8)** — applied to the post-step-1 property set. The innermost template runs first, its result feeds the next template, and so on. Templates can only be reached through their **direct** child: `a` invokes `$a`; if `$a` is absent, `a` does **not** skip to `$$a` — the chain is broken at that point. Template names are not valid `from` targets.
+3. **`from` dispatch (rule 3, after template)** — if the (post-template) value of `from` names a valid *regular* component, call it with the rest of the property set as arguments; the return value replaces the component's output. If the `from` value does not name a valid regular component (templates excluded), `from` is treated as a plain property — no call, no error.
+
+A nested mini-component (an object whose value uses `from`) receives **only the arguments explicitly written in its body**, resolved against the parent's current arguments. The parent's other arguments are not auto-forwarded; rules 9 and 10 apply within the nested call exactly as they do at the top level. A nested mini-component follows the same three-step evaluation as a top-level component, so it can itself contain nested call-sites.
+
+Inline `$comp(...)` calls (and `${...}` interpolations) run in **step 1**, before templates. `from` dispatch runs in **step 3**, after templates. Recursion (nested calls, template chains, `from` dispatch) is bounded by `--max-depth`; exceeding it raises a "max depth exceeded" diagnostic.
+
+Example 1 — nested call-sites resolve inner-to-outer:
+
+```yml
+a:
+  from: b
+  x: $compC($x)
+  y:
+    from: compC
+    0: $x
+  z:
+    from: compD
+    a:
+      from: compE
+      ...
+```
+
+Evaluating `a`, assuming each `comp*` and `b` resolves to a valid component:
+
+1. Resolve the deepest nested call first: `z.a.from` invokes `compE` with the args written in that nested object (resolved against `z`'s context). Its return value becomes property `a` inside `z`.
+2. With property `a` resolved, `z.from` invokes `compD` with the args written in `z`'s body (including the now-resolved `a`).
+3. Independently, `y.from` invokes `compC` with `0 = $x` (resolved against `a`'s args).
+4. Independently, `x` evaluates the inline `$compC($x)` call.
+5. `a` now has fully resolved values for `x`, `y`, and `z`. Its template chain (if any) runs next, then `a.from` invokes `b` using those resolved values as arguments.
+
+Example 2 — inline calls run before templates; `from` runs after:
+
+```yml
+a:
+  from: $b()
+$a:
+  from: $from
+  x: 2
+b: c
+c: ${1 + $x}
+```
+
+Calling `a`:
+
+1. Property resolution: `from: $b()` calls `b` → `"c"`. `a`'s args are now `{from: "c"}`. (`from: $b` would be equivalent here, since no `b` argument is in scope.)
+2. Template `$a` runs with those args: `{from: $from, x: 2}` → `{from: "c", x: 2}`.
+3. `from` dispatch: `from="c"` names a valid regular component → call `c` with `{x: 2}`.
+4. `c` returns `${1 + 2}` = `3`.
+
+Final result: `3`.
+
 ### 1. Top-level keys are components
 
 Every key-value pair in the main document is a component. The key gives the component's name; the value gives its content.
@@ -147,6 +204,8 @@ Calling `user` with `user_name="Mathew"` and `user_phone=123456789` produces the
 
 > Argument values are parsed at the call site (numbers/strings/null/bool) before being bound to `$N` / `$name` inside the called component.
 
+> Bare `$name` (no parens) resolves, in order: (a) if a named argument `name` is in scope → that argument's value; (b) else if a regular component `name` exists → call it with no args and use its return value; (c) else → hard error (rule 10). This fallback applies wherever `$name` appears, including inside plain strings. `$name(...)` unconditionally calls the component `name` and bypasses the argument lookup; the two forms coincide when no `name` argument is in scope.
+
 ### 3. Components can call each other with the `from` property
 
 The `from` property references another component by name. Users can override this keyword in their own context to avoid conflicts.
@@ -163,7 +222,28 @@ CompB: $x + $y
 
 Calling `CompA` returns `"12 + 34"`.
 
-> If a component has both `from` and a matching `$template`, the template chain applies FIRST, then `from` resolves against the template's result.
+> If a component has both `from` and a matching `$template`, the template chain applies FIRST, then `from` resolves against the template's result (see *Resolution order*).
+
+> The `from` value is computed as part of property resolution (step 1) and may be any expression that resolves to a component name — e.g. `from: $b()` first evaluates `$b()`, then uses its return value as the `from` target.
+
+> If the (resolved) `from` value does **not** name a valid *regular* component, `from` is treated as a plain property — no call is made and no error is raised. Template names (those starting with `$`) are not valid `from` targets; templates are only reached through the automatic chain (rule 8).
+
+Example — invalid `from` is a plain property:
+
+```yml
+a:
+  from: b
+```
+
+Calling `a` (no `b` component defined) returns `{"from": "b"}`. Adding component `b`:
+
+```yml
+a:
+  from: b
+b: 123
+```
+
+Now `a` calls `b` and returns `123`.
 
 ### 4. Components can be called inline using `$`
 
@@ -179,6 +259,8 @@ b: $x + $y
 Here `$b` is treated as a call to the `b` component from inside `a`'s body, rather than as a property of `a`.
 
 > A `$b(...)` call may mix positional and named arguments, e.g. `$b(12, y=34)`. Positional arguments bind to `$0`, `$1`, …; named arguments bind to `$<name>`.
+
+> `$name(...)` unconditionally calls the component `name`, even if a `name` argument is in scope. Use `$name(...)` to bypass the argument lookup that bare `$name` performs (rule 2). Inline `$comp(...)` calls run during step 1 of *Resolution order* — before templates (rule 8) and before `from` dispatch (rule 3).
 
 ### 5. Positional arguments are supported with `$0`, `$1`, `$2`, …
 
@@ -224,6 +306,8 @@ Here `a` calls `b` which sums `12` with `34` yielding `46`, then calls `c` with 
 > `%` (Remainder/Modulus): Returns the integer remainder of division.
 > `**` (Exponentiation): Raises the first operand to the power of the second.
 
+> Inside `${...}`, bare identifiers refer to arguments (or the math result `last`) — there is **no component fallback** as there is for bare `$name` outside math (rule 2). To call a component inside a math expression, use the `name(...)` form (no `$` prefix), as in `b(12,34)` above.
+
 ### 7. Shortcut: a property name matching a component name calls that component
 
 If a component defines a property whose name matches another component, that property value is passed to the matched component as `$default`, and the remaining properties of the calling component are passed as arguments.
@@ -242,6 +326,30 @@ Calling `a` returns `[1, 3, 5]`. The leading value passed through `$default` cor
 
 > If more than one property's name matches a component, it is a hard error (ambiguous shortcut).
 
+> The shortcut fires during step 2 of *Resolution order* — against the post-template property set. The shortcut is **suppressed** when the component has a `from` property pointing to a valid regular component: in that case `from` is the call directive, and the otherwise-matching property is passed as a regular argument to the `from`-targeted component. The shortcut applies inside nested mini-components under the same conditions, including the same suppression when a nested `from` is valid. Suppression does **not** happen when `from` is invalid (plain property per rule 3); in that case the shortcut fires normally.
+
+Example 1 — shortcut fires:
+
+```yml
+a:
+  b: 1
+b: ${default + 1}
+```
+
+Calling `a` returns `2`.
+
+Example 2 — shortcut suppressed by a valid `from`:
+
+```yml
+a:
+  from: c
+  b: 1
+b: ${default + 1}
+c: ${b + 2}
+```
+
+Calling `a` returns `3`: `from: c` is valid, so `a` calls `c` with `b=1` (rule 7 does not fire).
+
 ### 8. Components can have template components
 
 A component whose name starts with `$` is a template. When a component with a matching (non-`$`) name is called, the template is applied afterwards automatically.
@@ -259,6 +367,8 @@ box:
 Calling `box` with `{"name": "Rocky"}` produces `{"from": "div", "children": "Hello, Sir. Rocky"}`. The argument `name="Rocky"` is applied to `box`; `box` then invokes `$box`, which expects a `$name` property.
 
 Templates can be chained indefinitely: a component `a` invokes `$a`, which itself can have a template `$$a`, which can have `$$$a`, and so on. The chain unwinds in order — the innermost template is applied first, then its result feeds the next template, until no more templates match.
+
+> Templates can only be reached through their **direct** child: `a` invokes `$a`; if `$a` is absent, `a` does **not** skip to `$$a` — the chain is broken at that point. A template name (starting with `$`) is not a valid `from` target. Template application is step 2 of *Resolution order* — it sits between property resolution (step 1, where inline `$comp(...)` calls run) and `from` dispatch (step 3).
 
 When a component's result is a scalar (not an object with named properties), it is passed to the next template as the positional argument `$0`, consistent with rule 5.
 
