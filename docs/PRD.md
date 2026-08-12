@@ -1,31 +1,42 @@
 # YMX
 
-A Yaml WEB/CLI/Library parser to docs/html/pdf.
+A YAML parser and compiler for documents, HTML, and PDF — usable as a CLI tool, a WEB service, and a library.
 
 ## Purpose of the project
 
-Make use of the easy reading and write of yaml files to create a parser for any other documents.
+YAML is human-friendly to read and write. YMX uses that property to let authors describe rich, reusable, composable documents that compile to HTML, PDF, or arbitrary JSON-like structures.
 
-This project will provide a tool/compiler to build documents, pdfs and even html from yaml.
+The project provides a tool/compiler that turns YAML source files into documents, PDFs, and HTML, while keeping the authoring experience simple and declarative.
 
 ## Technologies
 
-We are going to just use Rust, since there's no need for GC and should be a long live project, with type and memory safety.
-
+The project is written in Rust. Rust provides type and memory safety without a garbage collector, which suits a long-lived, performance-sensitive tool.
 
 ## Features
 
-- Compiling bug report showing the line, column and component name where the issue is
-- Compiling flags
-- Compiling project (many files)
+- Compile bug reports showing the line, column, and component name where the issue occurred.
+- Configurable compile flags.
+- Compile multi-file projects.
 
-### Compiling Rules
+## Terminology
 
-Here are the rules of this project:
+- **Document**: a single YAML source file parsed by YMX.
+- **Component**: each top-level key-value pair in a document defines a component. The key is the component's name and the value is its content (rule 1).
+- **Property**: a key-value pair inside a component. Properties are also the arguments the component accepts when called.
+- **Argument**: a value passed to a component when it is called. Arguments are referenced in component bodies as `$name` (named) or `$0`, `$1`, `$2`, … (positional).
+- **Template component**: a component whose name starts with `$` (e.g. `$box`). Templates are applied automatically after the component that uses them is called (rule 7).
 
-#### 1. Every key-value in the main document is a component with name given by the key and content given by the name
+## Compiling Rules
 
-#### 2. Components are callable with arguments, arguments are texts starting with `$` (can contain `_`)
+The following rules define how YMX parses and resolves components.
+
+### 1. Top-level keys are components
+
+Every key-value pair in the main document is a component. The key gives the component's name; the value gives its content.
+
+### 2. Components are callable with arguments
+
+Arguments are referenced in a component body by a name starting with `$` (the name may contain `_`).
 
 Example:
 
@@ -34,14 +45,14 @@ user:
   name: $user_name
   phone: $user_phone
 ```
-```
-```
 
-Calling `user` with `user_name="Mathew"` and `user_phone=123456789` you will get the object `{"name": "Mathew", "phone": 123456789}`.
+Calling `user` with `user_name="Mathew"` and `user_phone=123456789` produces the object `{"name": "Mathew", "phone": 123456789}`.
 
-> Notice that values are parsed with string as fallback.
+> Note: argument values are parsed, falling back to string when no other type matches.
 
-#### 3. Components can call each other with the `from` property (user can use override this keyword to avoid conflicts on his context)
+### 3. Components can call each other with the `from` property
+
+The `from` property references another component by name. Users can override this keyword in their own context to avoid conflicts.
 
 Example:
 
@@ -53,9 +64,11 @@ CompA:
 CompB: $x + $y
 ```
 
-Calling `CompA` we get `"12 + 34"`.
+Calling `CompA` returns `"12 + 34"`.
 
-#### 4. Component calling can also be made using `$`
+### 4. Components can be called inline using `$`
+
+A `$name(...)` expression inside a value calls another component instead of reading a property.
 
 Example:
 
@@ -64,9 +77,11 @@ a: $b(x=12,y=34)
 b: $x + $y
 ```
 
-> This way instead of interpret `$b` as a property of `a`, we are calling `b` component from `a` body.
+Here `$b` is treated as a call to the `b` component from inside `a`'s body, rather than as a property of `a`.
 
-#### 4. Component calling with `$` can be made with unamed properties, this way we use sequence properties `$0`, `$1`, `$2`, ...
+### 5. Positional arguments are supported with `$0`, `$1`, `$2`, …
+
+When calling a component with `$`, arguments may be unnamed. They become sequence properties `$0`, `$1`, `$2`, … inside the called component.
 
 Example:
 
@@ -75,9 +90,11 @@ a: $b(12,34)
 b: $0 + $1
 ```
 
-Calling `a` we get `"12 + 34"` again.
+Calling `a` returns `"12 + 34"` again.
 
-#### 5. We can do math and call components as functions with `${...}`
+### 6. Math and component calls with `${...}`
+
+The `${...}` form evaluates its contents as a math expression and can also call components as functions inside it.
 
 Example:
 
@@ -86,11 +103,9 @@ a: $b(12,34)
 b: ${$0 + $1}
 ```
 
-Calling `a` now we get the number`46`.
+Calling `a` returns the number `46`.
 
-We could also call a component
-
-Example:
+Components can also be called inside the expression:
 
 ```yml
 a: ${b(12,34) + c(28)}
@@ -98,7 +113,7 @@ b: ${$0 + $1}
 c: ${2 * $0}
 ```
 
-Here, `a` calls `b` which sums `12` with `34` and return `46` and `c` is called with `28` which doubles to `56`, then at `a` we sum `46 + 56` then results in `102`.
+Here `a` calls `b` which sums `12` with `34` yielding `46`, then calls `c` with `28` which doubles it to `56`. Finally `a` sums them to `102`.
 
 > The math operators are:
 > `+` (Addition): Sums two numbers or concatenates strings.
@@ -108,7 +123,11 @@ Here, `a` calls `b` which sums `12` with `34` and return `46` and `c` is called 
 > `%` (Remainder/Modulus): Returns the integer remainder of division.
 > `**` (Exponentiation): Raises the first operand to the power of the second.
 
-#### 6. You can shortcut component calling by using the component name in the property
+### 7. Shortcut: a property name matching a component name calls that component
+
+If a component defines a property whose name matches another component, that property value is passed to the matched component as `$default`, and the remaining properties of the calling component are passed as arguments.
+
+Example:
 
 ```yml
 a:
@@ -118,9 +137,11 @@ a:
 b: [$default,$y,$z]
 ```
 
-Calling `a` we get `[1,3,5]`, the `default` will be the value in front of the component name, it can be configurable to use another value.
+Calling `a` returns `[1, 3, 5]`. The leading value passed through `$default` corresponds to the property named after the target component; its name is configurable.
 
-#### 7. Components can have template components which will be called after the component automatically
+### 8. Components can have template components
+
+A component whose name starts with `$` is a template. When a component with a matching (non-`$`) name is called, the template is applied afterwards automatically.
 
 ```yml
 $box:
@@ -130,19 +151,45 @@ box:
   name: Sir. $name
 ```
 
-Calling `box` with `{"name": "Rocky"}` we get `{"from": "div", "children": "Hello, Sir. Rocky"}`. The `"Rocky"` is applied to `box` in it's call, then `box` calls `$box` which expects a `$name` property.
+Calling `box` with `{"name": "Rocky"}` produces `{"from": "div", "children": "Hello, Sir. Rocky"}`. The argument `name="Rocky"` is applied to `box`; `box` then invokes `$box`, which expects a `$name` property.
 
-#### 8. Non existing properties in the calling component are ignored
+Templates can be chained indefinitely: a component `a` invokes `$a`, which itself can have a template `$$a`, which can have `$$$a`, and so on. The chain unwinds in order — the innermost template is applied first, then its result feeds the next template, until no more templates match.
+
+When a component's result is a scalar (not an object with named properties), it is passed to the next template as the positional argument `$0`, consistent with rule 5.
+
+Example
+
+```yml
+$$$a: "final: $0"
+$$a:  $0 + 1
+$a:   $0 * 2
+a:    10
+```
+
+Calling `a`:
+
+1. `a` returns `10` to its template `$a`.
+2. `$a` runs `$0 * 2` with `$0 = 10`, returning `20` to `$$a`.
+3. `$$a` runs `$0 + 1` with `$0 = 20`, returning `21` to `$$$a`.
+4. `$$$a` runs `"final: $0"` with `$0 = 21`, returning `"final: 21"`.
+
+So calling `a` returns `"final: 21"`.
+
+### 9. Non-existing properties in the calling component are ignored
 
 ```yml
 a: $x + $y
 ```
 
-Calling `a` with `{"a":1,"b":2,"c":3}` we get `"1 + 2"`, that is, `"c"` is ignored.
+Calling `a` with `{"a":1,"b":2,"c":3}` returns `"1 + 2"`; the `c` property is ignored because `a` does not reference it.
 
-#### 9. All properties are required
+### 10. All referenced properties are required
 
-#### 10. An array component maps into its template component
+Any property referenced by a component (via `$name`, `$0`, `${name}`, etc.) must be supplied when the component is called. Unknown/extra properties are ignored per rule 9.
+
+### 11. An array component maps over its template
+
+When a component is an array and a matching `$template` exists, each item of the array is passed through the template, producing one output item per input item.
 
 Example 1
 
@@ -157,7 +204,7 @@ a:
     y: 4
 ```
 
-Calling `a` it's mapped into it's template and we get `[{"prop1": 2, "prop2": 2}, {"prop1": 4, "prop2": 12}]`.
+Calling `a` produces `[{"prop1": 2, "prop2": 2}, {"prop1": 4, "prop2": 12}]`.
 
 Example 2
 
@@ -170,9 +217,9 @@ a:
     y: 4
 ```
 
-Calling `a` we get `["1 + 2", "3 + 4"]`.
+Calling `a` produces `["1 + 2", "3 + 4"]`.
 
-Example 2
+Example 3
 
 ```yml
 $a:
@@ -185,11 +232,13 @@ a:
     y: 4
 ```
 
-Calling `a` we get `[["values are 1 and 2", {"x": 2, "y": 1}], ["values are 3 and 4", {"x": 4, "y": 3}]]`.
+Calling `a` produces `[["values are 1 and 2", {"x": 2, "y": 1}], ["values are 3 and 4", {"x": 4, "y": 3}]]`.
 
-#### 11. An array template component reduces, starting with it's decendent component
+### 12. An array template component reduces over its sibling component
 
-During the iteration we have the auxiliar variable `$last` which returns the result of the previous item and the initial value is always preserved, but are overwritten on item only.
+When the template is an array, the sibling component supplies the initial arguments. The template iterates over its own items; on each step the previous item's result is available as `$last`.
+
+Argument overwrite rule: each step starts from the **initial** arguments. The previous step's result **only** overwrites the initial for the **immediately next** step, and **only** for the keys it actually returns. If the previous step returned a non-object (a number, a string, an array, …), no overwrite happens and the next step reverts to the initial arguments.
 
 Example
 
@@ -201,13 +250,20 @@ $a:
   - x: ${x + 1}
     y: ${y + 2}
   - ${x + $y}
-  - $x + $y = $last
-   
+  - $x + $y < $last
 ```
 
-Calling `a` it iterates through it's template component calling each item with the arguments so, the iteration result items are `{"x": 2, "y": 4}` for the first, then the second will return the number `6` (sum of 2 with 4) and the third and last item we have as input `$last = 6`, `$x = 1` and `$y = 2` (since `$a` was called with `x=1` and `y=2`), and the output will be the string `"1 + 2 = 6"`. So for short, calling `a` we get `"1 + 2 = 6"`.
+Calling `a`:
 
-#### 12. A map and a reduce can be performed through `$map(object,array)` and `$reduce(object,array)`
+1. The first template item runs with the initial `x=1, y=2`, producing `{"x": 2, "y": 4}`. This object returns `x` and `y`, so it overwrites the initial for the next step **only**.
+2. The second item runs `${x + $y}` with `x=2, y=4` (overwritten), producing the number `6`. Since it returns a number (not an object with `x`/`y`), no overwrite carries forward.
+3. The third item therefore reverts to the **original** initial values `x=1, y=2`, with `$last=6`, producing the string `"1 + 2 < 6"`.
+
+So calling `a` returns `"1 + 2 < 6"`.
+
+### 13. `map` and `reduce` operations via `$map` and `$reduce`
+
+`$map(object, array)` applies an object component to each item of an array, returning an array of results.
 
 Example
 
@@ -219,7 +275,11 @@ b:
 c: $map(a,b)
 ```
 
-Calling `c` we get `["1 2", "2 3"]`.
+Calling `c` produces `["1 + 2", "2 + 3"]`.
+
+`$reduce(object, array)` works like `$map`, but each item also has access to `$last`, the result of the previous iteration. The final result is the result of the last item.
+
+Inside `${...}` (math context), `$last` is referenced by the bare name `last`: it is math-evaluated. So `${last}` takes the previous result and evaluates it as a math expression.
 
 Example
 
@@ -231,11 +291,16 @@ b:
 c: $reduce(a,b)
 ```
 
-Calling `c` we get `"1 + 2 = 3"`, because the first item calls component `a` with `a=1` and `b=2` and returns `"1 + 2"` that is returned into the second (and last) item.
+Calling `c` produces `"1 + 2 = 3"`:
 
-#### 13. You can merge an object or an array using `$merge(a, b)`
+1. The first item calls component `a` with `a=1, b=2`, returning the string `"1 + 2"`. This becomes `$last` for the next step.
+2. The second (and last) item has body `$last = ${last}`. Substituting `$last` gives `"1 + 2"`, and math-evaluating `last` (the string `"1 + 2"`) gives the number `3`. The result is `"1 + 2 = 3"`.
 
-Example 1
+### 14. Merging objects and arrays with `$merge`
+
+`$merge(a, b)` merges two values. Arrays are concatenated; objects are shallow-merged (later keys overwrite earlier ones).
+
+Example 1 — arrays
 
 ```yml
 a: [1,2,3]
@@ -243,9 +308,9 @@ b: [4,5,6]
 c: $merge(a,b)
 ```
 
-Calling `c` we get `[1, 2, 3, 4, 5, 6]`.
+Calling `c` produces `[1, 2, 3, 4, 5, 6]`.
 
-Example 2
+Example 2 — objects
 
 ```yml
 a: {a:1,b:0}
@@ -253,4 +318,4 @@ b: {b:2,c:3}
 c: $merge(a,b)
 ```
 
-Calling `c` we get `{"a": 1, "b": 2, "c": 3}`.
+Calling `c` produces `{"a": 1, "b": 2, "c": 3}`.
