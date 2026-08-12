@@ -52,7 +52,7 @@ ymx/
 ```
 
 - **YAML parsing**: `yaml-rust2` is used directly so source spans (line/column) are preserved on every scalar for diagnostics.
-- **Output**: YAML → intermediate `Value` IR → serialize to JSON (v1). Numbers are tagged `i64` (integer fast path) / `f64` (float fallback); object keys preserve YAML insertion order. HTML/PDF renderers consume the same IR in later versions.
+- **Output**: YAML → intermediate `Value` IR → serialize to JSON (v1). The IR is `Null | Bool | String | Int(i64) | Float(f64) | Array | Object`; object keys preserve YAML insertion order. HTML/PDF renderers consume the same IR in later versions.
 - **Math**: a `MathEngine` trait evaluates `${...}`. v1 uses dynamic numeric coercion (operands parse as numbers when possible; `+` falls back to string concatenation otherwise). The trait is the boundary for swapping to a Lua/Python/JavaScript engine in the future.
 - **Builtins**: a `Builtin` trait. v1 ships `$map`, `$reduce`, `$merge`. Each builtin is a *special form* that declares its own argument-evaluation strategy (e.g. `$map`/`$reduce` keep their first argument unevaluated as a callable component). The trait is the future plugin boundary.
 - **Diagnostics**: structured `Diagnostic { line, col, component, code, message }` rendered to stderr. Designed so a richer "bug report" mode can be added later without breaking the API.
@@ -103,6 +103,15 @@ ymx <path> [flags]
 
 The following rules define how YMX parses and resolves components.
 
+### String syntax
+
+Inside a string value, `$` triggers interpolation; `\` is the escape character.
+
+- `$name` (where `name` is `[A-Za-z_][A-Za-z0-9_]*`) references a named argument.
+- `$0`, `$1`, … `$N` reference positional arguments.
+- `${...}` enters math context (rule 6).
+- `\$` produces a literal `$`; `\\` produces a literal `\`.
+
 ### 1. Top-level keys are components
 
 Every key-value pair in the main document is a component. The key gives the component's name; the value gives its content.
@@ -123,6 +132,8 @@ Calling `user` with `user_name="Mathew"` and `user_phone=123456789` produces the
 
 > Note: argument values are parsed, falling back to string when no other type matches.
 
+> Argument values are parsed at the call site (numbers/strings/null/bool) before being bound to `$N` / `$name` inside the called component.
+
 ### 3. Components can call each other with the `from` property
 
 The `from` property references another component by name. Users can override this keyword in their own context to avoid conflicts.
@@ -139,6 +150,8 @@ CompB: $x + $y
 
 Calling `CompA` returns `"12 + 34"`.
 
+> If a component has both `from` and a matching `$template`, the template chain applies FIRST, then `from` resolves against the template's result.
+
 ### 4. Components can be called inline using `$`
 
 A `$name(...)` expression inside a value calls another component instead of reading a property.
@@ -151,6 +164,8 @@ b: $x + $y
 ```
 
 Here `$b` is treated as a call to the `b` component from inside `a`'s body, rather than as a property of `a`.
+
+> A `$b(...)` call may mix positional and named arguments, e.g. `$b(12, y=34)`. Positional arguments bind to `$0`, `$1`, …; named arguments bind to `$<name>`.
 
 ### 5. Positional arguments are supported with `$0`, `$1`, `$2`, …
 
@@ -217,6 +232,8 @@ Calling `a` returns `[1, 3, 5]`. The leading value passed through `$default` cor
 ### 8. Components can have template components
 
 A component whose name starts with `$` is a template. When a component with a matching (non-`$`) name is called, the template is applied afterwards automatically.
+
+> Templates are looked up in the **global namespace** regardless of which namespace the calling component lives in.
 
 ```yml
 $box:
