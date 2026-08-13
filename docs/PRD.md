@@ -55,8 +55,27 @@ ymx/
 - **Output**: YAML → intermediate `Value` IR → serialize to JSON (v1). The IR is `Null | Bool | String | Int(i64) | Float(f64) | Array | Object`; object keys preserve YAML insertion order. HTML/PDF renderers consume the same IR in later versions.
 - **Math**: a `MathEngine` trait evaluates `${...}`. v1 uses dynamic numeric coercion (operands parse as numbers when possible; `+` falls back to string concatenation otherwise). The trait is the boundary for swapping to a Lua/Python/JavaScript engine in the future.
 - **Builtins**: a `Builtin` trait. v1 ships `$map`, `$reduce`, `$merge`. Each builtin is a *special form* that declares its own argument-evaluation strategy (e.g. `$map`/`$reduce` keep their first argument unevaluated as a callable component). The trait is the future plugin boundary.
-- **Diagnostics**: structured `Diagnostic { line, col, component, code, message }` rendered to stderr. Designed so a richer "bug report" mode can be added later without breaking the API.
-- **Cycles**: no precise cycle detection in v1; a configurable depth cap (`--max-depth`, default 256) prevents runaway recursion and surfaces as a "max depth exceeded" diagnostic.
+- **Diagnostics**: structured `Diagnostic { line, col, component, code, message }` rendered to stderr as `[code] file:line:col (component): message` and surfaced identically through `--format diagnostics` (one diagnostic per line, no JSON on stdout). Designed so a richer "bug report" mode (full call-stack + local-argument dump) can be added later without breaking the API. The stable error codes are listed in *Diagnostic codes* below.
+- **Cycles**: no precise cycle detection in v1; a configurable depth cap (`--max-depth`, default 256) prevents runaway recursion and surfaces as a "max-depth exceeded" diagnostic (`E008`). The depth counter is checked and incremented on entry to each recursive operation in rule 11's pipeline: each inline `$comp(...)` call (rule 3), each math `comp(...)` call (rule 7), each implicit bare-`$name` component fallback (rule 2), each template step in a chain (rule 5), and each `from` dispatch (rule 6). Exceeding the cap aborts with `E008`.
+
+### Diagnostic codes
+
+| Code  | Diagnostic |
+|-------|------------|
+| `E001` | YAML parse error or unsupported YAML feature (multi-document stream, complex mapping key, merge key `<<`) |
+| `E002` | Unknown component reference |
+| `E003` | Missing required argument |
+| `E004` | Duplicate component name in the same namespace |
+| `E005` | File-scope violation (cross-document `_`-prefixed reference) |
+| `E006` | Ambiguous shortcut (multiple property names match components) |
+| `E007` | Reserved name used as a component/template (`map`/`reduce`/`merge`) |
+| `E008` | Max-depth exceeded |
+| `E009` | Entry component not found |
+| `E010` | Invalid call-site syntax |
+| `E011` | Math error (type mismatch, division by zero, non-numeric operand, invalid `last`) |
+| `E012` | Positional argument after a named argument in a call |
+| `E013` | Array/object literal as a direct call argument (unsupported in v1) |
+| `E014` | Reference to undefined `$last` on the first reduce step |
 
 ## Multi-file projects
 
@@ -64,9 +83,11 @@ A project is a directory. Namespaces are directory-scoped:
 
 - Top-level files in the project root share one global namespace.
 - Subdirectories form sub-namespaces, accessed via a dotted path (e.g. `subdir.comp`).
-- Two definitions of the same component name in the same namespace are a hard error.
-- Each `.yml` / `.yaml` file is one document. Multi-document YAML streams (`---`) inside a single file are not supported in v1.
-- A component or template whose name starts with `_` is restricted to file scope: it does not participate in the namespace merge and is not visible from other documents.
+- Two definitions of the same component name in the same namespace are a hard error (`E004`).
+- Each `.yml` / `.yaml` file is one document. Multi-document YAML streams (`---`) inside a single file are not supported in v1 (`E001`). YAML anchors (`&`) and aliases (`*`) are resolved by the parser and inlined before YMX sees a value; explicit YAML tags (`!!str`, `!!int`, …) are ignored. Complex mapping keys and YAML merge keys (`<<`) are not supported in v1 (`E001`).
+- A component or template whose name starts with `_` is restricted to file scope: it does not participate in the namespace merge and is not visible from other documents (cross-document reference is `E005`).
+
+> Files are loaded in lexicographic path order. The global namespace is the union of all non-`_` definitions across the root-level files; each subdirectory contributes a sub-namespace identified by its relative dotted path. A definition lives in the namespace of the directory containing its file. `from: subdir.comp` resolves `comp` in the `subdir` namespace, raising `E002` if absent.
 
 ## CLI
 
@@ -74,13 +95,46 @@ A project is a directory. Namespaces are directory-scoped:
 ymx <path> [flags]
 ```
 
-- `--entry <name>`: component to compile (default `main`).
+- `--entry <name>`: component to compile (default `main`). If the named component does not exist in the project, the CLI emits `E009` and exits non-zero.
 - `--from-keyword <kw>`: override the `from` keyword (default `from`).
 - `--default-keyword <kw>`: override the `$default` keyword name (default `default`); the engine always prefixes the name with `$`.
 - `--max-depth <n>`: limit on template/call recursion (default `256`).
-- `--output <file>`: write JSON to a file instead of stdout.
+- `--output <file>`: write JSON to a file instead of stdout. The file is written only on success; on any diagnostic the CLI exits non-zero without creating the file.
 - `--pretty`: pretty-print the JSON output.
 - `--format <json|diagnostics>`: output style (v1: `json`; `diagnostics` lists errors only).
+
+**Exit codes.** `0` on success; non-zero (default `1`) when any diagnostic is produced — including parse/namespace errors (`E001`, `E004`, …), a missing entry (`E009`), and max-depth (`E008`). With `--format diagnostics` on a successful compile, stdout is empty and the exit code is `0`.
+
+## Library API (ymx-lib)
+
+`ymx-lib` re-exports `ymx-core` behind a stable public API:
+
+```rust
+pub struct Options {
+    pub entry: String,           // default "main"
+    pub from_keyword: String,    // default "from"
+    pub default_keyword: String, // default "default" (engine prefixes with "$" internally)
+    pub max_depth: u32,           // default 256
+    pub pretty: bool,             // default false
+    pub format: Format,           // default Json
+}
+
+pub enum Format { Json, Diagnostics }
+
+pub struct Diagnostic {
+    pub line: u32,
+    pub col: u32,
+    pub component: Option<String>,
+    pub code: &'static str,
+    pub message: String,
+}
+
+pub fn compile_project(root: &Path, opts: &Options) -> Result<Value, Vec<Diagnostic>>;
+```
+
+- `Value` is the IR enum (`Null | Bool | Int(i64) | Float(f64) | String | Array | Object`) and serializes to JSON with insertion-ordered object keys.
+- On success with `format = Json`, callers serialize the returned `Value` (pretty or compact per `pretty`). On success with `format = Diagnostics`, there are no diagnostics to emit.
+- `Err(Vec<Diagnostic>)` carries all errors collected during namespace resolution and compilation; the CLI renders them per the *Diagnostics* format above.
 
 ## Features
 
@@ -108,10 +162,18 @@ The following rules define how YMX parses and resolves components.
 
 Inside a string value, `$` triggers interpolation; `\` is the escape character.
 
-- `$name` (where `name` is `[A-Za-z_][A-Za-z0-9_]*`) references a named argument.
-- `$0`, `$1`, … `$N` reference positional arguments.
+- `$name` (where `name` is `[A-Za-z_][A-Za-z0-9_]*`) references a named argument. The `name` grammar does not include `.`; namespace-qualified names (e.g. `subdir.comp`) are not reachable via bare `$name` (see *Multi-file projects*).
+- `$0`, `$1`, … `$N` (where `N` is decimal digits) reference positional arguments.
 - `${...}` enters math context (rule 7).
-- `\$` produces a literal `$`; `\\` produces a literal `\`.
+- `\$` produces a literal `$`; `\\` produces a literal `\`. Any other `\X` is a hard error (`E010`).
+
+**Interpolation result type.** When the *entire* value of a property is a single interpolation — `$name`, `$N`, or `${...}` with no surrounding text — the result keeps the interpoland's native type (e.g. `phone: $user_phone` yields `123456789` as Int when the bound argument is an Int). When an interpolation appears with surrounding text, the result is a String in which each interpoland is rendered per the *Number→string rendering* rule below.
+
+**Number→string rendering.** When a number is rendered into text (string interpolation, math string-concat under `+`, or a scalar surfaced inside a larger string):
+- Int renders plainly: `20` → `"20"`.
+- Float keeps precision via fixed-point (not scientific notation) for typical magnitudes: `2.0` → `"2.0"`, `2.5` → `"2.5"`.
+
+Bool renders as `"true"`/`"false"`; Null renders as `"null"`. Objects and arrays have no meaningful string rendering and raise `E011` when interpolated into text.
 
 ### Component visibility
 
@@ -123,7 +185,13 @@ By default, components and templates are visible across the entire project (glob
 
 Matching between a component and its template is unaffected — `_a` matches `$_a`, just as `a` matches `$a`. They are distinct names: a document may define both `a` (global) and `_a` (file-scoped).
 
-Referencing a file-scoped component from outside its document is a hard error.
+Referencing a file-scoped component from outside its document is a hard error (`E005`).
+
+**Effective identifier.** A component or template name is a leading sequence of `$` characters (the template prefix, zero or more) followed by an *effective identifier*. The effective identifier is `[A-Za-z_][A-Za-z0-9_]*` (letters, digits, underscores; must start with a letter or underscore). A leading `$` count of zero marks a regular component; one or more mark templates of increasing chain depth. The `_`-prefix check for file scope applies to the effective identifier (after stripping any leading `$`s): `$_a` is file-scoped because its effective identifier `_a` starts with `_`.
+
+**Reserved names.** The effective identifiers `map`, `reduce`, and `merge` are reserved for the builtins (rules 15–16). Defining any component or template whose effective identifier is one of these is a hard error (`E007`), regardless of the leading `$` count. The builtins are always invoked via their `$`-prefixed forms (`$map`, `$reduce`, `$merge`).
+
+> A namespace dot (`.`) appears only at the *lookup* layer for `from` targets and math `name(...)` calls (e.g. `from: subdir.comp`); it is not part of an effective identifier and cannot appear inside `$name` interpolation. Cross-namespace component references are reached via `from` (rule 6) or via the math `subdir.comp(...)` form (rule 7), never via bare `$subdir.comp` (which would interpolate `$subdir` then the literal text `.comp`).
 
 ### 1. Top-level keys are components
 
@@ -165,6 +233,10 @@ Here `$b` is treated as a call to the `b` component from inside `a`'s body, rath
 > A `$b(...)` call may mix positional and named arguments, e.g. `$b(12, y=34)`. Positional arguments bind to `$0`, `$1`, …; named arguments bind to `$<name>`.
 
 > `$name(...)` unconditionally calls the component `name`, even if a `name` argument is in scope. Use `$name(...)` to bypass the argument lookup that bare `$name` performs (rule 2). Inline `$comp(...)` calls run during step 1 of rule 11 — before templates (rule 5) and before `from` dispatch (rule 6).
+
+> Call-site argument grammar. The `(...)` of an inline `$name(...)` (rule 3) or math `name(...)` (rule 7) call holds a comma-separated argument list. Each argument is either positional `value` or named `key=value` (where `key` is an effective identifier). Positional args bind to `$0`, `$1`, …; named args bind to `$key`. Mixing positional and named is allowed, but a positional arg may not appear *after* a named one (hard error `E012`); `()` calls with no arguments. The call target of an inline `$name(...)` is a single effective identifier (namespace-local); cross-namespace calls go through the math `name(...)` form, which accepts a dotted path (rule 7), or through `from` (rule 6).
+
+> Argument value parsing. An argument value token is parsed, in order, as Null (`null`/`~`), Bool (`true`/`false`), Int (integer literal), Float (decimal or exponent literal), or String; unquoted text that matches none becomes a String. Single- or double-quoted tokens are always Strings. Argument values may contain nested `$call(...)` and `${...}` (resolved as nested call-sites per rule 11). A direct argument value that is an inline YAML array/object literal (e.g. `$b([1,2])` or `$b({x:1})`) is a hard error in v1 (`E013`); build structured arguments with a `from`-mini-component instead.
 
 ### 4. Positional arguments are supported with `$0`, `$1`, `$2`, …
 
@@ -239,7 +311,7 @@ Calling `CompA` returns `"12 + 34"`.
 
 > The `from` value is computed as part of property resolution (step 1) and may be any expression that resolves to a component name — e.g. `from: $b()` first evaluates `$b()`, then uses its return value as the `from` target.
 
-> If the (resolved) `from` value does **not** name a valid *regular* component, `from` is treated as a plain property — no call is made and no error is raised. Template names (those starting with `$`) are not valid `from` targets; templates are only reached through the automatic chain (rule 5).
+> If the (resolved) `from` value does **not** name a valid *regular* component, `from` is treated as a plain property — no call is made and no error is raised. Template names (those starting with `$`) are not valid `from` targets; templates are only reached through the automatic chain (rule 5). Namespace-qualified targets are supported: `from: subdir.comp` resolves `comp` in the `subdir` namespace (see *Multi-file projects*). If the resolved `from` value is not a String (a number, bool, null, array, or object) it is also treated as a plain property — no call, no error — consistent with the invalid-target rule above.
 
 Example — invalid `from` is a plain property:
 
@@ -282,14 +354,22 @@ c: ${2 * $0}
 Here `a` calls `b` which sums `12` with `34` yielding `46`, then calls `c` with `28` which doubles it to `56`. Finally `a` sums them to `102`.
 
 > The math operators are:
-> `+` (Addition): Sums two numbers or concatenates strings.
-> `-` (Subtraction): Subtracts the right value from the left.
-> `*` (Multiplication): Multiplies two values.
-> `/` (Division): Divides the left value by the right.
-> `%` (Remainder/Modulus): Returns the integer remainder of division.
-> `**` (Exponentiation): Raises the first operand to the power of the second.
+> `+` (Addition): Sums two numbers, or (when either operand is a non-numeric String) concatenates — see `+` semantics below.
+> `-` (Subtraction): Subtracts the right value from the left (numeric only).
+> `*` (Multiplication): Multiplies two values (numeric only).
+> `/` (Division): Always floating-point division; the result is a Float. `5 / 2` → `2.5`. Division by zero is `E011`.
+> `%` (Remainder/Modulus): Integer remainder of `left % right`, with both operands coerced to Int (Floats truncated toward zero, non-numeric → `E011`). Sign follows the dividend.
+> `**` (Exponentiation): Raises the first operand to the power of the second. `Int ** Int(non-negative)` → Int; everything else → Float. Negative or fractional exponents are Float.
 
-> Inside `${...}`, bare identifiers refer to arguments (or the math result `last`) — there is **no component fallback** as there is for bare `$name` outside math (rule 2). To call a component inside a math expression, use the `name(...)` form (no `$` prefix), as in `b(12,34)` above.
+> Precedence (highest to lowest): `**` (right-associative) > unary `-` > `* / %` (left-associative) > `+ -` (left-associative). Parentheses group. There are **no** comparison, equality, or boolean operators; `<`, `>`, `=`, `==`, `and`, `or` are literal text in strings (see rule 13's `$x + $y < $last`, which yields the String `"1 + 2 < 6"`).
+
+> `+` semantics: if both operands parse as numbers (Int or Float), numeric addition (promoted to Float if either is Float). If both operands are Strings, string concatenation. If exactly one operand is a String and the other is a number, the number is rendered per *Number→string rendering* and string-concatenated. Any other mixture (Bool, Null, Array, Object) is a hard error (`E011`).
+
+> Numeric promotion: Int ⊕ Int = Int (except `/`, always Float, and `**` per above); any Float operand promotes the result of an arithmetic operator to Float. Bool and Null are not numbers and cannot be coerced.
+
+> `${...}` return type: the math expression may evaluate to any `Value`, not just numbers. `${ $0 }` returns the argument unchanged; `${ $x + $y }` returns a String when `+` concatenates; `${ $obj }` (referencing an in-scope object argument) returns that object. The value flows into surrounding interpolation per *String syntax: Interpolation result type*.
+
+> Inside `${...}`, bare identifiers refer to arguments (or the math result `last`, rule 16) — there is **no component fallback** as there is for bare `$name` outside math (rule 2). To call a component inside a math expression, use the `name(...)` form (no `$` prefix), as in `b(12,34)` above; `name` supports a dotted namespace path, e.g. `subdir.comp(12,34)`, and `name()` calls a no-arg component. A bare identifier that matches neither an in-scope argument nor `last` is a missing argument (`E003`).
 
 ### 8. Shortcut: a property name matching a component name calls that component
 
@@ -355,7 +435,7 @@ Resolving a component runs in three steps, in this fixed order:
 
 A nested mini-component (an object whose value uses `from`) receives **only the arguments explicitly written in its body**, resolved against the parent's current arguments. The parent's other arguments are not auto-forwarded; rules 9 and 10 apply within the nested call exactly as they do at the top level. A nested mini-component follows the same three-step evaluation as a top-level component, so it can itself contain nested call-sites.
 
-Inline `$comp(...)` calls (and `${...}` interpolations) run in **step 1**, before templates. `from` dispatch runs in **step 3**, after templates. Recursion (nested calls, template chains, `from` dispatch) is bounded by `--max-depth`; exceeding it raises a "max depth exceeded" diagnostic.
+Inline `$comp(...)` calls (and `${...}` interpolations) run in **step 1**, before templates. `from` dispatch runs in **step 3**, after templates. Recursion (nested calls, implicit bare-`$name` component fallback, template chains, `from` dispatch) is bounded by `--max-depth`; the depth counter is checked and incremented on entry to each such operation per *Architecture: Cycles*; exceeding it raises `E008`.
 
 Example 1 — nested call-sites resolve inner-to-outer:
 
@@ -530,6 +610,8 @@ Calling `c` produces `{"a": 1, "b": 2, "c": 3}`.
 
 `$map`, `$reduce`, and `$merge` (rule 15) are **special forms**: each declares its own argument-evaluation strategy, rather than uniformly receiving all arguments pre-evaluated. `$map` and `$reduce` keep their first argument unevaluated (a callable component) and evaluate the array argument eagerly; `$merge` evaluates both arguments eagerly.
 
+> Builtin argument syntax. The builtins are invoked only via their `$`-prefixed forms (`$map`, `$reduce`, `$merge`); user components/templates named `map`/`reduce`/`merge` are rejected (`E007`, see *Reserved names*). Builtin arguments are component/value references resolved by each builtin's own strategy, not call-site argument values. The callable first argument of `$map`/`$reduce` is a bare effective identifier (optionally namespace-qualified via a dotted path, e.g. `$map(subdir.fn, b)`), kept unevaluated. The remaining arguments are eager references resolved per bare `$name` (rule 2), `$name(...)` (rule 3), or `${...}` (rule 7). `$reduce` exposes `$last` to the callable's body (math-evaluated as `last`, see below).
+
 `$map(object, array)` applies an object component to each item of an array, returning an array of results.
 
 Example
@@ -547,6 +629,8 @@ Calling `c` produces `["1 + 2", "2 + 3"]`.
 `$reduce(object, array)` works like `$map`, but each item also has access to `$last`, the result of the previous iteration. The final result is the result of the last item.
 
 Inside `${...}` (math context), `$last` is referenced by the bare name `last`: it is math-evaluated. So `${last}` takes the previous result and evaluates it as a math expression.
+
+> `last` semantics in `$reduce`: `$last` is undefined on the first iteration; referencing `$last` (or `last` in math) on the first iteration is a hard error (`E014`). On subsequent iterations `$last` holds the previous item's fully resolved result. When `last` is referenced in math (`${last}`), the previous result is parsed as a math expression: a String is scanned as a math source (so `"1 + 2"` evaluates to `3`), a number is used directly, and an object/array/non-math String raises `E011`. The bare `$last` interpolation (outside math) returns the previous result unchanged, preserving its native type.
 
 Example
 
