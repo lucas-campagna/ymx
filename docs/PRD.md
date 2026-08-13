@@ -149,20 +149,7 @@ Calling `user` with `user_name="Mathew"` and `user_phone=123456789` produces the
 
 > Bare `$name` (no parens) resolves, in order: (a) if a named argument `name` is in scope → that argument's value; (b) else if a regular component `name` exists → call it with no args and use its return value; (c) else → hard error (rule 10). This fallback applies wherever `$name` appears, including inside plain strings. `$name(...)` unconditionally calls the component `name` and bypasses the argument lookup; the two forms coincide when no `name` argument is in scope.
 
-### 3. Positional arguments are supported with `$0`, `$1`, `$2`, …
-
-When calling a component with `$`, arguments may be unnamed. They become sequence properties `$0`, `$1`, `$2`, … inside the called component.
-
-Example:
-
-```yml
-a: $b(12,34)
-b: $0 + $1
-```
-
-Calling `a` returns `"12 + 34"` again.
-
-### 4. Components can be called inline using `$`
+### 3. Components can be called inline using `$`
 
 A `$name(...)` expression inside a value calls another component instead of reading a property.
 
@@ -178,6 +165,19 @@ Here `$b` is treated as a call to the `b` component from inside `a`'s body, rath
 > A `$b(...)` call may mix positional and named arguments, e.g. `$b(12, y=34)`. Positional arguments bind to `$0`, `$1`, …; named arguments bind to `$<name>`.
 
 > `$name(...)` unconditionally calls the component `name`, even if a `name` argument is in scope. Use `$name(...)` to bypass the argument lookup that bare `$name` performs (rule 2). Inline `$comp(...)` calls run during step 1 of rule 11 — before templates (rule 5) and before `from` dispatch (rule 6).
+
+### 4. Positional arguments are supported with `$0`, `$1`, `$2`, …
+
+When calling a component with `$`, arguments may be unnamed. They become sequence properties `$0`, `$1`, `$2`, … inside the called component.
+
+Example:
+
+```yml
+a: $b(12,34)
+b: $0 + $1
+```
+
+Calling `a` returns `"12 + 34"` again.
 
 ### 5. Components can have template components
 
@@ -199,7 +199,7 @@ Templates can be chained indefinitely: a component `a` invokes `$a`, which itsel
 
 > Templates can only be reached through their **direct** child: `a` invokes `$a`; if `$a` is absent, `a` does **not** skip to `$$a` — the chain is broken at that point. A template name (starting with `$`) is not a valid `from` target. Template application is step 2 of rule 11 — it sits between property resolution (step 1, where inline `$comp(...)` calls run) and `from` dispatch (step 3).
 
-When a component's result is a scalar (not an object with named properties), it is passed to the next template as the positional argument `$0`, consistent with rule 3.
+When a component's result is a scalar (not an object with named properties), it is passed to the next template as the positional argument `$0`, consistent with rule 4.
 
 Example
 
@@ -349,7 +349,7 @@ Any property referenced by a component (via `$name`, `$0`, `${name}`, etc.) must
 
 Resolving a component runs in three steps, in this fixed order:
 
-1. **Property resolution (before template)** — every property value of the component is fully resolved. A property value is a *nested call-site* when it is an object containing the `from` key, or any value containing an inline `$comp(...)` call (rule 4) or a `${...}` interpolation (rule 7). Nested call-sites resolve **bottom-up**: the deepest nested call is evaluated first, its return value bubbles up to its parent, and so on, until every property of the component has a fully resolved value. Bare `$name` (no parens) resolves as: (a) a named argument `name` in scope → that argument's value; (b) else if a regular component `name` exists → call it with no args and use its return value (its own template chain applies first); (c) else → hard error (rule 10). `$name(...)` unconditionally calls the component `name` (rule 4) and bypasses the argument lookup. Inside `${...}` (math context) there is **no fallback**: a bare identifier refers to an argument or the math result of the previous step (`last`); to call a component inside math, use the `name(...)` form (rule 7).
+1. **Property resolution (before template)** — every property value of the component is fully resolved. A property value is a *nested call-site* when it is an object containing the `from` key, or any value containing an inline `$comp(...)` call (rule 3) or a `${...}` interpolation (rule 7). Nested call-sites resolve **bottom-up**: the deepest nested call is evaluated first, its return value bubbles up to its parent, and so on, until every property of the component has a fully resolved value. Bare `$name` (no parens) resolves as: (a) a named argument `name` in scope → that argument's value; (b) else if a regular component `name` exists → call it with no args and use its return value (its own template chain applies first); (c) else → hard error (rule 10). `$name(...)` unconditionally calls the component `name` (rule 3) and bypasses the argument lookup. Inside `${...}` (math context) there is **no fallback**: a bare identifier refers to an argument or the math result of the previous step (`last`); to call a component inside math, use the `name(...)` form (rule 7).
 2. **Template chain (rule 5)** — applied to the post-step-1 property set. The innermost template runs first, its result feeds the next template, and so on. Templates can only be reached through their **direct** child: `a` invokes `$a`; if `$a` is absent, `a` does **not** skip to `$$a` — the chain is broken at that point. Template names are not valid `from` targets.
 3. **`from` dispatch (rule 6, after template)** — if the (post-template) value of `from` names a valid *regular* component, call it with the rest of the property set as arguments; the return value replaces the component's output. If the `from` value does not name a valid regular component (templates excluded), `from` is treated as a plain property — no call, no error.
 
