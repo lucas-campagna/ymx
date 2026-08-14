@@ -21,7 +21,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | Version | Status | Title | Crate(s) | File | Depends on |
 |---------|--------|-------|----------|------|------------|
 | 1.1 | `done` | Workspace & crate scaffolding | (all) | [1.1-scaffolding.md](1.1-scaffolding.md) | — |
-| 1.2 | `planned` | Core IR & diagnostics types | ymx-core | [1.2-core-types.md](1.2-core-types.md) | 1.1 |
+| 1.2 | `done` | Core IR & diagnostics types | ymx-core | [1.2-core-types.md](1.2-core-types.md) | 1.1 |
 | 1.3 | `planned` | Project loading & namespace resolution | ymx-lib, ymx-core | [1.3-loading.md](1.3-loading.md) | 1.2 |
 | 1.4 | `planned` | Front-matter config & entry-path resolution | ymx-config | [1.4-config.md](1.4-config.md) | 1.3 |
 | 1.5 | `planned` | Interpolation & math engine | ymx-core | [1.5-interpolation-math.md](1.5-interpolation-math.md) | 1.2 |
@@ -31,7 +31,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.9 | `planned` | Test harness (ymx-test) | ymx-test | [1.9-test-harness.md](1.9-test-harness.md) | 1.6 |
 | 1.10 | `planned` | CLI (ymx-cli) | ymx-cli | [1.10-cli.md](1.10-cli.md) | 1.8, 1.9 |
 | 1.11 | `planned` | Scenario suite & docs | tests/ | [1.11-scenarios-docs.md](1.11-scenarios-docs.md) | 1.10 |
-| 1.12 | `planned` | CI gate & dependency security | (repo) | [1.12-ci-gate.md](1.12-ci-gate.md) | 1.1 |
+| 1.12 | `done` | CI gate & dependency security | (repo) | [1.12-ci-gate.md](1.12-ci-gate.md) | 1.1 |
 | 1.13 | `planned` | Code coverage reporting (cargo-llvm-cov) | (repo) | [1.13-coverage.md](1.13-coverage.md) | 1.9 |
 | 1.14 | `planned` | Build-time & binary-size metrics | (repo) | [1.14-build-metrics.md](1.14-build-metrics.md) | 1.10 |
 

@@ -176,6 +176,7 @@ The public surface is spread across three crates so each concern stays small and
 
 ```rust
 // Core IR and diagnostics (definitions live in ymx-core; ymx-lib re-exports them).
+#[serde(untagged)]
 pub enum Value { Null, Bool(bool), Int(i64), Float(f64), String(String), Array(Vec<Value>), Object(IndexMap<String, Value>) }
 
 pub struct FileId(pub u32);   // index into `Project::files`
