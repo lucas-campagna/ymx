@@ -24,6 +24,8 @@ The project provides a tool/compiler that turns YAML source files into documents
 
 The project is written in Rust. Rust provides type and memory safety without a garbage collector, which suits a long-lived, performance-sensitive tool.
 
+**Toolchain.** The workspace targets Rust **edition 2021**; the MSRV is the latest stable release at the time of development (pinned in `rust-toolchain.toml`). JSON serialization keeps object-key insertion order via `serde_json` with the `preserve_order` feature (backed by `indexmap`). YAML is parsed with `yaml-rust2`, preserving line/column spans on every scalar for diagnostics.
+
 ## Scope
 
 YMX is being built in versions. The rules in this document describe the language and are stable across versions; the *output targets* arrive incrementally.
@@ -116,23 +118,29 @@ A document may carry two reserved **meta keys** at its top level — `_ymx` (fro
 
 ### `_test` — inline tests
 
-`_test` is a sibling of `_ymx` (also a top-level meta key, not nested under `_ymx`). It describes expected outputs for components **defined in the same document**. A test value has two forms:
+`_test` is a sibling of `_ymx` (also a top-level meta key, not nested under `_ymx`). It describes expected outcomes for components **defined in the same document**. A test value has two forms, and form B has two variants:
 
-- **A** — a literal expected value: the target component called with **no arguments** must return a value equal to A.
-- **B** — a mapping `{args: <args>, result: <expected>}`: the target component called with `args` must return a value equal to `result`. `args` is optional (absent = no arguments). The `args` shape mirrors the call-site grammar (rule 3): a mapping (named arguments), a list (positional, binding `$0`, `$1`, …), or a scalar (binds `$0`).
+- **A** — a literal expected value: the target component called with **no arguments** must compile to a value equal to A.
+- **B** — a mapping. B has two variants:
+  - **Value variant** — `{args: <args>, result: <expected>}`: the target component called with `args` must compile to a value equal to `result`.
+  - **Error variant** — `{args: <args>, error: <code>}`: the target component called with `args` must produce a diagnostic whose `code` equals `<code>` (e.g. `"E002"`). `error` and `result` are mutually exclusive; a B mapping containing neither, both, or a non-string `error` value is a malformed `_test` block (`E010`).
+
+  In both variants `args` is optional (absent = no arguments). The `args` shape mirrors the call-site grammar (rule 3): a mapping (named arguments), a list (positional, binding `$0`, `$1`, …), or a scalar (binds `$0`).
 
 `_test` at the top level may be one of:
 
 1. **Bare A** — a scalar targeting the entry component (no args). (Top-level mappings and lists are never bare A — see disambiguation below.)
-2. **Bare B** — a mapping containing the key `result`, targeting the entry component.
+2. **Bare B** — a mapping containing the key `result` or the key `error`, targeting the entry component.
 3. **Type-2 map** — a mapping `{<compname>: A_or_B, ...}` where each key names a component defined in the **same document**; each value is an A or a B for that component.
 4. **List of type-2 maps** — a list whose elements are type-2 maps (a top-level list is always shape 4, never a bare-A list).
 
-**Disambiguation.** A top-level mapping is interpreted as bare B (shape 2) if it contains a `result` key, otherwise as a type-2 map (shape 3); a top-level list is always shape 4. Consequently a bare A whose expected value is a mapping or a list cannot be written bare — test the entry with such an expectation via a type-2 map keyed by the entry name (e.g. `{main: {…}}` or `{main: [...]}`) or via bare B (`{result: {…}}` / `{result: [...]}`). A scalar bare A targets the entry directly. Inside a list (shape 4) every element is a type-2 map (never bare A/B), so wrapping a type-2 map in a list forces the type-2 reading even when a target happens to be named `result` or `args`.
+**Disambiguation.** A top-level mapping is interpreted as bare B (shape 2) if it contains a `result` or `error` key, otherwise as a type-2 map (shape 3); a top-level list is always shape 4. Consequently a bare A whose expected value is a mapping or a list cannot be written bare — test the entry with such an expectation via a type-2 map keyed by the entry name (e.g. `{main: {…}}` or `{main: [...]}`) or via bare B (`{result: {…}}` / `{result: [...]}`). A scalar bare A targets the entry directly. Inside a list (shape 4) every element is a type-2 map (never bare A/B), so wrapping a type-2 map in a list forces the type-2 reading even when a target happens to be named `result`, `args`, or `error`.
 
-> Form A and B (no `args`) coincide: `expected: V` equals `{result: V}`. B exists to supply `args`. A target whose name is `result` or `args` is discouraged in test files; the list-wrapping escape above disambiguates if needed.
+> Form A and B (no `args`) coincide: `expected: V` equals `{result: V}`. B exists to supply `args` and/or an error expectation. A target whose name is `result`, `args`, or `error` is discouraged in test files; the list-wrapping escape above disambiguates if needed.
 
 **Scope.** Every component named in a type-2 map must be defined in the same document as the `_test` block; referencing a component from another document (or a namespaced one) is `E002`. The entry targeted by bare A/B is the project entry (`--entry` or `main`), resolved in the document containing the `_test` block.
+
+**Reach of the error variant.** The error variant asserts an outcome of *compiling the target* — i.e. a diagnostic produced by `compile`/`compile_component` while resolving the target. Errors that occur *before* a target can be compiled — project loading (`E001`, `E004`, `E007`), entry resolution (`E009`), `_ymx` validation (unknown-field part of `E010`), and malformed `_test` blocks (the `_test`-parse part of `E010`) — are outside `_test`'s reach and are covered by ordinary crate `#[test]` unit tests with inline YAML (see *Testing*).
 
 ## CLI
 
@@ -147,7 +155,7 @@ ymx <path> [flags]
 - `--output <file>`: write JSON to a file instead of stdout. The file is written only on success; on any diagnostic the CLI exits non-zero without creating the file.
 - `--pretty`: pretty-print the JSON output.
 - `--format <json|diagnostics>`: output style (v1: `json`; `diagnostics` lists errors only).
-- `--test`: run inline `_test` cases (via `ymx-test`) instead of compiling the entry. Emits one line per test (`PASS`/`FAIL` + target + diff on failure) and exits non-zero if any test fails or any `_test` block fails to parse (`E010`) — no JSON is emitted. Flag defaults still come from `_ymx` front matter.
+- `--test`: run inline `_test` cases (via `ymx-test`) instead of compiling the entry. Emits one line per test (`PASS`/`FAIL` + target + diff on failure) and exits non-zero if any test fails or any `_test` block fails to parse (`E010`) — no JSON is emitted. A test passes when its expectation is met: `Expected::Value` requires the target to compile to the expected value; `Expected::Error` requires the target to produce a diagnostic with the expected code. Flag defaults still come from `_ymx` front matter.
 
 **Orchestration.** The CLI is the canonical full pipeline: `ymx_lib::load_project(path)` → `ymx_config::extract_options(&project, &cli)` → `ymx_core::compile(&project, &opts)` (or `ymx_test::run_tests(&project, &opts)` under `--test`) → serialize/emit. `--entry` is resolved before `extract_options` because it selects the front-matter source file (see *`_ymx` — front matter*).
 
@@ -231,15 +239,25 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
 ```rust
 pub enum TestArgs { None, Named(Vec<(String, Value)>), Positional(Vec<Value>), Scalar(Value) }
 
-pub struct Test { pub target: String, pub args: TestArgs, pub expected: Value, pub file: FileId, pub span: Span }
+/// What a test asserts about its target.
+pub enum Expected {
+    /// The target must compile to this value.
+    Value(Value),
+    /// The target must produce a diagnostic with the given code.
+    Error { code: String },
+}
+
+pub struct Test { pub target: String, pub args: TestArgs, pub expected: Expected, pub file: FileId, pub span: Span }
 
 pub struct TestResult { pub test: Test, pub actual: Result<Value, Vec<Diagnostic>>, pub passed: bool }
 
 /// Parses `_test` meta blocks into concrete tests (same-file targeting).
 pub fn parse_tests(project: &Project) -> Result<Vec<Test>, Vec<Diagnostic>>;
 
-/// Runs each test by compiling its target component with `args` under `opts`
-/// and comparing the result to `expected`.
+/// Runs each test by compiling its target component with `args` under `opts`.
+/// For `Expected::Value`, `passed` is true iff `actual` is `Ok(v)` with `v == expected`.
+/// For `Expected::Error`, `passed` is true iff `actual` is `Err(diags)` and some
+/// diagnostic in `diags` has `code == expected.code`.
 pub fn run_tests(project: &Project, opts: &Options) -> Vec<TestResult>;
 ```
 
@@ -269,7 +287,7 @@ pub fn run_tests(project: &Project, opts: &Options) -> Vec<TestResult>;
 
 ## Testing
 
-Tests are **first-class**: every scenario lives in `tests/cases/rule-NN/<scenario>/` as a real YMX project (one directory = project root), and assertions are written inside the YAML itself via the `_test` meta key (see *Project metadata*) — no hand-written expected-output files. The test harness is a small Rust integration test that, for each scenario directory:
+Tests are **first-class**: every scenario lives in `tests/cases/rule-NN/<scenario>/` as a real YMX project (one directory = project root), and assertions are written inside the YAML itself via the `_test` meta key (see *Project metadata*) — no hand-written expected-output files and no external snapshot tooling. Both success expectations (`Expected::Value`) and compile-time diagnostic expectations (`Expected::Error`) are expressed in `_test`. The test harness is a small Rust integration test that, for each scenario directory:
 
 1. `ymx_lib::load_project(scenario_dir)` → `Project` (collecting raw `_ymx`/`_test` meta).
 2. `ymx_config::extract_options(&project, &CliOverrides::default_for_tests())` → `Options` (front-matter defaults override the engine defaults; the harness sets no CLI overrides unless the scenario requires them).
@@ -284,7 +302,8 @@ tests/cases/rule-NN/<scenario>/
 └── subdir/         # sub-namespace documents
 ```
 
-- Every scenario must define at least one `_test` entry (a scenario without `_test` is a compile-only scenario and is asserted via `compile` + `--format diagnostics` against an insta snapshot of stderr, used for error cases such as `E009`/`E008`). Success scenarios assert through `_test`.
+- Every scenario must define at least one `_test` entry. A scenario asserts either a value (`Expected::Value`) or a compile-time diagnostic produced by resolving a target (`Expected::Error`). Diagnostic-expectable cases include `E002`, `E003`, `E005`, `E006`, `E008`, `E011`, `E012`, `E013`, `E014`, and the compile-time parts of `E010` (call-site / string-escape / math-identifier / mixed-shape-chain). 
+- Errors that occur **before** a `_test` target can compile are not reachable via `_test` and are instead asserted by ordinary crate `#[test]` unit tests with inline YAML snippets: project loading (`E001` parse, `E004` duplicate component, `E007` reserved name), entry resolution (`E009`), `_ymx` validation (the unknown-`_ymx`-field part of `E010`), and malformed `_test` blocks (the `_test`-parse part of `E010`). The test crate `ymx-test` exposes enough of `parse_tests`/`run_tests` to drive these where convenient, but they are not `_test`-driveable by construction.
 - `_ymx` in a scenario's entry document sets non-default flags the rule needs (e.g. `max_depth` for an `E008` case, or a custom `from_keyword` for rule 6 keyword-override scenarios).
 - Multi-file / namespace / file-scope scenarios add documents and subdirectories; `_test` targets must be components in the same document as the `_test` block.
 
@@ -305,7 +324,7 @@ Inside a string value, `$` triggers interpolation; `\` is the escape character.
 
 **Number→string rendering.** When a number is rendered into text (string interpolation, math string-concat under `+`, or a scalar surfaced inside a larger string):
 - Int renders plainly: `20` → `"20"`.
-- Float keeps precision via fixed-point (not scientific notation) for typical magnitudes: `2.0` → `"2.0"`, `2.5` → `"2.5"`.
+- Float renders via Rust's default `{}` formatting (fixed-point for typical magnitudes, falling back to scientific notation for very large or very small values), preserving enough precision to round-trip the `f64`: `2.0` → `"2.0"`, `2.5` → `"2.5"`, `0.1` → `"0.1"`. This is the same rendering used for JSON output of `Value::Float`.
 
 Bool renders as `"true"`/`"false"`; Null renders as `"null"`. Objects and arrays have no meaningful string rendering and raise `E011` when interpolated into text.
 
