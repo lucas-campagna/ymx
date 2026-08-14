@@ -1,0 +1,30 @@
+[advisories]
+# Deny advisories filed against a crate version we depend on; warn on
+# unmaintained crates (no security issue, just abandoned) so the audit gate
+# keeps moving while a replacement is evaluated.
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+unmaintained = "warn"
+
+[licenses]
+# Allow-list consistent with the workspace dependency tree (serde, serde_json,
+# indexmap, yaml-rust2 and their transitive dependencies).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Warn rather than deny on duplicate versions and wildcard specs so the audit
+# gate does not break on minor transitive churn; tighten to "deny" if a real
+# conflict surfaces.
+multiple-versions = "warn"
+wildcards = "warn"

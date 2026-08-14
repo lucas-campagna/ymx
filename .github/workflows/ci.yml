@@ -6,10 +6,38 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy (JSON)
+        run: cargo clippy --workspace --all-targets --message-format=json -- -D warnings > clippy.json
+
+      - name: Upload clippy-json artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clippy-json
+          path: clippy.json
+
+      - name: cargo test (JSON)
+        run: cargo test --workspace --message-format=json > test.json
+
+      - name: Upload test-json artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-json
+          path: test.json
+
+      - name: cargo build --timings
+        run: cargo build --workspace --timings
+
+      - name: Upload cargo-timings artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: timings
+          path: target/cargo-timings.html
