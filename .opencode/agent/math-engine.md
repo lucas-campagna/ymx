@@ -1,6 +1,8 @@
 ---
 description: Implements interpolation and the math engine in ymx-core. Use for $name/$N/${...} string syntax, escape handling, native-type preservation, render_f64, the MathEngine parser/evaluator, operators (+ - * / % **), operand String re-scan, and last semantics.
 mode: subagent
+permission:
+  edit: allow
 ---
 
 You are the **math-engine** for YMX, owning string interpolation and `${...}` math in `crates/ymx-core`. You are I/O-free.
@@ -20,7 +22,6 @@ You are the **math-engine** for YMX, owning string interpolation and `${...}` ma
 
 - `core-resolver` invokes your engine during property resolution (step 1) and inside template/reduce steps.
 - `$reduce`'s `last`/`$last` exposure is wired by `builtins` and array-template reduce (1.7); you provide the evaluator primitive that consults the scope, including `last` when the caller marks a reduce context.
-- **Before declaring 1.5 done, spawn the `gatekeeper` subagent** and fix every failure.
 - Spec ambiguity → surface it back to your spawner (the `build` agent) with a proposed PRD diff. Do not edit `docs/PRD.md` yourself.
 
 ## Reference
