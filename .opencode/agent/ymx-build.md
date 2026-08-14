@@ -46,7 +46,12 @@ When a milestone's Crate(s) column lists `ymx-core` but the milestone's task che
 2. **Dispatch.** On confirmation, spawn the owner specialist via the Task tool with a detailed task description: point it at its `docs/impl/<version>-*.md` task checklist and the relevant `docs/PRD.md` sections; tell it to spawn the `gatekeeper` subagent before declaring done; tell it to surface any spec ambiguity back to you (its spawner) rather than editing `docs/PRD.md`.
 3. **Parallelize when safe.** When multiple milestones are unblocked and independent, spawn multiple Task calls in a single message. Track each as it returns.
 4. **Done-declaration gate.** When a specialist reports "done", spawn the `gatekeeper` subagent to run `cargo fmt --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, and the crate-boundary checks (gatekeeper's prompt knows the list). **Do NOT declare a milestone done until `gatekeeper` returns `GATEKEEPER: PASS`.** On FAIL, forward the failing items back to the specialist, have it fix, and re-spawn `gatekeeper`. Loop until PASS.
-5. **Close out.** Once `gatekeeper` passes, report `done` to the user and tell them: *"Invoke `/update` to flip milestone `<version>` status to `done` in `docs/impl/`."* You do **not** edit `docs/` or spawn `spec-curator` — docs changes are `/update`'s job.
+5. Close out — commit, tag, report. Once gatekeeper returns PASS:
+(a) Commit the milestone's code — stage only files this milestone touched under crates/ and the root manifests (Cargo.toml, rust-toolchain.toml); never stage docs/ or .opencode/. Message_form: feat(<version>): <milestone title>. If the working tree is already clean (nothing this milestone added), skip this sub-step.
+(b) Create an annotated tag on that commit: git tag -a v<version> -m "<version>: <milestone title>" (e.g. git tag -a v1.2 -m "1.2: Core IR & diagnostics types"). If a remote is configured, also git push origin v<version>. Never force-move or delete an existing version tag.
+(c) Report done to the user and tell them: "Invoke /update to flip milestone <version> status to done, then commit the docs change."
+
+The tag marks implementation-verified completion (gatekeeper PASS); the docs status: done flip is a /update follow-up committed separately. You do not edit docs/ or spawn spec-curator.
 
 ## Spec ambiguity (surface to user — do NOT edit docs)
 

@@ -17,6 +17,14 @@ cargo clippy --workspace --all-targets
 
 Run these before declaring any task done. Lint and typecheck (`cargo clippy`) must pass clean. The MSRV is pinned in `rust-toolchain.toml` (latest stable).
 
+## Agents (primary commands)
+
+The workflow is **plan → update → build**, driven by three primary agents. All structural info is read from `docs/`; milestone `status: done` flips happen only after `gatekeeper` passes.
+
+- **`/ymx-plan`** — default chat/planning agent. Read-only discussion: reads `docs/`, proposes milestones and spec edits, resolves ambiguities in conversation. Cannot edit files or spawn subagents; hands off to `/ymx-update`.
+- **`/ymx-update`** — docs & scenario editor. Spawns `spec-curator` (`docs/PRD.md` + `docs/impl/*`) and `scenario-author` (`tests/cases/`). Flips milestone `status: done` after `/ymx-build`'s gatekeeper passes. Can edit `docs/**` only.
+- **`/ymx-build`** — implementation orchestrator. Spawns the code specialist for the target crate, runs the `gatekeeper` verifier, and on PASS commits `crates/`+root manifests and creates the annotated tag `v<version>`. Never edits docs or crate code itself.
+
 ## Crate boundaries (do not violate)
 
 Workspace at `crates/*`; see `docs/PRD.md` §Architecture.
