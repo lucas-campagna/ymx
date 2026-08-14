@@ -1,0 +1,14 @@
+[package]
+name = "ymx-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "ymx"
+path = "src/main.rs"
+
+[dependencies]
+ymx-lib.workspace = true
+ymx-config.workspace = true
+ymx-test.workspace = true

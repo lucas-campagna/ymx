@@ -1,0 +1,8 @@
+[package]
+name = "ymx-test"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ymx-core.workspace = true
