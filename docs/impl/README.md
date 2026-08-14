@@ -1,7 +1,7 @@
 ---
 version: "1.x"
 title: "YMX v1 implementation plan"
-short: "Index of versioned implementation milestones (1.1 – 1.11)"
+short: "Index of versioned implementation milestones (1.1 – 1.14)"
 description: |
   Tracks the build of YMX v1 per docs/PRD.md: the rules-1–16 resolver, JSON
   output, CLI + library, inline `_test`, file-path entry addressing, and
@@ -31,6 +31,9 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.9 | Test harness (ymx-test) | ymx-test | [1.9-test-harness.md](1.9-test-harness.md) | 1.6 |
 | 1.10 | CLI (ymx-cli) | ymx-cli | [1.10-cli.md](1.10-cli.md) | 1.8, 1.9 |
 | 1.11 | Scenario suite & docs | tests/ | [1.11-scenarios-docs.md](1.11-scenarios-docs.md) | 1.10 |
+| 1.12 | CI gate & dependency security | (repo) | [1.12-ci-gate.md](1.12-ci-gate.md) | 1.1 |
+| 1.13 | Code coverage reporting (cargo-llvm-cov) | (repo) | [1.13-coverage.md](1.13-coverage.md) | 1.9 |
+| 1.14 | Build-time & binary-size metrics | (repo) | [1.14-build-metrics.md](1.14-build-metrics.md) | 1.10 |
 
 ## Cross-cutting notes
 
