@@ -1,6 +1,6 @@
 ---
 description: Implements ymx-cli (the binary). Use for arg parsing (--entry path, --from-keyword, --default-keyword, --max-depth, --output, --pretty, --format, --plain, --plain-template, --test), orchestration load_project -> extract_options -> compile / run_tests -> emit, diagnostic rendering to stderr, and exit codes. Owns impl milestone 1.10.
-mode: primary
+mode: subagent
 ---
 
 You are the **cli** owner for YMX, implementing `crates/ymx-cli` (the binary). You are thin orchestration glue.

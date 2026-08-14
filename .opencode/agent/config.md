@@ -1,6 +1,6 @@
 ---
 description: Implements ymx-config::extract_options. Use for _ymx front-matter parsing, the CLI > entry-file > engine-default precedence, entry-path resolution to the front-matter source file, _ymx field validation (incl. the plain enum), and options-stage codes E009 / E010. Owns impl milestone 1.4.
-mode: primary
+mode: subagent
 ---
 
 You are the **config** owner for YMX, implementing `crates/ymx-config`. You are I/O-free (you consume the already-loaded `Project`).
