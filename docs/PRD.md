@@ -79,10 +79,10 @@ ymx/
 | `E008` | Max-depth exceeded |
 | `E009` | Entry component not found |
 | `E010` | Invalid syntax (call-site, string escape, math identifier prefix `$letter`, mixed-shape template chain, unknown `_ymx` field, or malformed `_test` block) |
-| `E011` | Math error (type mismatch, division by zero, non-numeric operand, invalid `last`) |
+| `E011` | Math error (type mismatch, division by zero, non-numeric operand) or builtin argument type error (non-array 2nd arg to `$map`/`$reduce`; mixed-shape `$merge`) |
 | `E012` | Positional argument after a named argument in a call |
 | `E013` | Array/object literal as a direct call argument (unsupported in v1) |
-| `E014` | Reference to undefined `$last` on the first reduce step |
+| `E015` | Meta-key reserved name used as a component or template (leading-`$` variant of `_ymx`/`_test`, e.g. `$_ymx`, `$$test`, `$$_ymx`) |
 
 ## Multi-file projects
 
@@ -127,6 +127,8 @@ A document may carry two reserved **meta keys** at its top level — `_ymx` (fro
 
   In both variants `args` is optional (absent = no arguments). The `args` shape mirrors the call-site grammar (rule 3): a mapping (named arguments), a list (positional, binding `$0`, `$1`, …), or a scalar (binds `$0`).
 
+  > `args` values are taken **literally** as YAML values — they are **not** interpolated at `_test`-parse time. Any `$name`, `${...}`, or `$call(...)` appearing inside an `args` value is resolved by the **target** component against the arguments the test binds it, never by the test harness against an (empty) test scope. To exercise interpolation, bind the raw input via `args` and assert the interpolated output as `result`.
+
 `_test` at the top level may be one of:
 
 1. **Bare A** — a scalar targeting the entry component (no args). (Top-level mappings and lists are never bare A — see disambiguation below.)
@@ -140,7 +142,9 @@ A document may carry two reserved **meta keys** at its top level — `_ymx` (fro
 
 **Scope.** Every component named in a type-2 map must be defined in the same document as the `_test` block; referencing a component from another document (or a namespaced one) is `E002`. The entry targeted by bare A/B is the project entry (`--entry` or `main`), resolved in the document containing the `_test` block.
 
-**Reach of the error variant.** The error variant asserts an outcome of *compiling the target* — i.e. a diagnostic produced by `compile`/`compile_component` while resolving the target. Errors that occur *before* a target can be compiled — project loading (`E001`, `E004`, `E007`), entry resolution (`E009`), `_ymx` validation (unknown-field part of `E010`), and malformed `_test` blocks (the `_test`-parse part of `E010`) — are outside `_test`'s reach and are covered by ordinary crate `#[test]` unit tests with inline YAML (see *Testing*).
+**Reach of the error variant.** The error variant may assert **any** code from the *Diagnostic codes* table, regardless of which pipeline stage produced it — load-time (`E001`, `E004`, `E007`, `E015`), option-resolution (`E009`, the unknown-`_ymx`-field part of `E010`), or target-compilation (`E002`, `E003`, `E005`, `E006`, `E008`, the call-site / string-escape / math-identifier / mixed-shape-chain parts of `E010`, `E011`, `E012`, `E013`). Matching is by code only: a test passes iff some diagnostic observed across the harness's full pipeline (`load_project` → `extract_options` → `compile_component` of the test's target) has `code` equal to the asserted code.
+
+> The sole carve-out is the genuinely self-referential case — a diagnostic produced by *parsing the very `_test` block that asserts it* (the malformed-`_test`-block part of `E010`), and YAML-parse failures (`E001`) of the document that hosts the `_test` block when that document loads by itself — neither can be self-asserted by construction (a malformed `_test` or its un-parseable carrier file is simply unreadable). Those unreachable diagnostics are exercised by ordinary crate `#[test]` unit tests with inline YAML (see *Testing*). Every other code is reachable: load-time errors in a *sibling* document still load the `_test`-bearing document normally; option-resolution and target-compilation errors fire after `_test` is parsed.
 
 ## CLI
 
@@ -256,8 +260,10 @@ pub fn parse_tests(project: &Project) -> Result<Vec<Test>, Vec<Diagnostic>>;
 
 /// Runs each test by compiling its target component with `args` under `opts`.
 /// For `Expected::Value`, `passed` is true iff `actual` is `Ok(v)` with `v == expected`.
-/// For `Expected::Error`, `passed` is true iff `actual` is `Err(diags)` and some
-/// diagnostic in `diags` has `code == expected.code`.
+/// For `Expected::Error`, `passed` is true iff some diagnostic observed across the
+/// harness's full pipeline (`load_project` → `extract_options` → `compile_component`)
+/// for this test's target has `code == expected.code`; any code from the
+/// *Diagnostic codes* table is matchable (see *Reach of the error variant*).
 pub fn run_tests(project: &Project, opts: &Options) -> Vec<TestResult>;
 ```
 
@@ -302,8 +308,8 @@ tests/cases/rule-NN/<scenario>/
 └── subdir/         # sub-namespace documents
 ```
 
-- Every scenario must define at least one `_test` entry. A scenario asserts either a value (`Expected::Value`) or a compile-time diagnostic produced by resolving a target (`Expected::Error`). Diagnostic-expectable cases include `E002`, `E003`, `E005`, `E006`, `E008`, `E011`, `E012`, `E013`, `E014`, and the compile-time parts of `E010` (call-site / string-escape / math-identifier / mixed-shape-chain). 
-- Errors that occur **before** a `_test` target can compile are not reachable via `_test` and are instead asserted by ordinary crate `#[test]` unit tests with inline YAML snippets: project loading (`E001` parse, `E004` duplicate component, `E007` reserved name), entry resolution (`E009`), `_ymx` validation (the unknown-`_ymx`-field part of `E010`), and malformed `_test` blocks (the `_test`-parse part of `E010`). The test crate `ymx-test` exposes enough of `parse_tests`/`run_tests` to drive these where convenient, but they are not `_test`-driveable by construction.
+- Every scenario must define at least one `_test` entry. A scenario asserts either a value (`Expected::Value`) or a diagnostic (`Expected::Error`); the `error` variant may assert **any** code from the *Diagnostic codes* table, at any pipeline stage — load-time (`E001`, `E004`, `E007`, `E015`), option-resolution (`E009`, the unknown-`_ymx`-field part of `E010`), or target-compilation (`E002`, `E003`, `E005`, `E006`, `E008`, the call-site / string-escape / math-identifier / mixed-shape-chain parts of `E010`, `E011`, `E012`, `E013`). See *Reach of the error variant* for the one self-referential carve-out. 
+- The only diagnostics that are **not** `_test`-driveable by construction are produced by parsing the `_test` block itself (the malformed-`_test`-block part of `E010`) and YAML-parse failures (`E001`) of the document that hosts the `_test` block alone — both yield an unreadable `_test`. They are exercised by ordinary crate `#[test]` unit tests with inline YAML snippets. The test crate `ymx-test` exposes enough of `parse_tests`/`run_tests` to drive these where convenient.
 - `_ymx` in a scenario's entry document sets non-default flags the rule needs (e.g. `max_depth` for an `E008` case, or a custom `from_keyword` for rule 6 keyword-override scenarios).
 - Multi-file / namespace / file-scope scenarios add documents and subdirectories; `_test` targets must be components in the same document as the `_test` block.
 
@@ -324,7 +330,7 @@ Inside a string value, `$` triggers interpolation; `\` is the escape character.
 
 **Number→string rendering.** When a number is rendered into text (string interpolation, math string-concat under `+`, or a scalar surfaced inside a larger string):
 - Int renders plainly: `20` → `"20"`.
-- Float renders via Rust's default `{}` formatting (fixed-point for typical magnitudes, falling back to scientific notation for very large or very small values), preserving enough precision to round-trip the `f64`: `2.0` → `"2.0"`, `2.5` → `"2.5"`, `0.1` → `"0.1"`. This is the same rendering used for JSON output of `Value::Float`.
+- Float renders with the **same round-trippable rendering used for JSON output of `Value::Float`** (serde_json/ryu-style): integer-valued floats keep a fractional part — `2.0` → `"2.0"`, `2.5` → `"2.5"`, `0.1` → `"0.1"`. A single shared f64 renderer is used for both string interpolation and JSON output; Rust's default `{}` formatting is **not** used (it would drop the fractional part of integer-valued floats, e.g. `2.0` → `"2"`).
 
 Bool renders as `"true"`/`"false"`; Null renders as `"null"`. Objects and arrays have no meaningful string rendering and raise `E011` when interpolated into text.
 
@@ -345,7 +351,7 @@ Referencing a file-scoped component from outside its document is a hard error (`
 **Reserved names.** Two kinds of effective identifiers are reserved and not user-definable as components/templates:
 
 1. **Builtin names** — `map`, `reduce`, `merge` — used by `$map`, `$reduce`, `$merge` (rules 15–16). Defining any component or template whose effective identifier is one of these is a hard error (`E007`), regardless of the leading `$` count. The builtins are always invoked via their `$`-prefixed forms.
-2. **Meta keys** — `_ymx` (front matter) and `_test` (tests) — described in *Project metadata*. When present at the top level of a document they are intercepted by the engine as metadata and are **never** registered as components or templates. They are not file-scoped components despite their leading `_`; the `_`-prefix visibility rule simply does not apply to them. There is no `E007` for `_ymx`/`_test` (they are consumed, not rejected), but a user component/template cannot be named `_ymx` or `_test` either — any such top-level key is treated as the meta block of that name. Meta extraction is performed by `ymx-config` (`_ymx`) and `ymx-test` (`_test`); `ymx-core` only recognizes the two names, excludes them from the namespace, and stores their raw parsed values on the `Project`.
+2. **Meta keys** — `_ymx` (front matter) and `_test` (tests) — described in *Project metadata*. When present at the top level of a document they are intercepted by the engine as metadata and are **never** registered as components or templates. They are not file-scoped components despite their leading `_`; the `_`-prefix visibility rule simply does not apply to them. The bare top-level keys `_ymx` and `_test` are **consumed** (no error); a user component/template cannot be named `_ymx` or `_test` — any such top-level key is treated as the meta block of that name. A component or template whose **effective identifier** equals `_ymx` or `_test` but which carries one or more leading `$` (e.g. `$_ymx`, `$$test`, `$$_ymx`) is **rejected as a reserved name** (`E015`): only the bare meta keys are consumed, and the leading-`$` variants are not legal user-defined components/templates. Meta extraction is performed by `ymx-config` (`_ymx`) and `ymx-test` (`_test`); `ymx-core` only recognizes the two names, excludes them from the namespace, and stores their raw parsed values on the `Project`.
 
 > A namespace dot (`.`) appears only at the *lookup* layer for `from` targets and math `name(...)` calls (e.g. `from: subdir.comp`); it is not part of an effective identifier and cannot appear inside `$name` interpolation. Cross-namespace component references are reached via `from` (rule 6) or via the math `subdir.comp(...)` form (rule 7), never via bare `$subdir.comp` (which would interpolate `$subdir` then the literal text `.comp`).
 
@@ -564,7 +570,7 @@ Here `a` calls `b` which sums `12` with `34` yielding `46`, then calls `c` with 
 >
 > Gotcha: because re-scan evaluates in the current scope, a String argument whose content is a bare-identifier-looking token resolves to that identifier. E.g. `${ x }` with `x = "y"` re-scans as `y`, which looks up the argument `y` (→ `E003` if absent). Keep String arguments used in math either numeric or full math expressions; avoid re-using argument names as string contents.
 
-> `last` is available in `${...}` only within a reduce step (rules 13–16). Outside any reduce step, referencing `last` (or `$last` in a plain string) is `E003` (treated as a missing argument). `last` and `$last` are thus **symmetric across reduce contexts**: both the array-template reduce (rule 13) and `$reduce` (rule 16) expose the previous step's result, accessed as `last` in math and `$last` in plain strings.
+> `last` is available in `${...}` only within a reduce step (rules 13–16). Outside any reduce step — including on the **first** step of a reduce, before any previous result exists — referencing `last` (or `$last` in a plain string) is `E003` (treated as a missing argument; `last` is an ordinary in-scope argument, nothing more). `last` and `$last` are thus **symmetric across reduce contexts**: both the array-template reduce (rule 13) and `$reduce` (rule 16) expose the previous step's result, accessed as `last` in math and `$last` in plain strings.
 
 ### 8. Shortcut: a property name matching a component name calls that component
 
@@ -584,7 +590,7 @@ Calling `a` returns `[1, 3, 5]`. The leading value passed through `$default` cor
 
 > If more than one property's name matches a component, it is a hard error (ambiguous shortcut).
 
-> The shortcut fires during step 2 of rule 11 — against the post-template property set. The shortcut is **suppressed** when the component has a `from` property pointing to a valid regular component: in that case `from` is the call directive, and the otherwise-matching property is passed as a regular argument to the `from`-targeted component. The shortcut applies inside nested mini-components under the same conditions, including the same suppression when a nested `from` is valid. Suppression does **not** happen when `from` is invalid (plain property per rule 6); in that case the shortcut fires normally.
+> The shortcut fires during step 3 of rule 11 — against the post-template property set, as sugar for `from` (the two are mutually exclusive). The shortcut is **suppressed** when the component has a `from` property pointing to a valid regular component: in that case `from` is the call directive, and the otherwise-matching property is passed as a regular argument to the `from`-targeted component. The shortcut applies inside nested mini-components under the same conditions, including the same suppression when a nested `from` is valid. Suppression does **not** happen when `from` is invalid — in that case `from` is forwarded as a **normal property** alongside the other arguments to the shortcut-matched component, and the shortcut fires normally.
 
 Example 1 — shortcut fires:
 
@@ -625,8 +631,8 @@ Any property referenced by a component (via `$name`, `$0`, `${name}`, etc.) must
 Resolving a component runs in three steps, in this fixed order:
 
 1. **Property resolution (before template)** — every property value of the component is fully resolved. A property value is a *nested call-site* when it is an object containing the `from` key, or any value containing an inline `$comp(...)` call (rule 3) or a `${...}` interpolation (rule 7). Nested call-sites resolve **bottom-up**: the deepest nested call is evaluated first, its return value bubbles up to its parent, and so on, until every property of the component has a fully resolved value. Bare `$name` (no parens) resolves as: (a) a named argument `name` in scope → that argument's value; (b) else if a regular component `name` exists → call it with no args and use its return value (its own template chain applies first); (c) else → hard error (rule 10). `$name(...)` unconditionally calls the component `name` (rule 3) and bypasses the argument lookup. Inside `${...}` (math context) there is **no fallback**: a bare identifier refers to an argument or the math result of the previous step (`last`); to call a component inside math, use the `name(...)` form (rule 7). *(v2)* Property-key modifiers (`?`, `$`) are stripped first; a `$`-suffix value is wrapped in `${...}` and a `?:` default is recorded for later merge binding (rule 17).
-2. **Template chain (rule 5)** — applied to the post-step-1 property set. The innermost template runs first, its result feeds the next template, and so on. Templates can only be reached through their **direct** child: `a` invokes `$a`; if `$a` is absent, `a` does **not** skip to `$$a` — the chain is broken at that point. Template names are not valid `from` targets.
-3. **`from` dispatch (rule 6, after template)** — if the (post-template) value of `from` names a valid *regular* component, call it with the rest of the property set as arguments; the return value replaces the component's output. If the `from` value does not name a valid regular component (templates excluded), `from` is treated as a plain property — no call, no error.
+2. **Template chain (rule 5)** — applied to the post-step-1 property set. The innermost template runs first, its result feeds the next template, and so on. Each template link is itself a **normal component call** and follows this same three-step flow (its own property resolution, its own template chain, its own `from`/shortcut dispatch), **with one exception**: the *first* link of a chain whose `$template` is an array uses the rule 12/13/14 map/reduce semantics instead of a single call. Templates can only be reached through their **direct** child: `a` invokes `$a`; if `$a` is absent, `a` does **not** skip to `$$a` — the chain is broken at that point. Template names are not valid `from` targets.
+3. **`from` / shortcut dispatch (rules 6 and 8, after template)** — these are **mutually exclusive and sugar-equivalent**: the rule-8 shortcut is sugar for `from`, so exactly one of them fires. If the (post-template) value of `from` names a valid *regular* component, `from` dispatches: the target is called with the rest of the property set as arguments (the `from` key itself is **not** forwarded; the rule-8 shortcut is **suppressed**), and the return value replaces the component's output. If `from` does **not** name a valid regular component (templates excluded; non-String `from`; missing target), `from` is a **plain forwarded property** and the rule-8 shortcut fires normally against the post-template property set (a property whose name matches a component → that component is called with the remaining properties as arguments, the matched key's value passed as `$default`; the invalid `from` is forwarded alongside them as an ordinary argument). Either dispatch target is a normal component call following this same three-step flow.
 
 A nested mini-component (an object whose value uses `from`) receives **only the arguments explicitly written in its body**, resolved against the parent's current arguments. The parent's other arguments are not auto-forwarded; rules 9 and 10 apply within the nested call exactly as they do at the top level. A nested mini-component follows the same three-step evaluation as a top-level component, so it can itself contain nested call-sites.
 
@@ -776,6 +782,7 @@ The following lenient fallbacks apply to rules 12–14:
 - An **empty array** `a` produces an **empty array** output.
 - An **empty `$a` template** is a **pass-through**: it returns its input unchanged.
 - A **non-array `$a`** applied to a **non-array `a`** simply calls `$a` with `a` as `$0` (per rule 5's chain semantics).
+- An **array `$a`** applied to a **non-array `a`** (a scalar or an object) reduces `$a` over `a` as a **single-element sequence** per rule 13 — an object `a` supplies the initial arguments, a scalar `a` binds `$0`. (The mixed-shape gap of rule 5 concerns array vs non-array links *within* a single chain and remains `E010`; this case — an array template applied to a non-array component — is defined.)
 
 ### 15. Merging objects and arrays with `$merge`
 
@@ -825,7 +832,9 @@ Calling `c` produces `["1 + 2", "2 + 3"]`.
 
 Inside `${...}` (math context), `$last` is referenced by the bare name `last`: it is math-evaluated. So `${last}` takes the previous result and evaluates it as a math expression.
 
-> `last` semantics in `$reduce`: `$last` is undefined on the first iteration; referencing `$last` (or `last` in math) on the first iteration is a hard error (`E014`). On subsequent iterations `$last` holds the previous item's fully resolved result. `$last` follows the general rules of rule 7: outside math it interpolates the previous result with its native type preserved; inside math (`last` or `${last}`) it is subject to the *Math operand resolution (String re-scan)* rule — a String previous result is re-scanned as a math expression (so `"1 + 2"` → `3`), a number is used directly, and an object/array operand is `E011` under a numeric operator.
+> Builtin argument types and shapes. The second argument of `$map` and `$reduce` must resolve to an **Array**; a non-Array value is `E011` (builtin argument type error). An empty array yields an empty array result (for `$map`) or — for `$reduce` — an empty result with no reduction step run. A `$reduce` over a one-element array runs exactly that single step (its result is the builtin's result); `$last` is never in scope on it (a `last` reference there is `E003`). `$merge` is defined only for Array⊕Array (concatenation) and Object⊕Object (shallow merge); any other shape combination (Array⊕Object, Object⊕Array, or a scalar where a collection is required) is `E011` (builtin argument type error).
+
+> `last` semantics in `$reduce`: `$last` is undefined on the first iteration; referencing `$last` (or `last` in math) on the first iteration is `E003` (missing argument). On subsequent iterations `$last` holds the previous item's fully resolved result. `$last` follows the general rules of rule 7: outside math it interpolates the previous result with its native type preserved; inside math (`last` or `${last}`) it is subject to the *Math operand resolution (String re-scan)* rule — a String previous result is re-scanned as a math expression (so `"1 + 2"` → `3`), a number is used directly, and an object/array operand is `E011` under a numeric operator.
 
 Example
 
