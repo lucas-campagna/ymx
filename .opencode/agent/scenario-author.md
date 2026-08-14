@@ -26,4 +26,4 @@ tests/cases/rule-NN/<scenario>/
 
 ## Output
 
-Report the list of scenario directories you created/modified and which rule + codes each covers, so the test-harness agent can run them and `spec-curator` can update status.
+Report the list of scenario directories you created/modified and which rule + codes each covers, so the test-harness agent can run them and the `plan` agent can update status (`docs/impl/*`).

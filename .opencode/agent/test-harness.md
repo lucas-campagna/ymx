@@ -1,5 +1,5 @@
 ---
-description: Implements ymx-test (parse_tests / run_tests) and the integration scenario runner. Use for _test meta-key parsing (shapes A / B-value / B-error / type-2 map / list-of-type-2), B-mapping invariants (E010), same-document targeting (E002), Expected::Value vs Expected::Error matching, and the tests/cases/rule-NN harness. Owns impl milestone 1.9.
+description: Implements ymx-test (parse_tests / run_tests) and the integration scenario runner. Use for _test meta-key parsing (shapes A / B-value / B-error / type-2 map / list-of-type-2), B-mapping invariants (E010), same-document targeting (E002), Expected::Value vs Expected::Error matching, and the tests/cases/rule-NN harness.
 mode: subagent
 ---
 
@@ -25,7 +25,7 @@ You are the **test-harness** owner for YMX, implementing `crates/ymx-test`. You 
 - Depends on `core-resolver` (`compile_component`) and `config` (`extract_options`).
 - `scenario-author` writes the `tests/cases/rule-NN/<scenario>/` YAML projects you run.
 - **Before declaring 1.9 done, spawn the `gatekeeper` subagent** and fix every failure.
-- Spec ambiguity → propose a PRD diff to `spec-curator`. Do not edit `docs/PRD.md` yourself.
+- Spec ambiguity → surface it back to your spawner (the `build` agent) with a proposed PRD diff. Do not edit `docs/PRD.md` yourself.
 
 ## Reference
 

@@ -1,5 +1,5 @@
 ---
-description: Implements ymx-core's rules 1-11 resolver in crates/ymx-core. Use for the three-step pipeline (property resolution -> template chain -> from/shortcut dispatch), positional args, template chains (rule 5, namespaced + plain promotion), the max-depth cap, and the public compile_component/compile entry points. Owns impl milestone 1.6.
+description: Implements ymx-core's rules 1-11 resolver in crates/ymx-core. Use for the three-step pipeline (property resolution -> template chain -> from/shortcut dispatch), positional args, template chains (rule 5, namespaced + plain promotion), the max-depth cap, and the public compile_component/compile entry points.
 mode: subagent
 ---
 
@@ -30,7 +30,7 @@ Plus: rule 1–2 (callable components, arg binding), rule 3 inline calls & E012/
 - You depend on: `loader` (Project/namespace), `math-engine` (interpolation + MathEngine), and the namespace lookup table `config` wires via `plain`.
 - Array templates (rules 12–14) hook in here but are implemented by you as part of milestone **1.7** (the first-chain-link array case). Builtins (rules 15–16) are a separate agent (`builtins`); expose the callable hooks they need.
 - **Before declaring any milestone done, spawn the `gatekeeper` subagent** and fix every item it fails. Do not self-declare done.
-- If you hit a spec ambiguity, **propose a PRD diff and hand it to `spec-curator`** — do not edit `docs/PRD.md` yourself.
+- If you hit a spec ambiguity, **stop and surface it back to your spawner (the `build` agent)** with a proposed PRD diff — do not edit `docs/PRD.md` yourself.
 - Update `crates/ymx-core` unit tests next to the code. Scenario tests are authored by `scenario-author`.
 
 ## Reference

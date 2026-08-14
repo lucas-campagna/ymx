@@ -49,4 +49,4 @@ fail_items:
 
 On FAIL, list every failing item with a fix pointer (`path:line` + what to change). The spawning agent must fix all of them and re-run you before declaring the milestone `done`.
 
-Do not edit. Do not declare done yourself — that belongs to the spawning agent (and `spec-curator` updates the impl status afterward).
+Do not edit. Do not declare done yourself — that belongs to your spawner (the `build` agent), which reports `done` to the user and lets the `plan` agent update impl status afterward.
