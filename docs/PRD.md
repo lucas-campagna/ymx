@@ -17,6 +17,8 @@ The project provides a tool/compiler that turns YAML source files into documents
 - **Template component**: a component whose name starts with `$` (e.g. `$box`). Templates are applied automatically after the component that uses them is called (rule 5). Templates can chain indefinitely (`$a`, `$$a`, `$$$a`, …).
 - **Entry**: the top-level component chosen for compilation. Defaults to `main`; overridable with `--entry`.
 - **Namespace**: the scope a component lives in. The project root is the global namespace; each subdirectory is a sub-namespace addressed by a dotted path (e.g. `subdir.comp`).
+- **Meta key**: a reserved top-level key (`_ymx` or `_test`) that is not a component but carries project metadata — front-matter flag defaults or inline tests (see *Project metadata*).
+- **Front matter**: the `_ymx` meta block of a document, supplying compiler-flag defaults.
 
 ## Technologies
 
@@ -42,18 +44,21 @@ The project is a Cargo workspace of multiple crates:
 ymx/
 ├── Cargo.toml
 ├── crates/
-│   ├── ymx-core/    # parser, resolver, diagnostics, builtins (no I/O)
-│   ├── ymx-lib/     # re-exports ymx-core as stable public API
-│   ├── ymx-cli/     # binary: arg parsing, dir walking, JSON emit
+│   ├── ymx-core/    # parser, resolver, math, builtins, diagnostics (no I/O)
+│   ├── ymx-config/  # _ymx front-matter extraction -> Options (no I/O)
+│   ├── ymx-test/    # _test parsing + run_tests / TestResult (no I/O)
+│   ├── ymx-lib/     # thin stable API: re-exports ymx-core + load_project I/O helper
+│   ├── ymx-cli/     # binary: arg parsing, orchestration (load→extract→compile→emit), --test
 │   └── ymx-web/     # stub crate (v3+)
 └── tests/
     └── cases/
-        └── rule-NN/<scenario>.yml   # insta snapshots
+        └── rule-NN/<scenario>/   # one directory per scenario (see Testing)
 ```
 
-- **YAML parsing**: `yaml-rust2` is used directly so source spans (line/column) are preserved on every scalar for diagnostics.
+- **Crate boundaries**: `ymx-core` is the pure compiler — parsing, the rule-1–16 resolver, the math engine, and builtins, with no filesystem or network I/O. `ymx-config` owns the `_ymx` front-matter logic (parsing the meta key, applying the *CLI > entry-file* precedence, producing `Options`). `ymx-test` owns the `_test` meta-key logic (parsing tests, running them, `TestResult`). `ymx-lib` is intentionally small: it re-exports `ymx-core`'s public surface and adds only a thin `load_project` I/O helper that walks a directory and builds a `Project` (collecting raw `_ymx`/`_test` meta values without interpreting them). The `_ymx`/`_test` *logic* lives in `ymx-config`/`ymx-test`, never in `ymx-lib`. `ymx-cli` depends on `ymx-lib` (for `load_project` + core types), `ymx-config`, and `ymx-test`, and orchestrates `load_project` → `extract_options` → `compile` → emit (and `run_tests` under a `--test` flag).
+- **YAML parsing**: `yaml-rust2` is used directly (inside `ymx-core`) so source spans (line/column) are preserved on every scalar for diagnostics.
 - **Output**: YAML → intermediate `Value` IR → serialize to JSON (v1). The IR is `Null | Bool | String | Int(i64) | Float(f64) | Array | Object`; object keys preserve YAML insertion order. HTML/PDF renderers consume the same IR in later versions.
-- **Math**: a `MathEngine` trait evaluates `${...}`. v1 uses dynamic numeric coercion (operands parse as numbers when possible; `+` falls back to string concatenation otherwise). The trait is the boundary for swapping to a Lua/Python/JavaScript engine in the future.
+- **Math**: a `MathEngine` trait evaluates `${...}`. v1 uses dynamic operand resolution — a String-valued operand is re-scanned as a math expression when it parses as one (see rule 7), numerically coerced when possible, and `+` falls back to string concatenation otherwise. The trait is the boundary for swapping to a Lua/Python/JavaScript engine in the future.
 - **Builtins**: a `Builtin` trait. v1 ships `$map`, `$reduce`, `$merge`. Each builtin is a *special form* that declares its own argument-evaluation strategy (e.g. `$map`/`$reduce` keep their first argument unevaluated as a callable component). The trait is the future plugin boundary.
 - **Diagnostics**: structured `Diagnostic { line, col, component, code, message }` rendered to stderr as `[code] file:line:col (component): message` and surfaced identically through `--format diagnostics` (one diagnostic per line, no JSON on stdout). Designed so a richer "bug report" mode (full call-stack + local-argument dump) can be added later without breaking the API. The stable error codes are listed in *Diagnostic codes* below.
 - **Cycles**: no precise cycle detection in v1; a configurable depth cap (`--max-depth`, default 256) prevents runaway recursion and surfaces as a "max-depth exceeded" diagnostic (`E008`). The depth counter is checked and incremented on entry to each recursive operation in rule 11's pipeline: each inline `$comp(...)` call (rule 3), each math `comp(...)` call (rule 7), each implicit bare-`$name` component fallback (rule 2), each template step in a chain (rule 5), and each `from` dispatch (rule 6). Exceeding the cap aborts with `E008`.
@@ -71,7 +76,7 @@ ymx/
 | `E007` | Reserved name used as a component/template (`map`/`reduce`/`merge`) |
 | `E008` | Max-depth exceeded |
 | `E009` | Entry component not found |
-| `E010` | Invalid call-site syntax |
+| `E010` | Invalid syntax (call-site, string escape, math identifier prefix `$letter`, mixed-shape template chain, unknown `_ymx` field, or malformed `_test` block) |
 | `E011` | Math error (type mismatch, division by zero, non-numeric operand, invalid `last`) |
 | `E012` | Positional argument after a named argument in a call |
 | `E013` | Array/object literal as a direct call argument (unsupported in v1) |
@@ -89,6 +94,46 @@ A project is a directory. Namespaces are directory-scoped:
 
 > Files are loaded in lexicographic path order. The global namespace is the union of all non-`_` definitions across the root-level files; each subdirectory contributes a sub-namespace identified by its relative dotted path. A definition lives in the namespace of the directory containing its file. `from: subdir.comp` resolves `comp` in the `subdir` namespace, raising `E002` if absent.
 
+## Project metadata
+
+A document may carry two reserved **meta keys** at its top level — `_ymx` (front matter) and `_test` (tests). They are not components (see *Reserved names*); `ymx-core` strips them from the namespace and stores their raw parsed values on the `Project`, and the `ymx-config` / `ymx-test` crates interpret them.
+
+### `_ymx` — front matter
+
+`_ymx` is a mapping of compiler-flag **defaults** for the document. The recognized fields, all optional:
+
+| Field             | Type   | Default     | Notes |
+|-------------------|--------|-------------|-------|
+| `max_depth`       | int    | `256`       | recursion cap (rule 11); exceeding it raises `E008` |
+| `from_keyword`    | string | `from`      | rule 6 keyword |
+| `default_keyword` | string | `default`   | rule 8 keyword; the engine prefixes `$` internally |
+| `format`          | string | `json`      | `json` or `diagnostics` |
+| `pretty`          | bool   | `false`     | pretty-print JSON output |
+
+> `entry` is intentionally **not** a `_ymx` field: the entry determines which document's `_ymx` block is the project's front-matter source, so it is resolved before front matter is read. The entry is therefore CLI-only: `--entry` if provided, else the literal default `main`.
+
+**Precedence.** For each flag, the effective value is **CLI flag (if provided) > entry-file front matter > engine default**. The *entry file* — the document whose `_ymx` block supplies front matter — is the document defining the entry component (the CLI `--entry` target if given, else `main`). If `--entry` is not provided, `main` must exist (else `E009`); its defining document is the front-matter source. `_ymx` blocks in other documents are silently ignored for flag resolution (they may still legitimately define file-scoped `_`-prefixed components). An unknown `_ymx` field is a hard error (`E010`).
+
+### `_test` — inline tests
+
+`_test` is a sibling of `_ymx` (also a top-level meta key, not nested under `_ymx`). It describes expected outputs for components **defined in the same document**. A test value has two forms:
+
+- **A** — a literal expected value: the target component called with **no arguments** must return a value equal to A.
+- **B** — a mapping `{args: <args>, result: <expected>}`: the target component called with `args` must return a value equal to `result`. `args` is optional (absent = no arguments). The `args` shape mirrors the call-site grammar (rule 3): a mapping (named arguments), a list (positional, binding `$0`, `$1`, …), or a scalar (binds `$0`).
+
+`_test` at the top level may be one of:
+
+1. **Bare A** — a scalar targeting the entry component (no args). (Top-level mappings and lists are never bare A — see disambiguation below.)
+2. **Bare B** — a mapping containing the key `result`, targeting the entry component.
+3. **Type-2 map** — a mapping `{<compname>: A_or_B, ...}` where each key names a component defined in the **same document**; each value is an A or a B for that component.
+4. **List of type-2 maps** — a list whose elements are type-2 maps (a top-level list is always shape 4, never a bare-A list).
+
+**Disambiguation.** A top-level mapping is interpreted as bare B (shape 2) if it contains a `result` key, otherwise as a type-2 map (shape 3); a top-level list is always shape 4. Consequently a bare A whose expected value is a mapping or a list cannot be written bare — test the entry with such an expectation via a type-2 map keyed by the entry name (e.g. `{main: {…}}` or `{main: [...]}`) or via bare B (`{result: {…}}` / `{result: [...]}`). A scalar bare A targets the entry directly. Inside a list (shape 4) every element is a type-2 map (never bare A/B), so wrapping a type-2 map in a list forces the type-2 reading even when a target happens to be named `result` or `args`.
+
+> Form A and B (no `args`) coincide: `expected: V` equals `{result: V}`. B exists to supply `args`. A target whose name is `result` or `args` is discouraged in test files; the list-wrapping escape above disambiguates if needed.
+
+**Scope.** Every component named in a type-2 map must be defined in the same document as the `_test` block; referencing a component from another document (or a namespaced one) is `E002`. The entry targeted by bare A/B is the project entry (`--entry` or `main`), resolved in the document containing the `_test` block.
+
 ## CLI
 
 ```
@@ -102,39 +147,106 @@ ymx <path> [flags]
 - `--output <file>`: write JSON to a file instead of stdout. The file is written only on success; on any diagnostic the CLI exits non-zero without creating the file.
 - `--pretty`: pretty-print the JSON output.
 - `--format <json|diagnostics>`: output style (v1: `json`; `diagnostics` lists errors only).
+- `--test`: run inline `_test` cases (via `ymx-test`) instead of compiling the entry. Emits one line per test (`PASS`/`FAIL` + target + diff on failure) and exits non-zero if any test fails or any `_test` block fails to parse (`E010`) — no JSON is emitted. Flag defaults still come from `_ymx` front matter.
 
-**Exit codes.** `0` on success; non-zero (default `1`) when any diagnostic is produced — including parse/namespace errors (`E001`, `E004`, …), a missing entry (`E009`), and max-depth (`E008`). With `--format diagnostics` on a successful compile, stdout is empty and the exit code is `0`.
+**Orchestration.** The CLI is the canonical full pipeline: `ymx_lib::load_project(path)` → `ymx_config::extract_options(&project, &cli)` → `ymx_core::compile(&project, &opts)` (or `ymx_test::run_tests(&project, &opts)` under `--test`) → serialize/emit. `--entry` is resolved before `extract_options` because it selects the front-matter source file (see *`_ymx` — front matter*).
 
-## Library API (ymx-lib)
+**Exit codes.** `0` on success; non-zero (default `1`) when any diagnostic is produced — including parse/namespace errors (`E001`, `E004`, …), a missing entry (`E009`), max-depth (`E008`), or a failing `_test` under `--test`. With `--format diagnostics` on a successful compile, stdout is empty and the exit code is `0`.
 
-`ymx-lib` re-exports `ymx-core` behind a stable public API:
+## Library API
+
+The public surface is spread across three crates so each concern stays small and optional. `ymx-lib` is a thin façade that re-exports `ymx-core`'s compiler types and adds only a directory-walking `load_project` helper; it deliberately contains **no** `_ymx`/`_test` logic.
+
+### `ymx-core` — compiler types (re-exported by `ymx-lib`)
 
 ```rust
-pub struct Options {
-    pub entry: String,           // default "main"
-    pub from_keyword: String,    // default "from"
-    pub default_keyword: String, // default "default" (engine prefixes with "$" internally)
-    pub max_depth: u32,           // default 256
-    pub pretty: bool,             // default false
-    pub format: Format,           // default Json
-}
+// Core IR and diagnostics (definitions live in ymx-core; ymx-lib re-exports them).
+pub enum Value { Null, Bool(bool), Int(i64), Float(f64), String(String), Array(Vec<Value>), Object(IndexMap<String, Value>) }
+
+pub struct Diagnostic { pub line: u32, pub col: u32, pub component: Option<String>, pub code: &'static str, pub message: String }
 
 pub enum Format { Json, Diagnostics }
 
-pub struct Diagnostic {
-    pub line: u32,
-    pub col: u32,
-    pub component: Option<String>,
-    pub code: &'static str,
-    pub message: String,
+pub struct Options {            // consumed by `compile`
+    pub entry: String,          // default "main"
+    pub from_keyword: String,   // default "from"
+    pub default_keyword: String,// default "default" (engine prefixes with "$" internally)
+    pub max_depth: u32,         // default 256
+    pub pretty: bool,           // default false
+    pub format: Format,         // default Json
 }
 
-pub fn compile_project(root: &Path, opts: &Options) -> Result<Value, Vec<Diagnostic>>;
+/// A loaded project: the merged component namespace (global + sub-namespaces),
+/// file-scoped components, and the raw parsed values of the reserved meta keys
+/// (`_ymx`, `_test`) per document — uninterpreted by ymx-core.
+pub struct Project { /* namespaces, file_scoped, raw_meta_ymx: Vec<(FileId, Value)>, raw_meta_test: Vec<(FileId, Value)> */ }
+
+/// Call arguments (named and/or positional) for `compile_component`.
+pub enum Args { None, Named(Vec<(String, Value)>), Positional(Vec<Value>), Mixed { named: Vec<(String, Value)>, positional: Vec<Value> } }
+
+/// Lower-level pure entry point: resolve a specific `component` (by name, looked
+/// up in the appropriate namespace) called with `args`, under `opts`. This is
+/// what `ymx-test::run_tests` uses to exercise test targets.
+pub fn compile_component(project: &Project, component: &str, args: &Args, opts: &Options) -> Result<Value, Vec<Diagnostic>>;
+
+/// Convenience: `compile_component(project, &opts.entry, &Args::None, opts)`.
+pub fn compile(project: &Project, opts: &Options) -> Result<Value, Vec<Diagnostic>>;
 ```
 
-- `Value` is the IR enum (`Null | Bool | Int(i64) | Float(f64) | String | Array | Object`) and serializes to JSON with insertion-ordered object keys.
-- On success with `format = Json`, callers serialize the returned `Value` (pretty or compact per `pretty`). On success with `format = Diagnostics`, there are no diagnostics to emit.
-- `Err(Vec<Diagnostic>)` carries all errors collected during namespace resolution and compilation; the CLI renders them per the *Diagnostics* format above.
+### `ymx-lib` — thin façade
+
+```rust
+/// Walks `root` (`.yml`/`.yaml`), parses each document with spans, builds the
+/// `Project` (namespace merge, duplicate/file-scope/reserved-name checks), and
+/// collects raw `_ymx`/`_test` meta values without interpreting them.
+/// I/O lives here so ymx-core stays I/O-free.
+pub fn load_project(root: &Path) -> Result<Project, Vec<Diagnostic>>;
+
+// Re-exports from ymx-core: Value, Diagnostic, Options, Format, Project, compile.
+```
+
+`ymx-lib` does **not** depend on `ymx-config` or `ymx-test`; library users who want front-matter-driven options or inline tests depend on those crates directly and compose the pipeline (see `ymx-cli` for the canonical orchestration).
+
+### `ymx-config` — front-matter → Options
+
+```rust
+/// Per-flag CLI override (None = not provided on the command line).
+pub struct CliOverrides {
+    pub entry: Option<String>,
+    pub from_keyword: Option<String>,
+    pub default_keyword: Option<String>,
+    pub max_depth: Option<u32>,
+    pub pretty: Option<bool>,
+    pub format: Option<Format>,
+}
+
+/// Applies precedence CLI > entry-file `_ymx` > engine default and returns the
+/// effective `Options`. The entry file is the document defining the entry
+/// component (CLI `--entry` if set, else `main`).
+pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options, Vec<Diagnostic>>;
+```
+
+### `ymx-test` — inline tests
+
+```rust
+pub enum TestArgs { None, Named(Vec<(String, Value)>), Positional(Vec<Value>), Scalar(Value) }
+
+pub struct Test { pub target: String, pub args: TestArgs, pub expected: Value, pub file: FileId, pub span: Span }
+
+pub struct TestResult { pub test: Test, pub actual: Result<Value, Vec<Diagnostic>>, pub passed: bool }
+
+/// Parses `_test` meta blocks into concrete tests (same-file targeting).
+pub fn parse_tests(project: &Project) -> Result<Vec<Test>, Vec<Diagnostic>>;
+
+/// Runs each test by compiling its target component with `args` under `opts`
+/// and comparing the result to `expected`.
+pub fn run_tests(project: &Project, opts: &Options) -> Vec<TestResult>;
+```
+
+### Serialization & errors
+
+- `Value` serializes to JSON with insertion-ordered object keys (`serde_json` + `preserve_order`). On success with `format = Json`, callers serialize `Value` (pretty or compact per `pretty`); with `format = Diagnostics`, there are no diagnostics to emit on success.
+- `Err(Vec<Diagnostic>)` from `load_project`/`compile`/`extract_options`/`parse_tests` carries all errors collected during namespace resolution, front-matter validation, or compilation; the CLI renders them per the *Diagnostics* format.
 
 ## Features
 
@@ -145,6 +257,7 @@ pub fn compile_project(root: &Path, opts: &Options) -> Result<Value, Vec<Diagnos
 - Compile multi-file, directory-scoped projects.
 - Structured diagnostics reporting line, column, and component name where an issue occurred, plus an error code.
 - Usable as a CLI tool and as a Rust library (`ymx-lib`).
+- Inline `_test` blocks (see *Project metadata*) drive a tests-first development flow via `ymx-test`.
 
 **Later**
 
@@ -153,6 +266,27 @@ pub fn compile_project(root: &Path, opts: &Options) -> Result<Value, Vec<Diagnos
 - Swappable math/engine backends.
 - User-defined builtins via a plugin system.
 - Rich "bug report" mode with full call-stack and local-argument dump.
+
+## Testing
+
+Tests are **first-class**: every scenario lives in `tests/cases/rule-NN/<scenario>/` as a real YMX project (one directory = project root), and assertions are written inside the YAML itself via the `_test` meta key (see *Project metadata*) — no hand-written expected-output files. The test harness is a small Rust integration test that, for each scenario directory:
+
+1. `ymx_lib::load_project(scenario_dir)` → `Project` (collecting raw `_ymx`/`_test` meta).
+2. `ymx_config::extract_options(&project, &CliOverrides::default_for_tests())` → `Options` (front-matter defaults override the engine defaults; the harness sets no CLI overrides unless the scenario requires them).
+3. `ymx_test::run_tests(&project, &opts)` → `Vec<TestResult>`; the harness asserts every test `passed`, printing the failing target + expected/actual diff on failure.
+
+**Scenario layout.**
+
+```
+tests/cases/rule-NN/<scenario>/
+├── main.yml        # the entry document (defines `main` and the `_test` block; may define `_ymx`)
+├── <other>.yml     # additional documents in the same project (multi-file scenarios)
+└── subdir/         # sub-namespace documents
+```
+
+- Every scenario must define at least one `_test` entry (a scenario without `_test` is a compile-only scenario and is asserted via `compile` + `--format diagnostics` against an insta snapshot of stderr, used for error cases such as `E009`/`E008`). Success scenarios assert through `_test`.
+- `_ymx` in a scenario's entry document sets non-default flags the rule needs (e.g. `max_depth` for an `E008` case, or a custom `from_keyword` for rule 6 keyword-override scenarios).
+- Multi-file / namespace / file-scope scenarios add documents and subdirectories; `_test` targets must be components in the same document as the `_test` block.
 
 ## Compiling Rules
 
@@ -189,7 +323,10 @@ Referencing a file-scoped component from outside its document is a hard error (`
 
 **Effective identifier.** A component or template name is a leading sequence of `$` characters (the template prefix, zero or more) followed by an *effective identifier*. The effective identifier is `[A-Za-z_][A-Za-z0-9_]*` (letters, digits, underscores; must start with a letter or underscore). A leading `$` count of zero marks a regular component; one or more mark templates of increasing chain depth. The `_`-prefix check for file scope applies to the effective identifier (after stripping any leading `$`s): `$_a` is file-scoped because its effective identifier `_a` starts with `_`.
 
-**Reserved names.** The effective identifiers `map`, `reduce`, and `merge` are reserved for the builtins (rules 15–16). Defining any component or template whose effective identifier is one of these is a hard error (`E007`), regardless of the leading `$` count. The builtins are always invoked via their `$`-prefixed forms (`$map`, `$reduce`, `$merge`).
+**Reserved names.** Two kinds of effective identifiers are reserved and not user-definable as components/templates:
+
+1. **Builtin names** — `map`, `reduce`, `merge` — used by `$map`, `$reduce`, `$merge` (rules 15–16). Defining any component or template whose effective identifier is one of these is a hard error (`E007`), regardless of the leading `$` count. The builtins are always invoked via their `$`-prefixed forms.
+2. **Meta keys** — `_ymx` (front matter) and `_test` (tests) — described in *Project metadata*. When present at the top level of a document they are intercepted by the engine as metadata and are **never** registered as components or templates. They are not file-scoped components despite their leading `_`; the `_`-prefix visibility rule simply does not apply to them. There is no `E007` for `_ymx`/`_test` (they are consumed, not rejected), but a user component/template cannot be named `_ymx` or `_test` either — any such top-level key is treated as the meta block of that name. Meta extraction is performed by `ymx-config` (`_ymx`) and `ymx-test` (`_test`); `ymx-core` only recognizes the two names, excludes them from the namespace, and stores their raw parsed values on the `Project`.
 
 > A namespace dot (`.`) appears only at the *lookup* layer for `from` targets and math `name(...)` calls (e.g. `from: subdir.comp`); it is not part of an effective identifier and cannot appear inside `$name` interpolation. Cross-namespace component references are reached via `from` (rule 6) or via the math `subdir.comp(...)` form (rule 7), never via bare `$subdir.comp` (which would interpolate `$subdir` then the literal text `.comp`).
 
@@ -251,6 +388,8 @@ b: $0 + $1
 
 Calling `a` returns `"12 + 34"` again.
 
+> **Integer property keys are positional slots.** A property whose YAML key is the integer `0`, `1`, `2`, … (a non-negative integer scalar, not the string `"0"`) denotes the positional slot `$N` of the same index: it sets/reads `$0`, `$1`, … exactly. This generalizes rule 11's `0: $x` mini-component usage and the binding above — a component body may provide a default `$N` by writing the integer key, and a call may set a positional slot via the integer key. A string key `"0"` is an ordinary named property, distinct from the integer key `0`. Negative or non-integer keys are ordinary named properties.
+
 ### 5. Components can have template components
 
 A component whose name starts with `$` is a template. When a component with a matching (non-`$`) name is called, the template is applied afterwards automatically.
@@ -271,7 +410,27 @@ Templates can be chained indefinitely: a component `a` invokes `$a`, which itsel
 
 > Templates can only be reached through their **direct** child: `a` invokes `$a`; if `$a` is absent, `a` does **not** skip to `$$a` — the chain is broken at that point. A template name (starting with `$`) is not a valid `from` target. Template application is step 2 of rule 11 — it sits between property resolution (step 1, where inline `$comp(...)` calls run) and `from` dispatch (step 3).
 
-When a component's result is a scalar (not an object with named properties), it is passed to the next template as the positional argument `$0`, consistent with rule 4.
+When a component's result is a scalar (not an object with named properties), it is passed to the next template as the positional argument `$0`, consistent with rule 4. The full argument-passing rule for scalar, object, and array results — including how the *initial* arguments are retained — is specified just below.
+
+**Argument passing between chain steps.** The arguments the *next* template sees are derived from the *initial* arguments (the args the original component was called with), not the previous template's full arg set:
+
+- **Scalar result** → the next template receives the initial arguments with `$0` overwritten by the scalar (other initial keys retained). The scalar does not consume other initial keys.
+- **Object result** → the next template receives the initial arguments, **overwritten only** for the keys the object actually returns, and **only** for the immediately next chain step. After that step, the chain reverts to the initial arguments (the overwrite does not propagate further up the chain). A key returned by the template that was not in the initial args is added for that one step only.
+- **Array result** → rules 12–14 govern; an array result propagating up a *non-array* chain link is the "mixed-shape" case below.
+
+This mirrors the overwrite-then-revert semantics of rule 13's array reduce, applied one chain link at a time. If the next template references an arg that is neither in the initial set nor overwritten by the current result, it is `E003` (rule 10).
+
+```yml
+a:
+  x: 1
+  y: 2
+$a:
+  x: ${x + 10}     # returns {x: 11} (only x)
+$$a:
+  out: $y          # y is still in the initial args → "2"
+```
+
+Calling `a`: `$a` returns `{"x": 11}`; `$$a` sees the initial `{x:1, y:2}` with `x` overwritten to `11` for this step, so `$y` → `2`, producing `{"out": 2}`. (Without the overwrite-then-revert rule, `$a`'s `{x:11}`-only result would make `$y` in `$$a` an `E003`.)
 
 Example
 
@@ -284,12 +443,14 @@ a:    10
 
 Calling `a`:
 
-1. `a` returns `10` to its template `$a`.
+1. `a` returns `10` to its template `$a` (initial args here are empty, `$0` is the only slot).
 2. `$a` runs `$0 * 2` with `$0 = 10`, returning `20` to `$$a`.
 3. `$$a` runs `$0 + 1` with `$0 = 20`, returning `21` to `$$$a`.
 4. `$$$a` runs `"final: $0"` with `$0 = 21`, returning `"final: 21"`.
 
 So calling `a` returns `"final: 21"`.
+
+> **Mixed-shape chains (v1 limitation).** A single chain whose links mix the array shape (rules 12–14) with the non-array shape (rule 5) is **not defined in v1** and raises `E010` when the mismatched link is reached — e.g. `$a` is non-array but `$$a` is array, or `$a` returns an array into a non-array `$$a`. The supported chains are: all links non-array (rule 5), or a terminal array-`$a` applied to a component via rules 12/13/14. This is a documented gap pending a concrete use case; revisit in a later version.
 
 ### 6. Components can call each other with the `from` property
 
@@ -363,13 +524,19 @@ Here `a` calls `b` which sums `12` with `34` yielding `46`, then calls `c` with 
 
 > Precedence (highest to lowest): `**` (right-associative) > unary `-` > `* / %` (left-associative) > `+ -` (left-associative). Parentheses group. There are **no** comparison, equality, or boolean operators; `<`, `>`, `=`, `==`, `and`, `or` are literal text in strings (see rule 13's `$x + $y < $last`, which yields the String `"1 + 2 < 6"`).
 
-> `+` semantics: if both operands parse as numbers (Int or Float), numeric addition (promoted to Float if either is Float). If both operands are Strings, string concatenation. If exactly one operand is a String and the other is a number, the number is rendered per *Number→string rendering* and string-concatenated. Any other mixture (Bool, Null, Array, Object) is a hard error (`E011`).
+> `+` semantics: the operands are first *resolved* (per *Math operand resolution* below). Then: if both resolved operands are numbers (Int or Float), numeric addition (promoted to Float if either is Float); if both are Strings, string concatenation; if exactly one is a String and the other is a number, the number is rendered per *Number→string rendering* and string-concatenated. Any other mixture (Bool, Null, Array, Object) is a hard error (`E011`).
 
 > Numeric promotion: Int ⊕ Int = Int (except `/`, always Float, and `**` per above); any Float operand promotes the result of an arithmetic operator to Float. Bool and Null are not numbers and cannot be coerced.
 
-> `${...}` return type: the math expression may evaluate to any `Value`, not just numbers. `${ $0 }` returns the argument unchanged; `${ $x + $y }` returns a String when `+` concatenates; `${ $obj }` (referencing an in-scope object argument) returns that object. The value flows into surrounding interpolation per *String syntax: Interpolation result type*.
+> `${...}` return type: the math expression may evaluate to any `Value`, not just numbers. `${ $0 }` returns the argument unchanged; `${ x + y }` returns a String when `+` concatenates; `${ obj }` (referencing an in-scope object argument) returns that object. The value flows into surrounding interpolation per *String syntax: Interpolation result type*.
 
-> Inside `${...}`, bare identifiers refer to arguments (or the math result `last`, rule 16) — there is **no component fallback** as there is for bare `$name` outside math (rule 2). To call a component inside a math expression, use the `name(...)` form (no `$` prefix), as in `b(12,34)` above; `name` supports a dotted namespace path, e.g. `subdir.comp(12,34)`, and `name()` calls a no-arg component. A bare identifier that matches neither an in-scope argument nor `last` is a missing argument (`E003`).
+> Identifier grammar inside `${...}`. Named arguments are written as **bare identifiers** (`x`, `y`, `default`, `last`, …) *without* a `$` prefix; positional arguments are written `$0`, `$1`, … (a `$` followed by decimal digits); components are called as `name(...)` *without* a `$` prefix, with `name` optionally a dotted namespace path (e.g. `subdir.comp(12,34)`) and `name()` calling a no-arg component. A `$` followed by a letter inside `${...}` (e.g. `${ $x }`) is `E010` — drop the `$` to reference a named argument. There is **no component fallback** for bare identifiers as there is for `$name` outside math (rule 2): a bare identifier resolves to the in-scope argument of that name or to `last`; anything else is `E003`.
+
+> Math operand resolution (String re-scan). When an operand of a math operator — a bare identifier, `last`, or a `$N` positional — resolves to a **String**, that String is re-scanned as a math expression and evaluated **in the current scope** (the same scope as the enclosing `${...}`, including `last` and all in-scope arguments): `"1 + 2"` → `3`, `"123"` → `123`, `"x + 1"` (with `x` in scope) → `x + 1`. If the String does **not** parse as a math expression (e.g. free text like `"hello"`), the identifier is left as a plain String operand of the surrounding operator (numeric operators then raise `E011`; `+` concatenates). Non-String operands are used directly. This re-scan is what makes `last` work (rule 16's `${last}` with `$last = "1 + 2"` yields `3`); it applies uniformly to *every* String-valued operand in math, not only to `last`.
+>
+> Gotcha: because re-scan evaluates in the current scope, a String argument whose content is a bare-identifier-looking token resolves to that identifier. E.g. `${ x }` with `x = "y"` re-scans as `y`, which looks up the argument `y` (→ `E003` if absent). Keep String arguments used in math either numeric or full math expressions; avoid re-using argument names as string contents.
+
+> `last` is available in `${...}` only within a reduce step (rules 13–16). Outside any reduce step, referencing `last` (or `$last` in a plain string) is `E003` (treated as a missing argument). `last` and `$last` are thus **symmetric across reduce contexts**: both the array-template reduce (rule 13) and `$reduce` (rule 16) expose the previous step's result, accessed as `last` in math and `$last` in plain strings.
 
 ### 8. Shortcut: a property name matching a component name calls that component
 
@@ -470,7 +637,7 @@ $a:
   from: $from
   x: 2
 b: c
-c: ${1 + $x}
+c: ${1 + x}
 ```
 
 Calling `a`:
@@ -529,14 +696,14 @@ a:
 $a:
   - x: ${x + 1}
     y: ${y + 2}
-  - ${x + $y}
+  - ${x + y}
   - $x + $y < $last
 ```
 
 Calling `a`:
 
 1. The first template item runs with the initial `x=1, y=2`, producing `{"x": 2, "y": 4}`. This object returns `x` and `y`, so it overwrites the initial for the next step **only**.
-2. The second item runs `${x + $y}` with `x=2, y=4` (overwritten), producing the number `6`. Since it returns a number (not an object with `x`/`y`), no overwrite carries forward.
+2. The second item runs `${x + y}` with `x=2, y=4` (overwritten), producing the number `6`. Since it returns a number (not an object with `x`/`y`), no overwrite carries forward.
 3. The third item therefore reverts to the **original** initial values `x=1, y=2`, with `$last=6`, producing the string `"1 + 2 < 6"`.
 
 So calling `a` returns `"1 + 2 < 6"`.
@@ -630,7 +797,7 @@ Calling `c` produces `["1 + 2", "2 + 3"]`.
 
 Inside `${...}` (math context), `$last` is referenced by the bare name `last`: it is math-evaluated. So `${last}` takes the previous result and evaluates it as a math expression.
 
-> `last` semantics in `$reduce`: `$last` is undefined on the first iteration; referencing `$last` (or `last` in math) on the first iteration is a hard error (`E014`). On subsequent iterations `$last` holds the previous item's fully resolved result. When `last` is referenced in math (`${last}`), the previous result is parsed as a math expression: a String is scanned as a math source (so `"1 + 2"` evaluates to `3`), a number is used directly, and an object/array/non-math String raises `E011`. The bare `$last` interpolation (outside math) returns the previous result unchanged, preserving its native type.
+> `last` semantics in `$reduce`: `$last` is undefined on the first iteration; referencing `$last` (or `last` in math) on the first iteration is a hard error (`E014`). On subsequent iterations `$last` holds the previous item's fully resolved result. `$last` follows the general rules of rule 7: outside math it interpolates the previous result with its native type preserved; inside math (`last` or `${last}`) it is subject to the *Math operand resolution (String re-scan)* rule — a String previous result is re-scanned as a math expression (so `"1 + 2"` → `3`), a number is used directly, and an object/array operand is `E011` under a numeric operator.
 
 Example
 
