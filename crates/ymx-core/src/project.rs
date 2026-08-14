@@ -5,6 +5,8 @@
 
 use std::path::PathBuf;
 
+use crate::namespace::{FileScopeStore, NamespaceStore};
+
 /// Output format selection for a compiled entry.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Format {
@@ -65,13 +67,32 @@ impl Default for Options {
 
 /// A loaded YMX project.
 ///
-/// Per-document host file paths indexed by [`FileId`](crate::diag::FileId).
-/// The merged component namespace, file-scoped components, and raw parsed
-/// reserved meta-key (`_ymx`, `_test`) values arrive in milestone 1.3; this
-/// milestone exposes only `files` as the stable public surface.
-#[derive(Debug)]
+/// [`files`] is the stable `FileId`-indexable surface (host-file path per
+/// document). [`namespaces`] holds the merged global + sub-namespaces
+/// (non-`_`-prefixed definitions). [`file_scoped`] holds `_`-prefixed
+/// definitions per document (excluded from the namespace merge; cross-document
+/// references raise `E005` at the call site in milestone 1.6). The raw parsed
+/// reserved meta-key (`_ymx`, `_test`) values arrive in task 3.
+///
+/// [`files`]: Project::files
+/// [`namespaces`]: Project::namespaces
+/// [`file_scoped`]: Project::file_scoped
+#[derive(Debug, Default)]
 pub struct Project {
+    /// `files[FileId.0]` — host-file path of every loaded document.
     pub files: Vec<PathBuf>,
+    /// Merged global (`""`) + sub-namespaces (dotted relative path) of
+    /// non-`_`-prefixed definitions.
+    pub namespaces: NamespaceStore,
+    /// `_`-prefixed (file-scoped) definitions, per [`FileId`].
+    pub file_scoped: FileScopeStore,
+}
+
+impl Project {
+    /// Empty project (no files, no definitions).
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 #[cfg(test)]
@@ -101,8 +122,23 @@ mod tests {
     fn project_holds_files() {
         let p = Project {
             files: vec![PathBuf::from("main.yml")],
+            ..Project::default()
         };
         assert_eq!(p.files.len(), 1);
         assert_eq!(p.files[0], PathBuf::from("main.yml"));
+    }
+
+    #[test]
+    fn project_default_is_empty() {
+        let p = Project::default();
+        assert!(p.files.is_empty());
+        assert!(p.namespaces.is_empty());
+        assert_eq!(p.file_scoped.file_count(), 0);
+    }
+
+    #[test]
+    fn project_new_is_default() {
+        let p = Project::new();
+        assert!(p.files.is_empty());
     }
 }
