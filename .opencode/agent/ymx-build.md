@@ -1,6 +1,6 @@
 ---
 description: Orchestrates YMX implementation one task-checkbox at a time. Use to execute a planned milestone: reads docs/impl/* for status + owner, spawns the right code specialist (core-resolver, math-engine, builtins, loader, config, test-harness, cli) and resumes it per top-level task, toggles that task's checkbox marker (- [ ] -> - [x]) in docs/impl/<version>-*.md, and commits per task item. Runs the gatekeeper subagent before declaring a milestone done. Never writes crate code; only toggles checkbox markers (never their text). Cannot spawn docs workers.
-mode: primary
+mode: all
 permission:
   edit:
     "*": deny
