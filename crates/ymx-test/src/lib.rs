@@ -14,9 +14,9 @@
 //! never touches the filesystem (that is `ymx-lib`'s job).
 
 use ymx_core::diag::{Diagnostic, FileId, Span, E002, E010};
-use ymx_core::ir::Value;
-use ymx_core::project::Project;
-use ymx_core::resolve::resolve_entry;
+use ymx_core::ir::{Args, Value};
+use ymx_core::project::{Options, Project};
+use ymx_core::resolve::{compile_component, resolve_entry};
 
 /// The per-test call arguments, mirroring the call-site grammar (rule 3):
 /// named (mapping), positional (list, binding `$0`, `$1`, …), or a scalar
@@ -343,5 +343,59 @@ fn same_doc_miss(project: &Project, file: FileId, key: &str) -> Diagnostic {
         message: format!(
             "`_test` target `{key}` is not defined in the same document as the `_test` block"
         ),
+    }
+}
+
+/// Runs each parsed test by compiling its target component with `args` under
+/// `opts` against an already-loaded [`Project`] (the caller runs
+/// `load_project` first; a failed load yields no `Project` and thus no tests
+/// run — load-time codes are never matchable).
+///
+/// Re-parses the raw `_test` blocks internally (the signature has no test
+/// list); an internal parse failure returns an empty [`Vec`] — the caller is
+/// required to call [`parse_tests`] first and treat its `Err` as fatal, so
+/// this path is unreachable in practice. `parse_tests`' diagnostics never
+/// participate in `Expected::Error` matching (the caller surfaces them before
+/// running), and neither do `extract_options` diagnostics: `opts` arrives
+/// already extracted and `run_tests` only ever observes the target's
+/// `compile_component` result.
+///
+/// For [`Expected::Value`], `passed` is true iff `actual` is `Ok(v)` with
+/// `v == expected`. For [`Expected::Error`], `passed` is true iff some
+/// diagnostic from the target's compilation has `code == expected.code`
+/// (post-load codes only).
+pub fn run_tests(project: &Project, opts: &Options) -> Vec<TestResult> {
+    let tests = match parse_tests(project) {
+        Ok(tests) => tests,
+        Err(_) => return Vec::new(),
+    };
+    tests
+        .into_iter()
+        .map(|test| {
+            let actual = compile_component(project, &test.target, &test_args(&test.args), opts);
+            let passed = match &test.expected {
+                Expected::Value(expected) => match &actual {
+                    Ok(value) => value == expected,
+                    Err(_) => false,
+                },
+                Expected::Error { code } => match &actual {
+                    Err(diags) => diags.iter().any(|d| d.code == code.as_str()),
+                    Ok(_) => false,
+                },
+            };
+            TestResult { test, actual, passed }
+        })
+        .collect()
+}
+
+/// Map a test's [`TestArgs`] to the resolver's [`Args`]: `None` -> `Args::None`,
+/// named -> `Args::Named`, positional -> `Args::Positional`, scalar -> a
+/// single-element positional list (a scalar binds `$0`).
+fn test_args(args: &TestArgs) -> Args {
+    match args {
+        TestArgs::None => Args::None,
+        TestArgs::Named(named) => Args::Named(named.clone()),
+        TestArgs::Positional(positional) => Args::Positional(positional.clone()),
+        TestArgs::Scalar(scalar) => Args::Positional(vec![scalar.clone()]),
     }
 }
