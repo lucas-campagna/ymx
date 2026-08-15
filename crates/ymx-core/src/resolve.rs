@@ -413,10 +413,18 @@ impl<'a> Resolver<'a> {
     fn call(&self, def: &Definition, args: &Args) -> Result<Value, Diagnostic> {
         let scope = self.scope_for(def, args);
         let body = self.resolve_body(&def.body, &scope, def.file)?;
-        Ok(match body {
-            ResolvedBody::Value(v) => v,
+        // Step 2 (template chain) and step 3 (`from`/shortcut dispatch) of
+        // rule 11 slot in here in tasks 5–7; `scope` is their starting
+        // context (the initial arguments are read from it).
+        Ok(self.output(&body))
+    }
+
+    /// The rule-11 output value for a post-step-1 body.
+    fn output(&self, body: &ResolvedBody) -> Value {
+        match body {
+            ResolvedBody::Value(v) => v.clone(),
             ResolvedBody::Object(set) => set.to_object(),
-        })
+        }
     }
 
     /// The evaluation scope for `def` called with `args`: named/positional
@@ -487,6 +495,7 @@ impl<'a> Resolver<'a> {
         scope: &Scope<'_>,
         file: FileId,
     ) -> Result<ResolvedBody, Diagnostic> {
+        self.reject_modifier_keys(entries, scope)?;
         let mut set = PropertySet::default();
         for entry in entries {
             match &entry.key {
@@ -561,6 +570,10 @@ impl<'a> Resolver<'a> {
                 .collect::<Result<Vec<Value>, _>>()
                 .map(Value::array),
             Node::Object(entries, _) => {
+                self.reject_modifier_keys(entries, scope)?;
+                if entries.iter().any(|e| self.is_from_key(&e.key)) {
+                    return self.resolve_mini(entries, scope, file);
+                }
                 let mut m = IndexMap::with_capacity(entries.len());
                 for entry in entries {
                     m.insert(
@@ -570,6 +583,101 @@ impl<'a> Resolver<'a> {
                 }
                 Ok(Value::Object(m))
             }
+        }
+    }
+
+    /// True when `key` is the `from` keyword (per `opts.from_keyword`).
+    fn is_from_key(&self, key: &crate::parse::Key) -> bool {
+        matches!(key, crate::parse::Key::String(s) if s == &self.opts.from_keyword)
+    }
+
+    /// v1 rejection of the v2 property-key modifiers (rules 17/18): a string
+    /// key carrying a trailing `?` or `$` is `E010` when reached during
+    /// step 1. The v2 strip / `${...}`-wrap / `?:`-default semantics are
+    /// deliberately not implemented.
+    fn reject_modifier_keys(
+        &self,
+        entries: &[crate::parse::Entry],
+        scope: &Scope<'_>,
+    ) -> Result<(), Diagnostic> {
+        for entry in entries {
+            if let crate::parse::Key::String(s) = &entry.key {
+                if s.ends_with('?') || s.ends_with('$') {
+                    return Err(ctx_err(
+                        scope,
+                        E010,
+                        format!("property-key modifier `{s}` is not supported in v1"),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A nested mini-component (rule 11): an object value containing the
+    /// `from` key. Its explicitly written properties — `from` excluded — are
+    /// the arguments to the `from` target, resolved against the parent's
+    /// scope with the same step-1 rules (slots included: `0: $x` binds `$0`).
+    /// The mini's `from` dispatch (rule-11 step 3) runs here: a valid
+    /// regular-component target is called and its return value replaces the
+    /// object; an invalid `from` (non-String, missing target, template) is
+    /// forwarded as a plain property (the rule-8 shortcut joins in task 7).
+    fn resolve_mini(
+        &self,
+        entries: &[crate::parse::Entry],
+        scope: &Scope<'_>,
+        file: FileId,
+    ) -> Result<Value, Diagnostic> {
+        let props = match self.resolve_property_set(entries, scope, file)? {
+            ResolvedBody::Object(props) => props,
+            ResolvedBody::Value(_) => {
+                unreachable!("an object body always resolves to a property set")
+            }
+        };
+        self.dispatch_from(&props, file)
+    }
+
+    /// Rule-11 step-3 `from` dispatch on a resolved property set, shared by
+    /// mini-components now and the top-level pipeline in task 6. Valid
+    /// `from` = a String naming a regular (non-template) component reachable
+    /// from `file`: it is called with the rest of the property set as
+    /// arguments (the `from` key itself is not forwarded). Anything else
+    /// forwards `from` as a plain property of the object.
+    fn dispatch_from(&self, props: &PropertySet, file: FileId) -> Result<Value, Diagnostic> {
+        let Some(from) = props.named.get(&self.opts.from_keyword) else {
+            return Ok(props.to_object());
+        };
+        let Some(target) = (match from {
+            Value::String(s) => Some(s),
+            _ => None,
+        }) else {
+            return Ok(props.to_object());
+        };
+        match resolve_ref(self.project, target, file, self.opts.plain.clone()) {
+            Ok(def) if !def.full_name.starts_with('$') => {
+                let args = self.props_to_args(props);
+                self.call(def, &args)
+            }
+            _ => Ok(props.to_object()),
+        }
+    }
+
+    /// The call-site-style [`Args`] for a resolved property set: the named
+    /// properties in source order (`from` excluded) plus the positional
+    /// slots.
+    fn props_to_args(&self, props: &PropertySet) -> Args {
+        let named: Vec<(String, Value)> = props
+            .named
+            .iter()
+            .filter(|(k, _)| *k != &self.opts.from_keyword)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let positional = props.slots.clone();
+        match (named.is_empty(), positional.is_empty()) {
+            (true, true) => Args::None,
+            (false, true) => Args::Named(named),
+            (true, false) => Args::Positional(positional),
+            (false, false) => Args::Mixed { named, positional },
         }
     }
 
@@ -1650,5 +1758,163 @@ mod tests {
         let d = compile_err(&p, "main", &Args::None);
         assert_eq!(d.code, E003);
         assert!(d.message.contains("$0"), "{}", d.message);
+    }
+
+    // ---- Milestone 1.6 task 4: bottom-up property resolution (rule 11
+    // step 1): nested mini-components, inline calls before templates, and
+    // the v1 E010 rejection of `?`/`$` property-key modifiers ----
+
+    #[test]
+    fn mini_component_dispatches_from_target() {
+        let p = project_with(&[(
+            "main.yml",
+            "comp: \"v=$x\"\nmain:\n  mini: {from: comp, x: 1}\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([(
+                "mini".to_string(),
+                Value::string("v=1")
+            )])),
+            "a property object with `from` becomes a nested call whose written props are the target's args"
+        );
+    }
+
+    #[test]
+    fn mini_component_from_key_is_not_forwarded_as_arg() {
+        let p = project_with(&[(
+            "main.yml",
+            "comp: \"$from\"\nmain:\n  mini: {from: comp, x: 1}\n",
+        )]);
+        let d = compile_err(&p, "main", &Args::None);
+        assert_eq!(
+            d.code, E003,
+            "the callee must not see the `from` key as an argument"
+        );
+    }
+
+    #[test]
+    fn mini_component_slot_usage() {
+        let p = project_with(&[(
+            "main.yml",
+            "comp: \"hi $0\"\nmain:\n  mini: {from: comp, 0: \"$name\"}\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &named(&[("name", Value::string("bob"))])),
+            Value::object(IndexMap::from([(
+                "mini".to_string(),
+                Value::string("hi bob")
+            )])),
+            "`0: $x` binds the slot against the parent's arguments"
+        );
+    }
+
+    #[test]
+    fn mini_component_from_value_is_a_nested_call_site() {
+        let p = project_with(&[(
+            "main.yml",
+            "b: c\nc: \"${1 + x}\"\nmain:\n  mini: {from: \"$b()\", x: 2}\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([("mini".to_string(), Value::int(3))])),
+            "example-2 step-1 semantics: `from: $b()` resolves during step 1"
+        );
+    }
+
+    #[test]
+    fn mini_components_resolve_bottom_up() {
+        let p = project_with(&[(
+            "main.yml",
+            "five: 5\nwrap: \"$inner\"\nmain:\n  mini: {from: wrap, inner: {from: five}}\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([("mini".to_string(), Value::int(5))])),
+            "the inner mini resolves first and its value bubbles up to the outer dispatch"
+        );
+    }
+
+    #[test]
+    fn mini_components_nest_deeply() {
+        let p = project_with(&[(
+            "main.yml",
+            "five: 5\nmid: \"$a\"\ntop: \"$z\"\nmain:\n  mini: {from: top, z: {from: mid, a: {from: five}}}\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([("mini".to_string(), Value::int(5))])),
+            "example-1 shape: innermost `a`'s mini resolves first, then `z`, then the outer mini"
+        );
+    }
+
+    #[test]
+    fn invalid_mini_from_is_forwarded_as_plain_property() {
+        let p = project_with(&[
+            ("main.yml", "main:\n  a: {from: 5, x: 1}\n"),
+            (
+                "t.yml",
+                "$box: 1\ntempl:\n  b: {from: '\\$box'}\nmissing:\n  c: {from: nope}\n",
+            ),
+        ]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([(
+                "a".to_string(),
+                Value::object(IndexMap::from([
+                    ("from".to_string(), Value::int(5)),
+                    ("x".to_string(), Value::int(1)),
+                ]))
+            )])),
+            "a non-String `from` is a plain forwarded property"
+        );
+        assert_eq!(
+            compile_ok(&p, "templ", &Args::None),
+            Value::object(IndexMap::from([(
+                "b".to_string(),
+                Value::object(IndexMap::from([(
+                    "from".to_string(),
+                    Value::string("$box")
+                )]))
+            )])),
+            "a template is not a valid `from` target"
+        );
+        assert_eq!(
+            compile_ok(&p, "missing", &Args::None),
+            Value::object(IndexMap::from([(
+                "c".to_string(),
+                Value::object(IndexMap::from([(
+                    "from".to_string(),
+                    Value::string("nope")
+                )]))
+            )])),
+            "a missing `from` target is forwarded, not an error"
+        );
+    }
+
+    #[test]
+    fn property_key_modifiers_are_e010_in_v1() {
+        for (label, src) in [
+            ("top-level", "main:\n  x?: 1\n"),
+            ("dollar", "main:\n  x$: 1\n"),
+            ("nested", "main:\n  a:\n    b?: 1\n"),
+            (
+                "mini",
+                "comp: 1\nmain:\n  mini:\n    from: comp\n    y$: 2\n",
+            ),
+        ] {
+            let p = project_with(&[("main.yml", src)]);
+            let d = compile_err(&p, "main", &Args::None);
+            assert_eq!(d.code, E010, "{label}");
+        }
+        let p = project_with(&[("main.yml", "main:\n  x: 1\n  ok: 2\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([
+                ("x".to_string(), Value::int(1)),
+                ("ok".to_string(), Value::int(2)),
+            ])),
+            "unmodified keys are unaffected"
+        );
     }
 }
