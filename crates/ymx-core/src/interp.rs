@@ -559,6 +559,32 @@ mod tests {
     }
 
     #[test]
+    fn dollar_last_outside_reduce_is_e003() {
+        use crate::math::V1Engine;
+        let err = resolve(&scan("v: $last", SPAN).unwrap(), &Scope::new(), &V1Engine).unwrap_err();
+        assert_eq!(err.code, E003);
+        assert!(err.message.contains("last"), "{}", err.message);
+        let scope = Scope::with_args(vec![("x".to_string(), Value::int(1))], vec![]);
+        let err = resolve(&scan("$last", SPAN).unwrap(), &scope, &V1Engine).unwrap_err();
+        assert_eq!(err.code, E003);
+    }
+
+    #[test]
+    fn dollar_last_preserves_native_type() {
+        use crate::math::V1Engine;
+        let scope = Scope::reduce_step(vec![], vec![], Value::bool(true));
+        assert_eq!(
+            resolve(&scan("$last", SPAN).unwrap(), &scope, &V1Engine).unwrap(),
+            Value::bool(true)
+        );
+        let scope = Scope::reduce_step(vec![], vec![], Value::float(2.0));
+        assert_eq!(
+            resolve(&scan("v: $last", SPAN).unwrap(), &scope, &V1Engine).unwrap(),
+            Value::string("v: 2.0")
+        );
+    }
+
+    #[test]
     fn plain_text_round_trips() {
         let scope = scope_of(&[]);
         assert_eq!(

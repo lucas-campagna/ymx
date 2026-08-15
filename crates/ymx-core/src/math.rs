@@ -1013,6 +1013,30 @@ mod tests {
         assert_eq!(scope.positional_at(0), None);
     }
 
+    // ---- `last` availability (rules 13/16) ----
+
+    #[test]
+    fn last_outside_reduce_is_e003() {
+        assert_eq!(eval_err("last", &Scope::new()).code, E003);
+        let scope = Scope::with_args(vec![("x".to_string(), Value::int(1))], vec![]);
+        for src in [
+            "last", "last + 1", "1 + last", "-last", "last * 2", "2 / last",
+        ] {
+            assert_eq!(eval_err(src, &scope).code, E003, "{src}");
+        }
+    }
+
+    #[test]
+    fn last_in_reduce_step_is_available() {
+        let scope = Scope::reduce_step(
+            vec![("x".to_string(), Value::int(2))],
+            vec![],
+            Value::int(5),
+        );
+        assert_eq!(eval_ok("last", &scope), Value::int(5));
+        assert_eq!(eval_ok("x + last", &scope), Value::int(7));
+    }
+
     #[test]
     fn positional_at_indexes_positional_args() {
         let scope = Scope::with_args(vec![], vec![Value::int(12), Value::int(34)]);
