@@ -217,7 +217,10 @@ dependencies = [
 name = "ymx-test"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
+ "ymx-config",
  "ymx-core",
+ "ymx-lib",
 ]
 
 [[package]]
