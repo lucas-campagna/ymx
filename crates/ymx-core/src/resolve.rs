@@ -591,8 +591,10 @@ impl<'a> Resolver<'a> {
     /// origin the first derivation defines it). Only the **first** link of
     /// a chain (per the rule-11 step-2 exception) may use array semantics:
     /// an array component output through a non-array-bodied template is a
-    /// rule-12 map ([`Resolver::map_over`]); array-bodied templates are
-    /// `E010` when reached until rules 13/14 land.
+    /// rule-12 map ([`Resolver::map_over`]); an array-bodied template is a
+    /// rule-13 reduce ([`Resolver::reduce_over`]) over a non-array
+    /// component output, while an array-bodied template reached anywhere
+    /// else in a chain is the mixed-shape `E010` (rules 12–14).
     fn chain_link(
         &self,
         def: &Definition,
@@ -606,14 +608,17 @@ impl<'a> Resolver<'a> {
             return Ok(None);
         };
         if matches!(tpl.body, Node::Array(..)) {
-            return Err(self.def_err(
-                tpl,
-                E010,
-                format!(
-                    "array-bodied template `{}` requires rules 12–14 (milestone 1.7)",
-                    tpl.full_name
-                ),
-            ));
+            if chain_initial.is_some() {
+                return Err(self.def_err(
+                    tpl,
+                    E010,
+                    format!(
+                        "array-bodied template `{}` reached outside the first link of a template chain (mixed-shape chain; only the first link may use array semantics)",
+                        tpl.full_name
+                    ),
+                ));
+            }
+            return Ok(Some(self.reduce_over(tpl, result)?));
         }
         if chain_initial.is_none() && matches!(result, Value::Array(_)) {
             return Ok(Some(self.map_over(tpl, result)?));
@@ -643,13 +648,68 @@ impl<'a> Resolver<'a> {
         Ok(Value::Array(out))
     }
 
-    /// One array-template step (a rule-12 map item; a rule-13/14 reduce
-    /// step from milestone 1.7 tasks 2–3): the item node runs through the
-    /// rule-11 three-step flow minus the template chain (an empty chain)
-    /// against a scope built from `args` (and the previous reduce step's
-    /// result as `last`, when given). The step is a recursive op like any
-    /// template step: it checks the depth cap at entry (`E008` at the
-    /// boundary) and consumes one slot (invariant #6).
+    /// Rule 13 (reduce): an array-bodied `$template` over a non-array
+    /// component output iterates the template's own items, the component
+    /// supplying the initial arguments. Each step starts from the initial
+    /// args; the previous step's result overwrites them **only for the
+    /// keys it actually returns, only for the immediately-next step** (a
+    /// non-object result reverts to the initial args entirely — no `$0`
+    /// overwrite); the previous step's result is exposed as `last` from
+    /// step 2 onward. The final result of the whole reduce is the last
+    /// step's result. An empty `$template` is a pass-through (input
+    /// unchanged). An array-bodied template over an array component
+    /// output is rule 14 (milestone 1.7 task 3), still `E010` here.
+    fn reduce_over(&self, tpl: &Definition, result: &Value) -> Result<Value, Diagnostic> {
+        let Node::Array(items, _) = &tpl.body else {
+            unreachable!("rule-13 reduce requires an array-bodied template")
+        };
+        if items.is_empty() {
+            return Ok(result.clone());
+        }
+        match result {
+            Value::Array(_) => Err(self.def_err(
+                tpl,
+                E010,
+                format!(
+                    "array-bodied template `{}` over an array component requires rule 14 (milestone 1.7)",
+                    tpl.full_name
+                ),
+            )),
+            other => self.reduce_run(tpl, items, &item_args(other)),
+        }
+    }
+
+    /// One rule-13 reduce run over the template's items with `initial`
+    /// args. `last` is threaded step to step; the step args for step
+    /// *i+1* derive from step *i*'s result (an object overwrites the
+    /// returned keys over `initial`; anything else leaves `initial`
+    /// unchanged).
+    fn reduce_run(
+        &self,
+        tpl: &Definition,
+        items: &[Node],
+        initial: &Args,
+    ) -> Result<Value, Diagnostic> {
+        let mut step_args = initial.clone();
+        let mut prev: Option<Value> = None;
+        for item in items {
+            let result = self.resolve_array_step(tpl, item, &step_args, prev.as_ref())?;
+            step_args = match &result {
+                Value::Object(m) => overwrite_named_args(initial, m),
+                _ => initial.clone(),
+            };
+            prev = Some(result);
+        }
+        Ok(prev.expect("a non-empty reduce always produces a result"))
+    }
+
+    /// One array-template step (a rule-12 map item or a rule-13/14 reduce
+    /// step): the item node runs through the rule-11 three-step flow minus
+    /// the template chain (an empty chain) against a scope built from
+    /// `args` (and the previous reduce step's result as `last`, when
+    /// given). The step is a recursive op like any template step: it
+    /// checks the depth cap at entry (`E008` at the boundary) and consumes
+    /// one slot (invariant #6).
     fn resolve_array_step(
         &self,
         tpl: &Definition,
@@ -1280,6 +1340,22 @@ fn item_args(item: &Value) -> Args {
         ),
         _ => Args::Positional(vec![item.clone()]),
     }
+}
+
+/// The rule-13/14 overwrite: `initial` with the object result's returned
+/// keys overwritten — keys the result returns that were not in the
+/// initial args are added for that one step; positional args are
+/// untouched. The initial args themselves are never mutated (each step
+/// starts from them afresh).
+fn overwrite_named_args(initial: &Args, result: &IndexMap<String, Value>) -> Args {
+    let mut named = initial.named_vec();
+    for (k, v) in result {
+        match named.iter_mut().find(|(nk, _)| nk == k) {
+            Some(slot) => slot.1 = v.clone(),
+            None => named.push((k.clone(), v.clone())),
+        }
+    }
+    args_from(named, initial.positional_vec())
 }
 
 #[cfg(test)]
@@ -2475,11 +2551,13 @@ mod tests {
     }
 
     #[test]
-    fn array_bodied_template_is_e010() {
+    fn array_bodied_template_over_non_array_component_reduces() {
         let p = project_with(&[("main.yml", "a: 5\n$a:\n  - 1\n  - 2\n")]);
-        let d = compile_err(&p, "a", &Args::None);
-        assert_eq!(d.code, E010);
-        assert!(d.message.contains("rules 12–14"), "{}", d.message);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::int(2),
+            "an array-bodied `$a` over non-array `a` is a single-element reduce; the final result is the last step's"
+        );
     }
 
     #[test]
@@ -2601,6 +2679,126 @@ mod tests {
             Value::array(vec![]),
             "an empty map consumes no slots"
         );
+    }
+
+    // ---- Milestone 1.7 task 2: rule 13 (reduce) ----
+
+    #[test]
+    fn rule13_reduce_prd_example() {
+        let p = project_with(&[(
+            "main.yml",
+            "a:\n  x: 1\n  y: 2\n$a:\n  - x: ${x + 1}\n    y: ${y + 2}\n  - ${x + y}\n  - $x + $y < $last\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::string("1 + 2 < 6"),
+            "PRD rule-13 example: step 2 sees the overwritten x/y, step 3 reverts to the initial with `$last` bound"
+        );
+    }
+
+    #[test]
+    fn rule13_overwrite_lasts_exactly_one_step() {
+        let p = project_with(&[(
+            "main.yml",
+            "a:\n  x: 1\n$a:\n  - x: ${x + 10}\n  - ${x}\n  - out: $x\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::object(IndexMap::from([("out".to_string(), Value::int(1))])),
+            "step 2 sees the overwritten x=11, step 3 reverts to the initial x=1"
+        );
+    }
+
+    #[test]
+    fn rule13_new_keys_from_object_result_last_one_step() {
+        let p = project_with(&[(
+            "main.yml",
+            "a:\n  x: 1\n$a:\n  - z: 9\n  - ${x + z}\n  - out: $x\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::object(IndexMap::from([("out".to_string(), Value::int(1))])),
+            "a key step 1 returns that was not in the initial args is added for step 2 only (`x + z` = 10), then reverts"
+        );
+    }
+
+    #[test]
+    fn rule13_non_object_result_does_not_overwrite_dollar_zero() {
+        let p = project_with(&[("main.yml", "a: 5\n$a:\n  - ${$0 + 1}\n  - ${$0 + last}\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::int(11),
+            "step 1's scalar result becomes `last` but does NOT overwrite `$0`: step 2 is 5 + 6, not 6 + 6"
+        );
+    }
+
+    #[test]
+    fn rule13_math_last_available_from_step_two() {
+        let p = project_with(&[("main.yml", "a:\n  x: 1\n$a:\n  - ${x}\n  - ${x + last}\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::int(2),
+            "math `last` (bare identifier) is bound from step 2 onward"
+        );
+    }
+
+    #[test]
+    fn rule13_last_on_first_step_is_e003() {
+        let p = project_with(&[("main.yml", "a: 1\n$a:\n  - \"$0 + $last\"\n")]);
+        let d = compile_err(&p, "a", &Args::None);
+        assert_eq!(d.code, E003, "string `$last` on the first step");
+        assert!(d.message.contains("last"), "{}", d.message);
+        let p = project_with(&[("main.yml", "a: 1\n$a:\n  - ${last}\n")]);
+        let d = compile_err(&p, "a", &Args::None);
+        assert_eq!(d.code, E003, "math `last` on the first step");
+        assert!(d.message.contains("last"), "{}", d.message);
+    }
+
+    #[test]
+    fn rule13_named_arg_last_shadows_reduce_last() {
+        let p = project_with(&[(
+            "main.yml",
+            "a:\n  x: 1\n  last: 5\n$a:\n  - \"$x + $last\"\n  - ${last}\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::int(5),
+            "a named argument `last` shadows the reduce `last` in both `$last` and math `last`"
+        );
+    }
+
+    #[test]
+    fn rule13_reduce_steps_run_step3_dispatch() {
+        let p = project_with(&[(
+            "main.yml",
+            "a: 1\nb: \"got=$default\"\n$a:\n  - {b: 7}\n  - ${$0}\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::int(1),
+            "an item object with a shortcut-matching property dispatches in step 3, then the scalar result reverts"
+        );
+    }
+
+    #[test]
+    fn rule13_reduce_steps_consume_depth_slots() {
+        let opts = Options {
+            max_depth: 1,
+            ..Options::default()
+        };
+        let p = project_with(&[("main.yml", "a: 5\n$a:\n  - v\n  - w\n")]);
+        assert_eq!(
+            compile_component(&p, "a", &Args::None, &opts).unwrap(),
+            Value::string("w"),
+            "each reduce step is one recursive op; the counter is restored between steps"
+        );
+        let p = project_with(&[("main.yml", "a: 5\n$a:\n  - \"$b()\"\nb: 1\n")]);
+        let d = compile_err_with(&p, "a", &Args::None, &opts);
+        assert_eq!(
+            d.code, E008,
+            "a reduce step plus its inline call exceed the cap"
+        );
+        assert_eq!(d.component.as_deref(), Some("b"));
     }
 
     // ---- Milestone 1.6 task 6: `from` dispatch (rule 6, step 3) ----
