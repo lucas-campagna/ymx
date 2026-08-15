@@ -474,6 +474,15 @@ mod tests {
         let scope = scope_of(&[("arr", arr)]);
         let err = resolve(&scan("[$arr]", SPAN).unwrap(), &scope, &FakeEngine).unwrap_err();
         assert_eq!(err.code, E011);
+
+        use crate::math::V1Engine;
+        let scope = scope_of(&[("obj", obj())]);
+        let err = resolve(&scan("v=${ obj }", SPAN).unwrap(), &scope, &V1Engine).unwrap_err();
+        assert_eq!(err.code, E011, "math Object into surrounding text");
+
+        let scope = scope_of(&[("arr", Value::array(vec![Value::int(1)]))]);
+        let err = resolve(&scan("v=${ arr }", SPAN).unwrap(), &scope, &V1Engine).unwrap_err();
+        assert_eq!(err.code, E011, "math Array into surrounding text");
     }
 
     #[test]
@@ -581,6 +590,54 @@ mod tests {
         assert_eq!(
             resolve(&scan("v: $last", SPAN).unwrap(), &scope, &V1Engine).unwrap(),
             Value::string("v: 2.0")
+        );
+    }
+
+    #[test]
+    fn math_segment_returns_any_value() {
+        use crate::math::V1Engine;
+        let obj = obj();
+        let arr = Value::array(vec![Value::int(1), Value::int(2)]);
+        let scope = Scope::with_args(
+            named(&[
+                ("obj", obj.clone()),
+                ("arr", arr.clone()),
+                ("flag", Value::bool(true)),
+            ]),
+            vec![Value::int(7), obj.clone(), arr.clone()],
+        );
+        assert_eq!(
+            resolve(&scan("${ obj }", SPAN).unwrap(), &scope, &V1Engine).unwrap(),
+            obj,
+            "single math segment returns the Object unchanged"
+        );
+        assert_eq!(
+            resolve(&scan("${ arr }", SPAN).unwrap(), &scope, &V1Engine).unwrap(),
+            arr
+        );
+        assert_eq!(
+            resolve(&scan("${ flag }", SPAN).unwrap(), &scope, &V1Engine).unwrap(),
+            Value::bool(true)
+        );
+        assert_eq!(
+            resolve(&scan("${ $0 }", SPAN).unwrap(), &scope, &V1Engine).unwrap(),
+            Value::int(7),
+            "dollar-zero returns the argument unchanged"
+        );
+        assert_eq!(
+            resolve(&scan("${ $1 }", SPAN).unwrap(), &scope, &V1Engine).unwrap(),
+            obj
+        );
+    }
+
+    #[test]
+    fn math_string_concat_flows_as_string() {
+        use crate::math::V1Engine;
+        let scope = scope_of(&[("x", Value::string("n=")), ("y", Value::int(5))]);
+        assert_eq!(
+            resolve(&scan("${ x + y }", SPAN).unwrap(), &scope, &V1Engine).unwrap(),
+            Value::string("n=5"),
+            "String concat inside math flows into single interpolation as String"
         );
     }
 
