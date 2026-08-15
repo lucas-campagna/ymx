@@ -28,7 +28,7 @@ use std::rc::Rc;
 use indexmap::IndexMap;
 
 use crate::callsite;
-use crate::diag::{Diagnostic, FileId, Span, E002, E005, E009, E010};
+use crate::diag::{Diagnostic, FileId, Span, E002, E005, E006, E009, E010};
 use crate::interp;
 use crate::ir::{Args, Value};
 use crate::math::{FallbackHook, Scope, V1Engine};
@@ -440,12 +440,14 @@ impl<'a> Resolver<'a> {
         // Step 2: the template chain (rule 5).
         let chained = self.chain_link(def, initial, &output, chain_initial)?;
         // Step 3: `from` / shortcut dispatch (rules 6/8) on the post-chain
-        // property set; the rule-8 shortcut fires in task 7.
+        // property set.
         match chained {
-            Some(result) => self.step3(&result, def.file),
+            Some(result) => self.step3(&result, def.file, Some(&def.full_name)),
             None => match &body {
-                ResolvedBody::Object(props) => self.dispatch_from(props, def.file),
-                ResolvedBody::Value(v) => self.step3(v, def.file),
+                ResolvedBody::Object(props) => {
+                    self.dispatch_from(props, def.file, Some(&def.full_name))
+                }
+                ResolvedBody::Value(v) => self.step3(v, def.file, Some(&def.full_name)),
             },
         }
     }
@@ -454,11 +456,16 @@ impl<'a> Resolver<'a> {
     /// post-chain output of a normal component call: an object whose `from`
     /// names a valid regular component dispatches — the target is called
     /// with the rest of the property set as arguments (the `from` key
-    /// itself is not forwarded) and its return value replaces the output;
+    /// itself is not forwarded, and the rule-8 shortcut is suppressed);
     /// any other object (no `from`, non-String `from`, missing target,
-    /// template target) is forwarded unchanged — the rule-8 shortcut then
-    /// fires on it (task 7). Non-object outputs pass through.
-    fn step3(&self, value: &Value, file: FileId) -> Result<Value, Diagnostic> {
+    /// template target) runs the rule-8 shortcut on its properties. Non-
+    /// object outputs pass through.
+    fn step3(
+        &self,
+        value: &Value,
+        file: FileId,
+        component: Option<&str>,
+    ) -> Result<Value, Diagnostic> {
         let Value::Object(m) = value else {
             return Ok(value.clone());
         };
@@ -471,7 +478,68 @@ impl<'a> Resolver<'a> {
                     .collect();
                 self.call(def, &args_from(named, Vec::new()), None)
             }
-            None => Ok(value.clone()),
+            None => match self.shortcut(m, &[], file, component)? {
+                Some(result) => Ok(result),
+                None => Ok(value.clone()),
+            },
+        }
+    }
+
+    /// Rule-8 shortcut (step 3, sugar for `from`; mutually exclusive): a
+    /// property whose name resolves to a regular component — global +
+    /// `plain` promotion, file-scoped `_`-prefixed names included;
+    /// templates never match — calls that component with the property's
+    /// value bound to `opts.default_keyword` (e.g. `default`) and the
+    /// remaining properties as arguments (integer-keyed slots become
+    /// positional args). More than one match is the ambiguous-shortcut
+    /// `E006`; no match leaves the object untouched. An invalid `from` key
+    /// does not match — it forwards as an ordinary argument alongside the
+    /// rest.
+    fn shortcut(
+        &self,
+        named: &IndexMap<String, Value>,
+        slots: &[Value],
+        file: FileId,
+        component: Option<&str>,
+    ) -> Result<Option<Value>, Diagnostic> {
+        let mut matches: Vec<(&str, &'a Definition, &Value)> = named
+            .iter()
+            .filter(|(k, _)| *k != &self.opts.from_keyword)
+            .filter_map(|(k, v)| {
+                match resolve_ref(self.project, k, file, self.opts.plain.clone()) {
+                    Ok(def) if !def.full_name.starts_with('$') => Some((k.as_str(), def, v)),
+                    _ => None,
+                }
+            })
+            .collect();
+        match matches.len() {
+            0 => Ok(None),
+            1 => {
+                let (key, def, value) = matches.pop().unwrap();
+                let mut args = Vec::with_capacity(named.len() + 1);
+                args.push((self.opts.default_keyword.clone(), value.clone()));
+                for (k, v) in named {
+                    if k != key {
+                        args.push((k.clone(), v.clone()));
+                    }
+                }
+                let call_args = args_from(args, slots.to_vec());
+                Ok(Some(self.call(def, &call_args, None)?))
+            }
+            _ => {
+                let names: Vec<&str> = matches.iter().map(|(k, _, _)| *k).collect();
+                Err(Diagnostic {
+                    file: Some(self.project.files[file.0 as usize].clone()),
+                    line: 1,
+                    col: 1,
+                    component: component.map(str::to_string),
+                    code: E006,
+                    message: format!(
+                        "ambiguous shortcut: properties {} all match components",
+                        names.join(", ")
+                    ),
+                })
+            }
         }
     }
 
@@ -801,21 +869,30 @@ impl<'a> Resolver<'a> {
                 unreachable!("an object body always resolves to a property set")
             }
         };
-        self.dispatch_from(&props, file)
+        self.dispatch_from(&props, file, scope.component.as_deref())
     }
 
-    /// Rule-11 step-3 `from` dispatch on a resolved property set, shared by
-    /// mini-components and the top-level no-chain pipeline: a valid `from`
-    /// target is called with the rest of the property set (slots included)
-    /// as arguments; an invalid `from` forwards the object unchanged (the
-    /// rule-8 shortcut then fires on it, task 7).
-    fn dispatch_from(&self, props: &PropertySet, file: FileId) -> Result<Value, Diagnostic> {
+    /// Rule-11 step-3 `from` / shortcut dispatch on a resolved property set,
+    /// shared by mini-components and the top-level no-chain pipeline: a
+    /// valid `from` target is called with the rest of the property set
+    /// (slots included) as arguments; an invalid `from` (or none) forwards
+    /// the object unchanged unless the rule-8 shortcut matches a property,
+    /// in which case that call replaces the object.
+    fn dispatch_from(
+        &self,
+        props: &PropertySet,
+        file: FileId,
+        component: Option<&str>,
+    ) -> Result<Value, Diagnostic> {
         match self.resolve_from_target(&props.named, file)? {
             Some(def) => {
                 let args = self.props_to_args(props);
                 self.call(def, &args, None)
             }
-            None => Ok(props.to_object()),
+            None => match self.shortcut(&props.named, &props.slots, file, component)? {
+                Some(result) => Ok(result),
+                None => Ok(props.to_object()),
+            },
         }
     }
 
@@ -2392,6 +2469,140 @@ mod tests {
             compile_ok(&p, "main", &Args::None),
             Value::int(5),
             "a file-scoped component is a valid `from` target within its file"
+        );
+    }
+
+    // ---- Milestone 1.6 task 7: rule-8 shortcut (step 3, sugar for `from`) ----
+
+    #[test]
+    fn shortcut_fires() {
+        let p = project_with(&[("main.yml", "a:\n  b: 1\nb: \"${default + 1}\"\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::int(2),
+            "PRD example 1: the matched property's value is passed as `$default`"
+        );
+    }
+
+    #[test]
+    fn shortcut_suppressed_by_valid_from() {
+        let p = project_with(&[(
+            "main.yml",
+            "a:\n  from: c\n  b: 1\nb: \"${default + 1}\"\nc: \"${b + 2}\"\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::int(3),
+            "PRD example 2: a valid `from` dispatches and the shortcut does not fire"
+        );
+    }
+
+    #[test]
+    fn invalid_from_forwards_and_shortcut_fires() {
+        let p = project_with(&[(
+            "main.yml",
+            "a:\n  from: nope\n  b: 1\nb: \"$default-$from\"\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::string("1-nope"),
+            "an invalid `from` is forwarded as an ordinary argument alongside the shortcut call"
+        );
+    }
+
+    #[test]
+    fn ambiguous_shortcut_is_e006() {
+        let p = project_with(&[("main.yml", "a:\n  b: 1\n  c: 2\nb: 5\nc: 6\n")]);
+        let d = compile_err(&p, "a", &Args::None);
+        assert_eq!(d.code, E006);
+        assert!(
+            d.message.contains("b") && d.message.contains("c"),
+            "{}",
+            d.message
+        );
+    }
+
+    #[test]
+    fn template_names_do_not_match_shortcut() {
+        let p = project_with(&[("main.yml", "$box: 5\na:\n  \"$box\": 1\n  x: 2\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::object(IndexMap::from([
+                ("$box".to_string(), Value::int(1)),
+                ("x".to_string(), Value::int(2)),
+            ])),
+            "a template name never matches the shortcut"
+        );
+    }
+
+    #[test]
+    fn nested_mini_shortcut() {
+        let p = project_with(&[(
+            "main.yml",
+            "b: \"got=$default\"\nmain:\n  mini: {from: nope, b: 7}\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([(
+                "mini".to_string(),
+                Value::string("got=7")
+            )])),
+            "the shortcut applies inside a mini whose `from` is invalid"
+        );
+    }
+
+    #[test]
+    fn shortcut_passes_slots() {
+        let p = project_with(&[(
+            "main.yml",
+            "a:\n  b: 1\n  0: x\n  1: y\nb: \"$default-$0-$1\"\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::string("1-x-y"),
+            "integer-keyed properties pass to the shortcut target as positional args"
+        );
+    }
+
+    #[test]
+    fn shortcut_plain_promotion() {
+        let p = project_with(&[
+            ("subA/a.yml", "a:\n  b: 1\n"),
+            ("subB/b.yml", "b: \"got=$default\"\n"),
+        ]);
+        let plain = Options {
+            plain: PlainMode::All,
+            ..Options::default()
+        };
+        assert_eq!(
+            compile_component(&p, "subA.a", &Args::None, &plain).unwrap(),
+            Value::string("got=1"),
+            "`plain` promotion lets the shortcut match a sub-namespace component"
+        );
+        assert_eq!(
+            compile_ok(&p, "subA.a", &Args::None),
+            Value::object(IndexMap::from([("b".to_string(), Value::int(1))])),
+            "without `plain` the property is not a match"
+        );
+    }
+
+    #[test]
+    fn shortcut_file_scoped() {
+        let p = project_with(&[("main.yml", "_b: \"got=$default\"\na:\n  _b: 1\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::string("got=1"),
+            "a file-scoped `_`-prefixed component matches the shortcut within its file"
+        );
+    }
+
+    #[test]
+    fn shortcut_on_post_chain_object() {
+        let p = project_with(&[("main.yml", "b: \"got=$default\"\na:\n  x: 1\n$a:\n  b: 2\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::string("got=2"),
+            "the shortcut runs against the post-template property set"
         );
     }
 }
