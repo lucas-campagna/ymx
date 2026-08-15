@@ -26,6 +26,7 @@ use yaml_rust2::parser::{Event, MarkedEventReceiver, Parser};
 use yaml_rust2::scanner::{Marker, ScanError, TScalarStyle};
 
 use crate::diag::{Diagnostic, Span, E001};
+use crate::ir::Value;
 
 /// A typed YAML mapping key. Complex keys (mappings/sequences) are rejected at
 /// parse time, so a key is always one of the scalar variants. The
@@ -385,6 +386,49 @@ fn parse_f64(v: &str) -> Option<f64> {
     }
 }
 
+/// Drop the span, converting a spanned [`Node`] into the span-less
+/// [`crate::ir::Value`] IR. Used for storing raw meta-key (`_ymx` / `_test`)
+/// values on the [`Project`](crate::project::Project): downstream crates
+/// (`ymx-config` / `ymx-test`) consume the value-level form, not the spanned
+/// one. Object keys are stringified per the rule-4 convention (an integer key
+/// `0` becomes the string `"0"`); because `Value::Object` is an `IndexMap`, a
+/// duplicate stringified key keeps insertion order and the last value wins —
+/// matching the value-level view meta consumers need.
+pub fn node_to_value(node: &Node) -> Value {
+    match node {
+        Node::Null(_) => Value::Null,
+        Node::Bool(b, _) => Value::Bool(*b),
+        Node::Int(i, _) => Value::Int(*i),
+        Node::Float(f, _) => Value::Float(*f),
+        Node::String(s, _) => Value::String(s.clone()),
+        Node::Array(items, _) => Value::Array(items.iter().map(node_to_value).collect()),
+        Node::Object(entries, _) => {
+            let mut m = indexmap::IndexMap::with_capacity(entries.len());
+            for e in entries {
+                m.insert(key_to_string(&e.key), node_to_value(&e.value));
+            }
+            Value::Object(m)
+        }
+    }
+}
+
+/// Stringify a mapping [`Key`] for [`Value::Object`] (rule-4 convention).
+fn key_to_string(key: &Key) -> String {
+    match key {
+        Key::Null => "null".to_string(),
+        Key::Bool(b) => {
+            if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
+        Key::Int(i) => i.to_string(),
+        Key::Float(f) => crate::ir::render_f64(*f),
+        Key::String(s) => s.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,6 +634,65 @@ mod tests {
         match &node {
             Node::Array(items, _) => assert_eq!(items.len(), 2),
             _ => panic!("array"),
+        }
+    }
+
+    #[test]
+    fn node_to_value_drops_spans_and_preserves_order() {
+        let node = parse("a: 1\nb: true\nc:\n  - 1\n  - 2\nd: hi\n").unwrap();
+        let v = node_to_value(&node);
+        match v {
+            Value::Object(m) => {
+                assert_eq!(
+                    m.keys().collect::<Vec<_>>(),
+                    &["a", "b", "c", "d"],
+                    "insertion order preserved"
+                );
+                assert_eq!(m.get("a"), Some(&Value::Int(1)));
+                assert_eq!(m.get("b"), Some(&Value::Bool(true)));
+                match m.get("c") {
+                    Some(Value::Array(items)) => {
+                        assert_eq!(items, &vec![Value::Int(1), Value::Int(2)])
+                    }
+                    _ => panic!("c is array"),
+                }
+                assert_eq!(m.get("d"), Some(&Value::String("hi".to_string())));
+            }
+            _ => panic!("object"),
+        }
+    }
+
+    #[test]
+    fn node_to_value_scalar_round_trip() {
+        assert_eq!(
+            node_to_value(&Node::Null(Span { line: 9, col: 9 })),
+            Value::Null
+        );
+        assert_eq!(
+            node_to_value(&Node::Bool(true, Span { line: 9, col: 9 })),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            node_to_value(&Node::Int(42, Span { line: 9, col: 9 })),
+            Value::Int(42)
+        );
+        assert_eq!(
+            node_to_value(&Node::Float(1.25, Span { line: 9, col: 9 })),
+            Value::Float(1.25)
+        );
+        assert_eq!(
+            node_to_value(&Node::String("x".into(), Span { line: 9, col: 9 })),
+            Value::String("x".into())
+        );
+    }
+
+    #[test]
+    fn node_to_value_integer_key_stringifies() {
+        // Rule-4 convention: integer key 0 -> string "0".
+        let node = parse("0: a\n").unwrap();
+        match node_to_value(&node) {
+            Value::Object(m) => assert_eq!(m.get("0"), Some(&Value::String("a".into()))),
+            _ => panic!("object"),
         }
     }
 }

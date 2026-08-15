@@ -26,7 +26,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::diag::{Diagnostic, FileId, Span, E004, E007, E015};
-use crate::parse::Node;
+use crate::ir::Value;
+use crate::parse::{node_to_value, Entry, Key, Node};
 
 /// The two reserved meta keys (bare form, consumed by the engine).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -372,6 +373,131 @@ impl FileScopeStore {
     }
 }
 
+/// A bare meta key (`_ymx` / `_test`) found at a document's top level, paired
+/// with its raw parsed value (span-less [`Value`]) and defining [`FileId`].
+///
+/// Load-time meta extraction is *uninterpreted* (invariant #4): the value is
+/// stored verbatim, whether or not it is a well-formed front-matter mapping or
+/// `_test` block. Validation is `ymx-config`'s / `ymx-test`'s job (milestones
+/// 1.4 / 1.9), applied to the entry file's `_ymx` and to `_test` blocks of
+/// readable carriers only.
+#[derive(Debug, Clone)]
+pub struct MetaValue {
+    pub key: MetaKey,
+    pub file: FileId,
+    pub value: Value,
+}
+
+/// Outcome of classifying the top-level entries of one document for the I/O
+/// layer (task 4). Regular components/templates are returned as
+/// [`Definition`]s for the caller to register; bare meta keys become
+/// [`MetaValue`]s for the caller to append to
+/// [`Project::raw_meta_ymx`](crate::project::Project::raw_meta_ymx) /
+/// [`raw_meta_test`](crate::project::Project::raw_meta_test); rejected names
+/// (`E007` builtin, `E015` meta-reserved) become yield diagnostics once the
+/// caller attaches the file path.
+#[derive(Debug, Default)]
+pub struct DocExtract {
+    /// Regular non-`_`-prefixed definitions to register in a namespace store.
+    pub defs: Vec<Definition>,
+    /// `_`-prefixed (file-scoped) definitions to register in a file-scope
+    /// store (same [`FileId`] for all entries here).
+    pub file_scoped_defs: Vec<Definition>,
+    /// Bare `_ymx` meta values (at most one per document).
+    pub meta_ymx: Option<MetaValue>,
+    /// Bare `_test` meta values (at most one per document).
+    pub meta_test: Option<MetaValue>,
+    /// Classifications rejected at load time (`E007` / `E015`), awaiting the
+    /// resolved file path to be rendered. The I/O layer folds these into the
+    /// `Vec<Diagnostic>` returned by `load_project`.
+    pub rejections: Vec<DefClass>,
+}
+
+/// Extract the per-document namespace + meta contributions from a parsed tree.
+///
+/// `file` is the [`FileId`] of the hosting document; `body` is its parsed
+/// [`Node`] (typically a `Node::Object`, but a scalar/array top level — e.g. an
+/// empty document parsed to `Node::Null` — yields no definitions and no
+/// meta). The returned [`DocExtract`] is pure data; the I/O layer drives the
+/// actual registration (calling [`NamespaceStore::register`] /
+/// [`FileScopeStore::register`], which may surface `E004` duplicates) and the
+/// `Vec<Diagnostic>` collection (attaching the host-file path to each
+/// [`DefClass`] rejection).
+///
+/// Behavior:
+/// * only a `Node::Object` contributes entries; any other top-level shape
+///   contributes nothing;
+/// * a non-`String` top-level key (e.g. an integer) is classified as
+///   [`DefClass::InvalidName`] for the I/O layer to render — non-string keys
+///   are not legal component/template names, and they are never meta keys;
+/// * the bare `_ymx` / `_test` entries are consumed (never registered as
+///   components); a document carrying both is fine;
+/// * the value stored on a [`MetaValue`] is the span-less `Value` form (via
+///   [`node_to_value`]), unvalidated — invariant #4;
+/// * leading-`$` variants of `_ymx`/`_test` and builtin effective ids route to
+///   `rejections` (they are **not** consumed as meta and **not** registered);
+/// * a duplicate bare `_ymx` (or `_test`) in the same document is treated as a
+///   second copy of the meta key and is not separately stored (the first wins);
+///   the loader's namespace `E004` check does not apply to consumed meta keys
+///   because they are never registered. The PRD does not define this case
+///   further; we keep the first occurrence (rename one of them to register a
+///   real component instead).
+pub fn extract_document(file: FileId, body: &Node) -> DocExtract {
+    let mut out = DocExtract::default();
+    let entries = match body {
+        Node::Object(entries, _) => entries,
+        _ => return out,
+    };
+    for Entry {
+        key,
+        key_span,
+        value,
+    } in entries
+    {
+        let name = match key {
+            Key::String(s) => s.as_str(),
+            _ => {
+                out.rejections.push(DefClass::InvalidName(*key_span));
+                continue;
+            }
+        };
+        match classify(name, *key_span) {
+            DefClass::Component(meta) => {
+                let def = Definition {
+                    file,
+                    full_name: meta.full_name.clone(),
+                    span: meta.span,
+                    body: value.clone(),
+                };
+                if meta.file_scoped {
+                    out.file_scoped_defs.push(def);
+                } else {
+                    out.defs.push(def);
+                }
+            }
+            DefClass::MetaBare(kind, _) => {
+                let mv = MetaValue {
+                    key: kind,
+                    file,
+                    value: node_to_value(value),
+                };
+                match kind {
+                    MetaKey::Ymx if out.meta_ymx.is_none() => out.meta_ymx = Some(mv),
+                    MetaKey::Test if out.meta_test.is_none() => out.meta_test = Some(mv),
+                    MetaKey::Ymx | MetaKey::Test => {
+                        // A duplicate bare meta key in the same document: the
+                        // first wins; the second is silently dropped (it is
+                        // not a component, and meta keys are not subject to
+                        // the namespace `E004` check).
+                    }
+                }
+            }
+            reject => out.rejections.push(reject),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -665,5 +791,215 @@ mod tests {
             "file-scoped _a is excluded from the namespace"
         );
         let _ = E001; // ensure the unused-import-style reference is exercised.
+    }
+
+    // ---- Task 3: meta-key handling ----
+
+    fn extract(file: u32, src: &str) -> DocExtract {
+        extract_document(
+            FileId(file),
+            &crate::parse::parse_document(src).expect("parse"),
+        )
+    }
+
+    fn object_value(entries: &[(&str, Value)]) -> Value {
+        let mut m = indexmap::IndexMap::new();
+        for (k, v) in entries {
+            m.insert((*k).to_string(), v.clone());
+        }
+        Value::Object(m)
+    }
+
+    #[test]
+    fn bare_ymx_is_consumed_not_registered() {
+        let mut ex = extract(0, "_ymx:\n  max_depth: 100\nmain: 1\n");
+        assert_eq!(ex.defs.len(), 1, "main is the only component");
+        assert_eq!(ex.defs[0].full_name, "main");
+        assert!(ex.file_scoped_defs.is_empty());
+        assert!(ex.meta_ymx.is_some(), "_ymx consumed as meta");
+        assert!(ex.meta_test.is_none());
+        assert!(
+            ex.rejections.is_empty(),
+            "bare _ymx is not an error (invariant #4)"
+        );
+        let mv = ex.meta_ymx.take().unwrap();
+        assert_eq!(mv.file, FileId(0));
+        assert_eq!(mv.value, object_value(&[("max_depth", Value::Int(100))]));
+    }
+
+    #[test]
+    fn bare_test_is_consumed_not_registered() {
+        let mut ex = extract(0, "_test:\n  main: 42\nmain: 1\n");
+        assert_eq!(ex.defs.len(), 1, "only main is a component");
+        assert!(ex.meta_ymx.is_none());
+        assert!(ex.meta_test.is_some(), "_test consumed as meta");
+        assert!(ex.rejections.is_empty());
+        let mv = ex.meta_test.take().unwrap();
+        assert_eq!(mv.file, FileId(0));
+        assert_eq!(mv.value, object_value(&[("main", Value::Int(42))]));
+    }
+
+    #[test]
+    fn both_metas_in_same_file() {
+        let mut ex = extract(0, "_ymx:\n  pretty: true\n_test:\n  main: 1\nmain: 5\n");
+        assert_eq!(ex.defs.len(), 1, "main still registers normally");
+        assert!(ex.meta_ymx.is_some());
+        assert!(ex.meta_test.is_some());
+        assert!(ex.rejections.is_empty());
+        let ymx = ex.meta_ymx.take().unwrap();
+        assert_eq!(ymx.value, object_value(&[("pretty", Value::Bool(true))]));
+        let test = ex.meta_test.take().unwrap();
+        assert_eq!(test.value, object_value(&[("main", Value::Int(1))]));
+    }
+
+    #[test]
+    fn ymx_malformed_body_stored_verbatim_without_error() {
+        // Invariant #4: a non-entry _ymx is never validated, and even an entry
+        // _ymx is only validated by ymx-config (1.4). At load time we store the
+        // raw value regardless of shape. Here `_ymx` is a mapping with an
+        // unknown field + a wrong-typed field.
+        let mut ex = extract(
+            0,
+            "_ymx:\n  unknown_field: hi\n  max_depth: not-a-number\nmain: 1\n",
+        );
+        assert!(ex.rejections.is_empty(), "no validation at load time");
+        let mv = ex.meta_ymx.take().unwrap();
+        assert_eq!(
+            mv.value,
+            object_value(&[
+                ("unknown_field", Value::String("hi".into())),
+                ("max_depth", Value::String("not-a-number".into())),
+            ])
+        );
+    }
+
+    #[test]
+    fn ymx_non_mapping_value_stored_verbatim_without_error() {
+        // `_ymx: 5` — a scalar meta value. Stored verbatim; not an error.
+        let mut ex = extract(0, "_ymx: 5\nmain: 1\n");
+        assert!(ex.rejections.is_empty());
+        let mv = ex.meta_ymx.take().unwrap();
+        assert_eq!(mv.value, Value::Int(5));
+    }
+
+    #[test]
+    fn ymx_null_value_stored_verbatim() {
+        // `_ymx:` (null) — a null meta value. Stored verbatim.
+        let mut ex = extract(0, "_ymx:\nmain: 1\n");
+        assert!(ex.rejections.is_empty());
+        let mv = ex.meta_ymx.take().unwrap();
+        assert_eq!(mv.value, Value::Null);
+    }
+
+    #[test]
+    fn ymx_array_value_stored_verbatim() {
+        let mut ex = extract(0, "_ymx:\n  - 1\n  - 2\nmain: 1\n");
+        assert!(ex.rejections.is_empty());
+        let mv = ex.meta_ymx.take().unwrap();
+        assert_eq!(mv.value, Value::Array(vec![Value::Int(1), Value::Int(2)]));
+    }
+
+    #[test]
+    fn dollar_ymx_variant_is_e015_not_consumed() {
+        // `$_ymx` effective id `_ymx`, 1 leading $ -> E015. NOT stored as meta.
+        let ex = extract(0, "$_ymx: 1\nmain: 2\n");
+        assert_eq!(ex.defs.len(), 1, "main registers normally");
+        assert!(ex.meta_ymx.is_none(), "$_ymx is NOT consumed as meta");
+        assert_eq!(ex.rejections.len(), 1);
+        let diag = ex
+            .rejections
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_diagnostic(PathBuf::from("f.yml"))
+            .unwrap();
+        assert_eq!(diag.code, E015);
+        assert_eq!(diag.component.as_deref(), Some("$_ymx"));
+    }
+
+    #[test]
+    fn dollar_dollar_ymx_and_dollar_test_variants_are_e015() {
+        for name in ["$_test", "$$_ymx", "$$_test", "$$$_ymx", "$$$_test"] {
+            let body = format!("{name}: 1\nmain: 2\n");
+            let ex = extract(0, &body);
+            assert!(ex.meta_ymx.is_none(), "{name} not consumed as _ymx");
+            assert!(ex.meta_test.is_none(), "{name} not consumed as _test");
+            assert_eq!(ex.rejections.len(), 1, "{name} should be E015");
+            let class = &ex.rejections[0];
+            assert!(match_meta_reserved(class), "{name} should be MetaReserved");
+        }
+    }
+
+    #[test]
+    fn dollar_dollar_test_is_regular_component_under_reading_a() {
+        // `$$test` strips to effective id `test` (underscore dropped) -> a
+        // regular component, NOT E015 and NOT meta. Pinned reading A.
+        let ex = extract(0, "$$test: 1\nmain: 2\n");
+        assert_eq!(ex.defs.len(), 2, "$$test registers as a component");
+        let names: Vec<&str> = ex.defs.iter().map(|d| d.full_name.as_str()).collect();
+        assert!(names.contains(&"$$test"));
+        assert!(names.contains(&"main"));
+        assert!(ex.meta_test.is_none());
+        assert!(ex.meta_ymx.is_none());
+        assert!(ex.rejections.is_empty());
+    }
+
+    #[test]
+    fn non_meta_object_keys_register_alongside_meta() {
+        // Siblings still register with their `$`-prefixes preserved; templates
+        // and file-scoped defs coexist with meta keys.
+        let ex = extract(0, "_ymx:\n  pretty: true\na: 1\n$box: 2\n_b: 3\n");
+        assert_eq!(ex.defs.len(), 2, "a + $box in namespace");
+        assert_eq!(ex.file_scoped_defs.len(), 1, "_b file-scoped");
+        let names: Vec<&str> = ex.defs.iter().map(|d| d.full_name.as_str()).collect();
+        assert!(names.contains(&"a"));
+        assert!(names.contains(&"$box"));
+        assert_eq!(ex.file_scoped_defs[0].full_name, "_b");
+        assert!(ex.meta_ymx.is_some());
+    }
+
+    #[test]
+    fn non_string_top_level_key_is_invalid_name() {
+        // An integer top-level key is not a legal component name; it is also
+        // never a meta key. The I/O layer renders it as a diagnostic.
+        let ex = extract(0, "0: a\nmain: 1\n");
+        assert_eq!(ex.defs.len(), 1, "only main registers");
+        assert_eq!(ex.rejections.len(), 1);
+        assert!(matches!(ex.rejections[0], DefClass::InvalidName(_)));
+    }
+
+    #[test]
+    fn empty_document_yields_no_meta_and_no_defs() {
+        let ex = extract(0, "");
+        assert!(ex.defs.is_empty());
+        assert!(ex.file_scoped_defs.is_empty());
+        assert!(ex.meta_ymx.is_none());
+        assert!(ex.meta_test.is_none());
+        assert!(ex.rejections.is_empty());
+    }
+
+    #[test]
+    fn non_object_top_level_yields_nothing() {
+        let ex = extract(0, "- 1\n- 2\n");
+        assert!(ex.meta_ymx.is_none());
+        assert!(ex.meta_test.is_none());
+        assert!(ex.defs.is_empty());
+        assert!(ex.rejections.is_empty());
+    }
+
+    #[test]
+    fn duplicate_bare_meta_in_same_document_first_wins() {
+        // The PRD does not define a duplicate bare meta key; we keep the first
+        // and drop the second silently (not E004 — meta keys are never
+        // registered in the namespace store). One meta value per kind max.
+        let mut ex = extract(
+            0,
+            "_ymx:\n  pretty: true\n_ymx:\n  pretty: false\nmain: 1\n",
+        );
+        assert!(ex.meta_ymx.is_some());
+        let mv = ex.meta_ymx.take().unwrap();
+        assert_eq!(mv.value, object_value(&[("pretty", Value::Bool(true))]));
+        assert!(ex.rejections.is_empty());
+        assert_eq!(ex.defs.len(), 1, "main registers normally");
     }
 }

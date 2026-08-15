@@ -5,6 +5,8 @@
 
 use std::path::PathBuf;
 
+use crate::diag::FileId;
+use crate::ir::Value;
 use crate::namespace::{FileScopeStore, NamespaceStore};
 
 /// Output format selection for a compiled entry.
@@ -71,8 +73,14 @@ impl Default for Options {
 /// document). [`namespaces`] holds the merged global + sub-namespaces
 /// (non-`_`-prefixed definitions). [`file_scoped`] holds `_`-prefixed
 /// definitions per document (excluded from the namespace merge; cross-document
-/// references raise `E005` at the call site in milestone 1.6). The raw parsed
-/// reserved meta-key (`_ymx`, `_test`) values arrive in task 3.
+/// references raise `E005` at the call site in milestone 1.6).
+/// [`raw_meta_ymx`](Project::raw_meta_ymx) /
+/// [`raw_meta_test`](Project::raw_meta_test) hold the parsed-but-uninterpreted
+/// values of the reserved meta keys, keyed by [`FileId`] (lexicographic load
+/// order). `ymx-core` only recognizes the two names, strips them from the
+/// namespace, and stores their raw values; `ymx-config` interprets `_ymx`
+/// (milestone 1.4) and `ymx-test` interprets `_test` (milestone 1.9). Per
+/// invariant #4, non-entry `_ymx` blocks are never validated at load time.
 ///
 /// [`files`]: Project::files
 /// [`namespaces`]: Project::namespaces
@@ -86,12 +94,28 @@ pub struct Project {
     pub namespaces: NamespaceStore,
     /// `_`-prefixed (file-scoped) definitions, per [`FileId`].
     pub file_scoped: FileScopeStore,
+    /// Raw parsed values of the `_ymx` meta key, one per document that
+    /// declared it, in lexicographic load order. Uninterpreted at this layer.
+    pub raw_meta_ymx: Vec<(FileId, Value)>,
+    /// Raw parsed values of the `_test` meta key, one per document that
+    /// declared it, in lexicographic load order. Uninterpreted at this layer.
+    pub raw_meta_test: Vec<(FileId, Value)>,
 }
 
 impl Project {
     /// Empty project (no files, no definitions).
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// `true` iff no document declared `_ymx`.
+    pub fn has_no_ymx(&self) -> bool {
+        self.raw_meta_ymx.is_empty()
+    }
+
+    /// `true` iff no document declared `_test`.
+    pub fn has_no_test(&self) -> bool {
+        self.raw_meta_test.is_empty()
     }
 }
 
@@ -140,5 +164,14 @@ mod tests {
     fn project_new_is_default() {
         let p = Project::new();
         assert!(p.files.is_empty());
+    }
+
+    #[test]
+    fn project_default_has_no_raw_meta() {
+        let p = Project::default();
+        assert!(p.has_no_ymx());
+        assert!(p.has_no_test());
+        assert!(p.raw_meta_ymx.is_empty());
+        assert!(p.raw_meta_test.is_empty());
     }
 }
