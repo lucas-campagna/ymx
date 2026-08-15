@@ -12,7 +12,7 @@
 //! arrays into text are `E011`).
 
 use crate::diag::{Diagnostic, Span, E003, E010, E011};
-use crate::ir::{render_value, Value};
+use crate::ir::{render_value, NoStringRender, Value};
 use crate::math::{MathEngine, Scope};
 
 /// One piece of an interpolated string.
@@ -41,10 +41,7 @@ pub fn scan(src: &str, base: Span) -> Result<Vec<Segment>, Diagnostic> {
     let mut segments: Vec<Segment> = Vec::new();
     let mut text = String::new();
     let mut chars = src.char_indices().peekable();
-    loop {
-        let Some((idx, c)) = chars.next() else {
-            break;
-        };
+    while let Some((idx, c)) = chars.next() {
         match c {
             '\\' => {
                 let esc_span = span_at(base, src, idx);
@@ -225,7 +222,7 @@ fn resolve_arg(name: &str, span: Span, scope: &Scope) -> Result<Value, Diagnosti
 fn render_into_text(v: &Value, scope: &Scope, span: Span) -> Result<String, Diagnostic> {
     match render_value(v) {
         Ok(s) => Ok(s),
-        Err(()) => Err(ctx_err(
+        Err(NoStringRender) => Err(ctx_err(
             scope,
             span,
             E011,
@@ -506,6 +503,42 @@ mod tests {
         assert_eq!(
             resolve(&scan("v=${8}!", SPAN).unwrap(), &scope, &FakeEngine).unwrap(),
             Value::string("v=8!")
+        );
+    }
+
+    #[test]
+    fn math_segment_evaluates_with_v1_engine() {
+        use crate::math::V1Engine;
+        let scope = Scope::with_args(vec![], vec![Value::int(12), Value::int(34)]);
+        assert_eq!(
+            resolve(&scan("${$0 + $1}", SPAN).unwrap(), &scope, &V1Engine).unwrap(),
+            Value::int(46)
+        );
+        let scope = Scope {
+            call: Some(Box::new(|name: &str, args: &[Value]| {
+                let sum: i64 = args
+                    .iter()
+                    .map(|v| match v {
+                        Value::Int(i) => *i,
+                        _ => 0,
+                    })
+                    .sum();
+                Ok(match name {
+                    "b" => Value::int(sum),
+                    "c" => Value::int(2 * sum),
+                    _ => Value::int(0),
+                })
+            })),
+            ..Scope::new()
+        };
+        assert_eq!(
+            resolve(
+                &scan("${b(12,34) + c(28)}", SPAN).unwrap(),
+                &scope,
+                &V1Engine
+            )
+            .unwrap(),
+            Value::int(102)
         );
     }
 

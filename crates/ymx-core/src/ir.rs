@@ -107,6 +107,11 @@ pub fn render_f64(value: f64) -> String {
     buf.format(value).to_owned()
 }
 
+/// A value with no string rendering (an Array or an Object). [`render_value`]
+/// rejects these; callers raise `E011`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoStringRender;
+
 /// Single shared scalar-to-text renderer used for **both** string
 /// interpolation and math `+` string-concatenation (PRD *Number→string
 /// rendering*).
@@ -115,10 +120,11 @@ pub fn render_f64(value: f64) -> String {
 /// (integer-valued floats keep their fractional part — `2.0` → `"2.0"`), Bool
 /// renders `"true"` / `"false"`, Null renders `"null"`, and String passes
 /// through unchanged. Objects and arrays have no meaningful string rendering
-/// (PRD *String syntax*) and are rejected with `Err(())` — callers raise
-/// `E011`. Rust's default `{}` formatting is intentionally **not** used for
-/// floats (invariant #7).
-pub fn render_value(v: &Value) -> Result<String, ()> {
+/// (PRD *String syntax*) and are rejected with
+/// [`Err(NoStringRender)`](NoStringRender) — callers raise `E011`. Rust's
+/// default `{}` formatting is intentionally **not** used for floats
+/// (invariant #7).
+pub fn render_value(v: &Value) -> Result<String, NoStringRender> {
     match v {
         Value::Null => Ok("null".to_string()),
         Value::Bool(b) => Ok(if *b {
@@ -129,7 +135,7 @@ pub fn render_value(v: &Value) -> Result<String, ()> {
         Value::Int(i) => Ok(i.to_string()),
         Value::Float(f) => Ok(render_f64(*f)),
         Value::String(s) => Ok(s.clone()),
-        Value::Array(_) | Value::Object(_) => Err(()),
+        Value::Array(_) | Value::Object(_) => Err(NoStringRender),
     }
 }
 
