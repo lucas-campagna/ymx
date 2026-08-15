@@ -437,11 +437,41 @@ impl<'a> Resolver<'a> {
     ) -> Result<Value, Diagnostic> {
         let initial = chain_initial.unwrap_or(args);
         let output = self.output(&body);
-        match self.chain_link(def, initial, &output, chain_initial)? {
-            // The chain's final value: the last link's own finish result
-            // (step 3 lands here too in task 6).
-            Some(result) => Ok(result),
-            None => Ok(output),
+        // Step 2: the template chain (rule 5).
+        let chained = self.chain_link(def, initial, &output, chain_initial)?;
+        // Step 3: `from` / shortcut dispatch (rules 6/8) on the post-chain
+        // property set; the rule-8 shortcut fires in task 7.
+        match chained {
+            Some(result) => self.step3(&result, def.file),
+            None => match &body {
+                ResolvedBody::Object(props) => self.dispatch_from(props, def.file),
+                ResolvedBody::Value(v) => self.step3(v, def.file),
+            },
+        }
+    }
+
+    /// Rule-11 step 3 — `from` / shortcut dispatch (rules 6/8). Runs on the
+    /// post-chain output of a normal component call: an object whose `from`
+    /// names a valid regular component dispatches — the target is called
+    /// with the rest of the property set as arguments (the `from` key
+    /// itself is not forwarded) and its return value replaces the output;
+    /// any other object (no `from`, non-String `from`, missing target,
+    /// template target) is forwarded unchanged — the rule-8 shortcut then
+    /// fires on it (task 7). Non-object outputs pass through.
+    fn step3(&self, value: &Value, file: FileId) -> Result<Value, Diagnostic> {
+        let Value::Object(m) = value else {
+            return Ok(value.clone());
+        };
+        match self.resolve_from_target(m, file)? {
+            Some(def) => {
+                let named: Vec<(String, Value)> = m
+                    .iter()
+                    .filter(|(k, _)| *k != &self.opts.from_keyword)
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                self.call(def, &args_from(named, Vec::new()), None)
+            }
+            None => Ok(value.clone()),
         }
     }
 
@@ -775,27 +805,42 @@ impl<'a> Resolver<'a> {
     }
 
     /// Rule-11 step-3 `from` dispatch on a resolved property set, shared by
-    /// mini-components now and the top-level pipeline in task 6. Valid
-    /// `from` = a String naming a regular (non-template) component reachable
-    /// from `file`: it is called with the rest of the property set as
-    /// arguments (the `from` key itself is not forwarded). Anything else
-    /// forwards `from` as a plain property of the object.
+    /// mini-components and the top-level no-chain pipeline: a valid `from`
+    /// target is called with the rest of the property set (slots included)
+    /// as arguments; an invalid `from` forwards the object unchanged (the
+    /// rule-8 shortcut then fires on it, task 7).
     fn dispatch_from(&self, props: &PropertySet, file: FileId) -> Result<Value, Diagnostic> {
-        let Some(from) = props.named.get(&self.opts.from_keyword) else {
-            return Ok(props.to_object());
+        match self.resolve_from_target(&props.named, file)? {
+            Some(def) => {
+                let args = self.props_to_args(props);
+                self.call(def, &args, None)
+            }
+            None => Ok(props.to_object()),
+        }
+    }
+
+    /// The valid `from` dispatch target of a resolved object: the `from`
+    /// value must be a String naming a regular (non-template) component
+    /// reachable from `file` — dotted `subdir.comp` included. `None` means
+    /// `from` is invalid (absent, non-String, missing target, template) and
+    /// forwards as a plain property.
+    fn resolve_from_target(
+        &self,
+        named: &IndexMap<String, Value>,
+        file: FileId,
+    ) -> Result<Option<&'a Definition>, Diagnostic> {
+        let Some(from) = named.get(&self.opts.from_keyword) else {
+            return Ok(None);
         };
         let Some(target) = (match from {
             Value::String(s) => Some(s),
             _ => None,
         }) else {
-            return Ok(props.to_object());
+            return Ok(None);
         };
         match resolve_ref(self.project, target, file, self.opts.plain.clone()) {
-            Ok(def) if !def.full_name.starts_with('$') => {
-                let args = self.props_to_args(props);
-                self.call(def, &args, None)
-            }
-            _ => Ok(props.to_object()),
+            Ok(def) if !def.full_name.starts_with('$') => Ok(Some(def)),
+            _ => Ok(None),
         }
     }
 
@@ -2228,6 +2273,125 @@ mod tests {
             compile_ok(&p, "a", &Args::None),
             Value::array(vec![Value::int(1), Value::int(2)]),
             "an array output with no further chain link is fine"
+        );
+    }
+
+    // ---- Milestone 1.6 task 6: `from` dispatch (rule 6, step 3) ----
+
+    #[test]
+    fn top_level_from_dispatch() {
+        let p = project_with(&[(
+            "main.yml",
+            "CompA: {from: CompB, x: 12, y: 34}\nCompB: \"sum: $x + $y\"\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "CompA", &Args::None),
+            Value::string("sum: 12 + 34"),
+            "the target is called with the rest of the property set as arguments"
+        );
+    }
+
+    #[test]
+    fn from_after_template_ordering() {
+        let p = project_with(&[(
+            "main.yml",
+            "a:\n  from: \"$b()\"\n$a:\n  from: $from\n  x: 2\nb: c\nc: \"${1 + x}\"\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::int(3),
+            "PRD example 2: `from` resolves in step 1, the chain runs in step 2, `from` dispatches in step 3"
+        );
+    }
+
+    #[test]
+    fn from_dispatch_wins_over_same_named_property() {
+        let p = project_with(&[(
+            "main.yml",
+            "comp: \"got=$v\"\nmain:\n  from: comp\n  comp: 5\n  v: 7\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::string("got=7"),
+            "a valid `from` dispatches; the same-named property is just an argument (shortcut suppressed)"
+        );
+    }
+
+    #[test]
+    fn namespace_qualified_from() {
+        let p = project_with(&[
+            ("main.yml", "main:\n  from: subdir.comp\n  x: 1\n"),
+            ("subdir/t.yml", "comp: \"v=$x\"\n"),
+        ]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::string("v=1"),
+            "`from: subdir.comp` resolves through the namespace"
+        );
+    }
+
+    #[test]
+    fn top_level_invalid_from_is_forwarded() {
+        let p = project_with(&[
+            (
+                "main.yml",
+                "missing:\n  from: nope\n  x: 1\nnonstr:\n  from: 5\n",
+            ),
+            ("t.yml", "$box: 1\ntempl:\n  from: '\\$box'\n"),
+        ]);
+        assert_eq!(
+            compile_ok(&p, "missing", &Args::None),
+            Value::object(IndexMap::from([
+                ("from".to_string(), Value::string("nope")),
+                ("x".to_string(), Value::int(1)),
+            ])),
+            "a missing target forwards `from` as a plain property"
+        );
+        assert_eq!(
+            compile_ok(&p, "nonstr", &Args::None),
+            Value::object(IndexMap::from([("from".to_string(), Value::int(5))])),
+            "a non-String `from` forwards"
+        );
+        assert_eq!(
+            compile_ok(&p, "templ", &Args::None),
+            Value::object(IndexMap::from([(
+                "from".to_string(),
+                Value::string("$box")
+            )])),
+            "a template is not a valid `from` target"
+        );
+    }
+
+    #[test]
+    fn top_level_from_dispatch_keeps_slots() {
+        let p = project_with(&[(
+            "main.yml",
+            "main:\n  from: comp\n  0: a\n  1: b\ncomp: \"$0-$1\"\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::string("a-b"),
+            "the slot properties pass through to the `from` target as positional args"
+        );
+    }
+
+    #[test]
+    fn template_link_dispatches_from() {
+        let p = project_with(&[("main.yml", "a: 10\n$a:\n  from: c\n  x: 1\nc: \"v=$x\"\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::string("v=1"),
+            "a chain link is a normal component call, so its own step-3 `from` dispatch applies"
+        );
+    }
+
+    #[test]
+    fn file_scoped_from_target() {
+        let p = project_with(&[("main.yml", "_x: 5\nmain:\n  from: _x\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::int(5),
+            "a file-scoped component is a valid `from` target within its file"
         );
     }
 }
