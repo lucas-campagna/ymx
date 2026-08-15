@@ -52,6 +52,7 @@ pub use ymx_core::project::{Format, Options, Project};
 /// `E007` (reserved builtin name), `E015` (leading-`$` meta-key variant).
 pub fn load_project(root: &Path) -> Result<Project, Vec<Diagnostic>> {
     let mut project = Project::new();
+    project.root = root.to_path_buf();
     let mut diags = Vec::new();
 
     let mut files = Vec::new();
@@ -260,6 +261,11 @@ mod tests {
             .map(|rel| dir.path().join(rel))
             .collect();
         assert_eq!(project.files, expected, "lexicographic path order");
+        assert_eq!(
+            project.root,
+            dir.path(),
+            "root recorded for entry resolution"
+        );
 
         let a = project.namespaces.get("", "a").expect("a global");
         let main = project.namespaces.get("", "main").expect("main global");

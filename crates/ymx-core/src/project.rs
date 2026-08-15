@@ -69,8 +69,10 @@ impl Default for Options {
 
 /// A loaded YMX project.
 ///
-/// [`files`] is the stable `FileId`-indexable surface (host-file path per
-/// document). [`namespaces`] holds the merged global + sub-namespaces
+/// [`root`](Project::root) is the directory [`load_project`] walked;
+/// [`files`] holds each document's root-joined path (so `FileId` indexes the
+/// path, and `strip_prefix(root)` recovers the relative path for entry-path
+/// resolution). [`namespaces`] holds the merged global + sub-namespaces
 /// (non-`_`-prefixed definitions). [`file_scoped`] holds `_`-prefixed
 /// definitions per document (excluded from the namespace merge; cross-document
 /// references raise `E005` at the call site in milestone 1.6).
@@ -87,6 +89,9 @@ impl Default for Options {
 /// [`file_scoped`]: Project::file_scoped
 #[derive(Debug, Default)]
 pub struct Project {
+    /// The root directory walked by `ymx-lib::load_project`. `files` are
+    /// root-joined paths.
+    pub root: PathBuf,
     /// `files[FileId.0]` — host-file path of every loaded document.
     pub files: Vec<PathBuf>,
     /// Merged global (`""`) + sub-namespaces (dotted relative path) of
