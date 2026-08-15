@@ -262,3 +262,468 @@ fn invalid_field(file: &Path, field: &str, detail: &str) -> Diagnostic {
         message: format!("invalid value for `_ymx` field `{field}`: {detail}"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    use ymx_core::diag::{FileId, Span, E009};
+    use ymx_core::namespace::Definition;
+    use ymx_core::parse::{node_to_value, parse_document, Node};
+
+    const SPAN: Span = Span { line: 1, col: 1 };
+
+    fn def(file: u32, name: &str) -> Definition {
+        Definition {
+            file: FileId(file),
+            full_name: name.to_string(),
+            span: SPAN,
+            body: Node::Int(1, SPAN),
+        }
+    }
+
+    /// Project rooted at `/proj`:
+    /// * `main.yml`     (FileId 0): `main`, `$box`
+    /// * `a/b.yml`      (FileId 1): `x`, `$xbox`
+    /// * `subdir/t.yml` (FileId 2): `t`, `$tbox`, `x`
+    fn project() -> Project {
+        let mut p = Project::new();
+        p.root = PathBuf::from("/proj");
+        p.files = vec![
+            PathBuf::from("/proj/main.yml"),
+            PathBuf::from("/proj/a/b.yml"),
+            PathBuf::from("/proj/subdir/t.yml"),
+        ];
+        p.namespaces.register("", def(0, "main")).unwrap();
+        p.namespaces.register("", def(0, "$box")).unwrap();
+        p.namespaces.register("a", def(1, "x")).unwrap();
+        p.namespaces.register("a", def(1, "$xbox")).unwrap();
+        p.namespaces.register("subdir", def(2, "t")).unwrap();
+        p.namespaces.register("subdir", def(2, "$tbox")).unwrap();
+        p.namespaces.register("subdir", def(2, "x")).unwrap();
+        p
+    }
+
+    /// `project()` plus global `x` and `$tbox` — promotion-clash targets.
+    fn clash_project() -> Project {
+        let mut p = project();
+        p.namespaces.register("", def(0, "x")).unwrap();
+        p.namespaces.register("", def(0, "$tbox")).unwrap();
+        p
+    }
+
+    /// Raw span-less value of inline YAML (mirrors ymx-lib's `value_of`).
+    fn value_of(src: &str) -> Value {
+        node_to_value(&parse_document(src).expect("parse inline yaml"))
+    }
+
+    /// Attach a raw `_ymx` value to document `file`.
+    fn with_ymx(mut p: Project, file: u32, src: &str) -> Project {
+        p.raw_meta_ymx.push((FileId(file), value_of(src)));
+        p
+    }
+
+    #[test]
+    fn empty_ymx_and_empty_overrides_equal_default() {
+        let p = with_ymx(project(), 0, "{}\n");
+        let opts = extract_options(&p, &CliOverrides::default_for_tests()).expect("empty _ymx");
+        assert_eq!(opts, Options::default());
+    }
+
+    #[test]
+    fn no_ymx_and_empty_overrides_equal_default() {
+        let p = project();
+        let opts = extract_options(&p, &CliOverrides::default_for_tests()).expect("no _ymx");
+        assert_eq!(opts, Options::default());
+    }
+
+    #[test]
+    fn entry_file_overrides_default_with_empty_cli() {
+        let p = with_ymx(
+            project(),
+            0,
+            "max_depth: 10\nfrom_keyword: frm\ndefault_keyword: dflt\nformat: diagnostics\npretty: true\nplain: \"template\"\n",
+        );
+        let opts =
+            extract_options(&p, &CliOverrides::default_for_tests()).expect("all fields valid");
+        assert_eq!(opts.max_depth, 10);
+        assert_eq!(opts.from_keyword, "frm");
+        assert_eq!(opts.default_keyword, "dflt");
+        assert_eq!(opts.format, Format::Diagnostics);
+        assert!(opts.pretty);
+        assert_eq!(opts.plain, PlainMode::TemplatesOnly);
+        assert_eq!(opts.entry, "main.main");
+    }
+
+    #[test]
+    fn cli_overrides_entry_file_per_field() {
+        let p = with_ymx(
+            project(),
+            0,
+            "max_depth: 10\nfrom_keyword: frm\ndefault_keyword: dflt\nformat: diagnostics\npretty: true\nplain: \"true\"\n",
+        );
+        let cli = CliOverrides {
+            max_depth: Some(5),
+            default_keyword: Some("kw".to_string()),
+            pretty: Some(false),
+            ..CliOverrides::default_for_tests()
+        };
+        let opts = extract_options(&p, &cli).expect("valid");
+        assert_eq!(opts.max_depth, 5, "CLI beats entry-file 10");
+        assert_eq!(
+            opts.from_keyword, "frm",
+            "no CLI override -> entry-file value"
+        );
+        assert_eq!(opts.default_keyword, "kw", "CLI beats entry-file dflt");
+        assert_eq!(
+            opts.format,
+            Format::Diagnostics,
+            "no CLI override -> entry-file value"
+        );
+        assert!(!opts.pretty, "CLI false beats entry-file true");
+        assert_eq!(
+            opts.plain,
+            PlainMode::All,
+            "no CLI override -> entry-file \"true\""
+        );
+        assert_eq!(opts.entry, "main.main");
+    }
+
+    #[test]
+    fn partial_entry_ymx_leaves_other_fields_at_defaults() {
+        let p = with_ymx(project(), 0, "max_depth: 42\n");
+        let opts = extract_options(&p, &CliOverrides::default_for_tests()).expect("valid");
+        assert_eq!(
+            opts,
+            Options {
+                max_depth: 42,
+                ..Options::default()
+            }
+        );
+    }
+
+    #[test]
+    fn cli_entry_selects_front_matter_source_and_ignores_others() {
+        let mut p = with_ymx(project(), 1, "max_depth: 7\n");
+        p.raw_meta_ymx.push((FileId(0), value_of("foo: garbage\n")));
+        let cli = CliOverrides {
+            entry: Some("a.b.x".to_string()),
+            ..CliOverrides::default_for_tests()
+        };
+        let opts =
+            extract_options(&p, &cli).expect("main.yml's malformed _ymx is not the entry file's");
+        assert_eq!(opts.entry, "a.b.x");
+        assert_eq!(opts.max_depth, 7, "a/b.yml's _ymx is the front matter");
+    }
+
+    #[test]
+    fn non_entry_malformed_ymx_is_not_validated() {
+        // main.yml (the entry file) has no `_ymx`; other documents carry
+        // malformed blocks (a garbage object, a non-object) that are ignored.
+        let mut p = project();
+        p.raw_meta_ymx.push((
+            FileId(1),
+            value_of("foo: 1\nmax_depth: nope\nplain: \"maybe\"\n"),
+        ));
+        p.raw_meta_ymx.push((FileId(2), value_of("5")));
+        let opts = extract_options(&p, &CliOverrides::default_for_tests()).expect("ignored");
+        assert_eq!(opts, Options::default());
+    }
+
+    #[test]
+    fn unknown_ymx_field_is_e010() {
+        let p = with_ymx(project(), 0, "foo: 1\n");
+        let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+        assert_eq!(diags.len(), 1);
+        let d = &diags[0];
+        assert_eq!(d.code, E010);
+        assert_eq!(d.file.as_deref(), Some(Path::new("/proj/main.yml")));
+        assert_eq!((d.line, d.col), (1, 1));
+        assert_eq!(d.component.as_deref(), Some("foo"));
+        assert!(d.message.contains("foo"));
+    }
+
+    #[test]
+    fn entry_is_not_a_ymx_field() {
+        let p = with_ymx(project(), 0, "entry: other.main\n");
+        let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, E010);
+        assert_eq!(diags[0].component.as_deref(), Some("entry"));
+    }
+
+    #[test]
+    fn plain_rejects_non_string_enum_values() {
+        for src in ["plain: \"maybe\"\n", "plain: true\n", "plain: 5\n"] {
+            let p = with_ymx(project(), 0, src);
+            let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+            assert_eq!(diags.len(), 1, "{src}");
+            assert_eq!(diags[0].code, E010, "{src}");
+            assert_eq!(diags[0].component.as_deref(), Some("plain"), "{src}");
+        }
+    }
+
+    #[test]
+    fn max_depth_rejects_non_integer_and_out_of_range() {
+        for src in [
+            "max_depth: nope\n",
+            "max_depth: -1\n",
+            "max_depth: 4294967296\n",
+            "max_depth: 1.5\n",
+        ] {
+            let p = with_ymx(project(), 0, src);
+            let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+            assert_eq!(diags.len(), 1, "{src}");
+            assert_eq!(diags[0].code, E010, "{src}");
+            assert_eq!(diags[0].component.as_deref(), Some("max_depth"), "{src}");
+        }
+    }
+
+    #[test]
+    fn format_rejects_unknown_values() {
+        for src in ["format: xml\n", "format: JSON\n", "format: true\n"] {
+            let p = with_ymx(project(), 0, src);
+            let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+            assert_eq!(diags.len(), 1, "{src}");
+            assert_eq!(diags[0].code, E010, "{src}");
+            assert_eq!(diags[0].component.as_deref(), Some("format"), "{src}");
+        }
+    }
+
+    #[test]
+    fn pretty_rejects_non_bool() {
+        for src in ["pretty: \"true\"\n", "pretty: 1\n"] {
+            let p = with_ymx(project(), 0, src);
+            let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+            assert_eq!(diags.len(), 1, "{src}");
+            assert_eq!(diags[0].code, E010, "{src}");
+            assert_eq!(diags[0].component.as_deref(), Some("pretty"), "{src}");
+        }
+    }
+
+    #[test]
+    fn keyword_fields_reject_non_string() {
+        for field in ["from_keyword", "default_keyword"] {
+            for src in [format!("{field}: true\n"), format!("{field}: 5\n")] {
+                let p = with_ymx(project(), 0, &src);
+                let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+                assert_eq!(diags.len(), 1, "{src}");
+                assert_eq!(diags[0].code, E010, "{src}");
+                assert_eq!(diags[0].component.as_deref(), Some(field), "{src}");
+            }
+        }
+    }
+
+    #[test]
+    fn non_object_ymx_is_e010() {
+        for src in ["5\n", "- 1\n- 2\n", "\"x\"\n", ""] {
+            let p = with_ymx(project(), 0, src);
+            let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+            assert_eq!(diags.len(), 1, "{src:?}");
+            assert_eq!(diags[0].code, E010, "{src:?}");
+            assert_eq!(diags[0].component, None, "{src:?}");
+            assert_eq!(
+                diags[0].file.as_deref(),
+                Some(Path::new("/proj/main.yml")),
+                "{src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn all_ymx_validation_errors_are_collected() {
+        let p = with_ymx(project(), 0, "max_depth: nope\nfoo: 1\nplain: \"maybe\"\n");
+        let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+        assert_eq!(diags.len(), 3);
+        assert!(diags.iter().all(|d| d.code == E010));
+        let components: Vec<Option<&str>> = diags.iter().map(|d| d.component.as_deref()).collect();
+        assert_eq!(
+            components,
+            [Some("max_depth"), Some("foo"), Some("plain")],
+            "errors collected in insertion order, no short-circuit"
+        );
+    }
+
+    #[test]
+    fn malformed_entry_is_e009() {
+        for entry in ["main", "a..c"] {
+            let cli = CliOverrides {
+                entry: Some(entry.to_string()),
+                ..CliOverrides::default_for_tests()
+            };
+            let diags = extract_options(&project(), &cli).unwrap_err();
+            assert_eq!(diags.len(), 1, "{entry}");
+            assert_eq!(diags[0].code, E009, "{entry}");
+            assert_eq!(diags[0].file, None, "{entry}: no document implicated");
+        }
+    }
+
+    #[test]
+    fn missing_entry_file_is_e009() {
+        let cli = CliOverrides {
+            entry: Some("a.missing.c".to_string()),
+            ..CliOverrides::default_for_tests()
+        };
+        let diags = extract_options(&project(), &cli).unwrap_err();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, E009);
+        assert_eq!(diags[0].file, None);
+        assert!(
+            diags[0].message.contains("a/missing.yml"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn component_not_defined_in_entry_file_is_e009() {
+        let cli = CliOverrides {
+            entry: Some("a.b.y".to_string()),
+            ..CliOverrides::default_for_tests()
+        };
+        let diags = extract_options(&project(), &cli).unwrap_err();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, E009);
+        assert_eq!(
+            diags[0].file.as_deref(),
+            Some(Path::new("/proj/a/b.yml")),
+            "the entry document exists, so it is attached"
+        );
+        assert_eq!(diags[0].component.as_deref(), Some("y"));
+    }
+
+    #[test]
+    fn plain_valid_values_parse_to_plain_mode() {
+        for (src, expected) in [
+            ("plain: \"false\"\n", PlainMode::False),
+            ("plain: \"true\"\n", PlainMode::All),
+            ("plain: \"template\"\n", PlainMode::TemplatesOnly),
+        ] {
+            let p = with_ymx(project(), 0, src);
+            let opts = extract_options(&p, &CliOverrides::default_for_tests()).expect(src);
+            assert_eq!(opts.plain, expected, "{src}");
+        }
+    }
+
+    #[test]
+    fn cli_plain_overrides_entry_plain() {
+        let p = with_ymx(project(), 0, "plain: \"true\"\n");
+        let cli = CliOverrides {
+            plain: Some(PlainMode::False),
+            ..CliOverrides::default_for_tests()
+        };
+        let opts = extract_options(&p, &cli).expect("CLI False beats entry All");
+        assert_eq!(opts.plain, PlainMode::False);
+    }
+
+    #[test]
+    fn promotion_clash_is_e004_under_all() {
+        let p = with_ymx(clash_project(), 0, "plain: \"true\"\n");
+        let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+        assert_eq!(diags.len(), 3, "a.x, subdir.$tbox, subdir.x");
+        for d in &diags {
+            assert_eq!(d.code, E004);
+            assert_eq!((d.line, d.col), (1, 1));
+        }
+        let rendered: Vec<(&str, &str)> = diags
+            .iter()
+            .map(|d| {
+                (
+                    d.component.as_deref().unwrap(),
+                    d.file.as_deref().unwrap().to_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rendered,
+            [
+                ("x", "/proj/a/b.yml"),
+                ("$tbox", "/proj/subdir/t.yml"),
+                ("x", "/proj/subdir/t.yml"),
+            ],
+            "lexicographic promotion order; anchored at the promoted definition's host file"
+        );
+        assert!(diags[0].message.contains("a.x"), "{}", diags[0].message);
+        assert!(
+            diags[1].message.contains("subdir.$tbox"),
+            "{}",
+            diags[1].message
+        );
+        assert!(
+            diags[2].message.contains("subdir.x"),
+            "{}",
+            diags[2].message
+        );
+    }
+
+    #[test]
+    fn promotion_clash_is_e004_under_templates_only() {
+        let p = with_ymx(clash_project(), 0, "plain: \"template\"\n");
+        let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+        assert_eq!(
+            diags.len(),
+            1,
+            "only `$` names can clash under TemplatesOnly"
+        );
+        assert_eq!(diags[0].code, E004);
+        assert_eq!(diags[0].component.as_deref(), Some("$tbox"));
+        assert_eq!(
+            diags[0].file.as_deref(),
+            Some(Path::new("/proj/subdir/t.yml"))
+        );
+        assert!(
+            diags[0].message.contains("subdir.$tbox"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn no_promotion_clash_under_false() {
+        let p = with_ymx(clash_project(), 0, "plain: \"false\"\n");
+        let opts = extract_options(&p, &CliOverrides::default_for_tests())
+            .expect("False promotes nothing");
+        assert_eq!(opts.plain, PlainMode::False);
+    }
+
+    #[test]
+    fn cli_plain_false_suppresses_entry_clash() {
+        let p = with_ymx(clash_project(), 0, "plain: \"true\"\n");
+        let cli = CliOverrides {
+            plain: Some(PlainMode::False),
+            ..CliOverrides::default_for_tests()
+        };
+        let opts = extract_options(&p, &cli).expect("CLI False beats entry All");
+        assert_eq!(opts.plain, PlainMode::False);
+    }
+
+    #[test]
+    fn cli_plain_drives_clash_check_without_ymx() {
+        let p = clash_project();
+        let cli = CliOverrides {
+            plain: Some(PlainMode::All),
+            ..CliOverrides::default_for_tests()
+        };
+        let diags = extract_options(&p, &cli).unwrap_err();
+        assert_eq!(diags.len(), 3);
+        assert!(diags.iter().all(|d| d.code == E004));
+
+        let cli = CliOverrides {
+            plain: Some(PlainMode::TemplatesOnly),
+            ..CliOverrides::default_for_tests()
+        };
+        let diags = extract_options(&p, &cli).unwrap_err();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].component.as_deref(), Some("$tbox"));
+    }
+
+    #[test]
+    fn clash_collected_alongside_ymx_errors() {
+        let p = with_ymx(clash_project(), 0, "max_depth: nope\nplain: \"true\"\n");
+        let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+        assert_eq!(diags.len(), 4, "1 E010 + 3 E004");
+        assert_eq!(diags.iter().filter(|d| d.code == E010).count(), 1);
+        assert_eq!(diags.iter().filter(|d| d.code == E004).count(), 3);
+    }
+}
