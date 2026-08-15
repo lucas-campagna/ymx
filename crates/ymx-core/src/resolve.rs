@@ -318,7 +318,7 @@ pub fn compile_component(
 ) -> Result<Value, Vec<Diagnostic>> {
     let def = locate_definition(project, component, opts.plain.clone()).map_err(|d| vec![d])?;
     Resolver::new(project, opts)
-        .call(def, args)
+        .call(def, args, None)
         .map_err(|d| vec![d])
 }
 
@@ -344,7 +344,7 @@ pub fn compile(project: &Project, opts: &Options) -> Result<Value, Vec<Diagnosti
         }]);
     };
     Resolver::new(project, opts)
-        .call(def, &Args::None)
+        .call(def, &Args::None, None)
         .map_err(|d| vec![d])
 }
 
@@ -410,13 +410,150 @@ impl<'a> Resolver<'a> {
     /// rule-4 slots, the rule-2 fallback, and rule-3 inline call-sites)
     /// followed by the output conversion; the template chain (task 5) and
     /// `from`/shortcut dispatch (tasks 6–7) slot in around it.
-    fn call(&self, def: &Definition, args: &Args) -> Result<Value, Diagnostic> {
+    fn call(
+        &self,
+        def: &Definition,
+        args: &Args,
+        chain_initial: Option<&Args>,
+    ) -> Result<Value, Diagnostic> {
         let scope = self.scope_for(def, args);
         let body = self.resolve_body(&def.body, &scope, def.file)?;
-        // Step 2 (template chain) and step 3 (`from`/shortcut dispatch) of
-        // rule 11 slot in here in tasks 5–7; `scope` is their starting
-        // context (the initial arguments are read from it).
-        Ok(self.output(&body))
+        self.finish(def, args, chain_initial, body)
+    }
+
+    /// Rule-11 steps 2–3 on the post-step-1 body. Step 2 (rule 5): the
+    /// template chain — `def`'s output feeds `$<name>`, whose own output
+    /// feeds the next link, each link a normal component call; a broken
+    /// link stops the chain. Step 3 (`from`/shortcut dispatch, rules 6/8)
+    /// slots in here in tasks 6–7. `chain_initial` is the chain's initial
+    /// args (what the chain's first link received) when this call is itself
+    /// a chain link, else `args` (a fresh chain origin).
+    fn finish(
+        &self,
+        def: &Definition,
+        args: &Args,
+        chain_initial: Option<&Args>,
+        body: ResolvedBody,
+    ) -> Result<Value, Diagnostic> {
+        let initial = chain_initial.unwrap_or(args);
+        let output = self.output(&body);
+        match self.chain_link(def, initial, &output, chain_initial)? {
+            // The chain's final value: the last link's own finish result
+            // (step 3 lands here too in task 6).
+            Some(result) => Ok(result),
+            None => Ok(output),
+        }
+    }
+
+    /// Rule-11 step 2: the next template-chain link. The chain name is one
+    /// `$` longer (`a` → `$a` → `$$a` → …), looked up in `def`'s own
+    /// namespace first, then the global namespace with `plain` promotion
+    /// (file-scoped `_`-prefixed templates included); a missing link stops
+    /// the chain (no skip to the next `$`). The link is a normal component
+    /// call (its own three-step flow): its args derive from the chain's
+    /// initial args, so an overwrite lasts exactly one step and reverts
+    /// (rule 5); `chain_initial` is threaded down unchanged (for a fresh
+    /// origin the first derivation defines it). v1: array-bodied templates
+    /// and array results in a non-array chain are `E010` when reached
+    /// (rules 12–14, milestone 1.7).
+    fn chain_link(
+        &self,
+        def: &Definition,
+        initial: &Args,
+        result: &Value,
+        chain_initial: Option<&Args>,
+    ) -> Result<Option<Value>, Diagnostic> {
+        let ns = self.def_namespace(def);
+        let name = format!("${}", def.full_name);
+        let Some(tpl) = self.lookup_template(&ns, &name, def.file) else {
+            return Ok(None);
+        };
+        if matches!(tpl.body, Node::Array(..)) {
+            return Err(self.def_err(
+                tpl,
+                E010,
+                format!(
+                    "array-bodied template `{}` requires rules 12–14 (milestone 1.7)",
+                    tpl.full_name
+                ),
+            ));
+        }
+        let link_args = self.derive_chain_args(initial, result, def)?;
+        let threaded = chain_initial.unwrap_or(&link_args);
+        Ok(Some(self.call(tpl, &link_args, Some(threaded))?))
+    }
+
+    /// Rule-5 chain lookup: the component's own namespace first, then the
+    /// global namespace with `plain` promotion (via [`resolve_ref`]).
+    fn lookup_template(&self, ns: &str, name: &str, file: FileId) -> Option<&'a Definition> {
+        self.project
+            .namespaces
+            .get(ns, name)
+            .or_else(|| resolve_ref(self.project, name, file, self.opts.plain.clone()).ok())
+    }
+
+    /// Rule-5 argument passing between chain steps: the next link's args
+    /// derive from the chain origin's initial args — a scalar result
+    /// overwrites `$0` (other initial args retained); an object result
+    /// overwrites only the returned keys for this one step (new keys are
+    /// added for the step); an array result in a non-array chain is the v1
+    /// mixed-shape `E010` (rules 12–14).
+    fn derive_chain_args(
+        &self,
+        initial: &Args,
+        result: &Value,
+        def: &Definition,
+    ) -> Result<Args, Diagnostic> {
+        match result {
+            Value::Object(m) => {
+                let mut named = initial.named_vec();
+                for (k, v) in m {
+                    match named.iter_mut().find(|(nk, _)| nk == k) {
+                        Some(slot) => slot.1 = v.clone(),
+                        None => named.push((k.clone(), v.clone())),
+                    }
+                }
+                Ok(args_from(named, initial.positional_vec()))
+            }
+            v if v.is_scalar() => {
+                let mut positional = initial.positional_vec();
+                if positional.is_empty() {
+                    positional.push(v.clone());
+                } else {
+                    positional[0] = v.clone();
+                }
+                Ok(args_from(initial.named_vec(), positional))
+            }
+            _ => Err(self.def_err(
+                def,
+                E010,
+                "array result in a non-array template chain (mixed-shape chain; rules 12–14 are milestone 1.7)"
+                    .to_string(),
+            )),
+        }
+    }
+
+    /// The namespace of `def`'s hosting document: its directory as a dotted
+    /// string (`""` for root files), mirroring `load_project` naming.
+    fn def_namespace(&self, def: &Definition) -> String {
+        let full = &self.project.files[def.file.0 as usize];
+        let rel = full.strip_prefix(&self.project.root).unwrap_or(full);
+        rel.parent()
+            .unwrap_or(Path::new(""))
+            .to_string_lossy()
+            .replace('/', ".")
+    }
+
+    /// A diagnostic attributed to `def`'s key span.
+    fn def_err(&self, def: &Definition, code: &'static str, message: String) -> Diagnostic {
+        Diagnostic {
+            file: Some(self.project.files[def.file.0 as usize].clone()),
+            line: def.span.line,
+            col: def.span.col,
+            component: Some(def.full_name.clone()),
+            code,
+            message,
+        }
     }
 
     /// The rule-11 output value for a post-step-1 body.
@@ -453,7 +590,7 @@ impl<'a> Resolver<'a> {
     /// `Ok(None)` so the caller reports the plain `E003`.
     fn lookup_component(&self, file: FileId, name: &str) -> Result<Option<Value>, Diagnostic> {
         match resolve_ref(self.project, name, file, self.opts.plain.clone()) {
-            Ok(def) => Ok(Some(self.call(def, &Args::None)?)),
+            Ok(def) => Ok(Some(self.call(def, &Args::None, None)?)),
             Err(LookupMiss::NotFound | LookupMiss::FileScopeViolation { .. }) => Ok(None),
         }
     }
@@ -656,7 +793,7 @@ impl<'a> Resolver<'a> {
         match resolve_ref(self.project, target, file, self.opts.plain.clone()) {
             Ok(def) if !def.full_name.starts_with('$') => {
                 let args = self.props_to_args(props);
-                self.call(def, &args)
+                self.call(def, &args, None)
             }
             _ => Ok(props.to_object()),
         }
@@ -672,13 +809,7 @@ impl<'a> Resolver<'a> {
             .filter(|(k, _)| *k != &self.opts.from_keyword)
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let positional = props.slots.clone();
-        match (named.is_empty(), positional.is_empty()) {
-            (true, true) => Args::None,
-            (false, true) => Args::Named(named),
-            (true, false) => Args::Positional(positional),
-            (false, false) => Args::Mixed { named, positional },
-        }
+        args_from(named, props.slots.clone())
     }
 
     /// Resolve a string scalar: a whole-string `$name(...)` is an inline
@@ -778,7 +909,7 @@ impl<'a> Resolver<'a> {
         span: Span,
     ) -> Result<Value, Diagnostic> {
         match resolve_ref(self.project, name, file, self.opts.plain.clone()) {
-            Ok(def) => self.call(def, args),
+            Ok(def) => self.call(def, args, None),
             Err(LookupMiss::NotFound) => Err(Diagnostic {
                 file: Some(self.project.files[file.0 as usize].clone()),
                 line: span.line,
@@ -873,6 +1004,17 @@ fn ctx_err(scope: &Scope<'_>, code: &'static str, message: String) -> Diagnostic
         component: scope.component.clone(),
         code,
         message,
+    }
+}
+
+/// Build [`Args`] from (named, positional) parts, choosing the minimal
+/// variant.
+fn args_from(named: Vec<(String, Value)>, positional: Vec<Value>) -> Args {
+    match (named.is_empty(), positional.is_empty()) {
+        (true, true) => Args::None,
+        (false, true) => Args::Named(named),
+        (true, false) => Args::Positional(positional),
+        (false, false) => Args::Mixed { named, positional },
     }
 }
 
@@ -1915,6 +2057,177 @@ mod tests {
                 ("ok".to_string(), Value::int(2)),
             ])),
             "unmodified keys are unaffected"
+        );
+    }
+
+    // ---- Milestone 1.6 task 5: template chain (rule 5, step 2) ----
+
+    #[test]
+    fn template_chain_scalar_links() {
+        let p = project_with(&[(
+            "main.yml",
+            "a: 10\n$a: \"${$0 * 2}\"\n$$a: \"${$0 + 1}\"\n$$$a: \"final: $0\"\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::string("final: 21"),
+            "the PRD chain example: each link sees the previous result as `$0`"
+        );
+    }
+
+    #[test]
+    fn template_chain_overwrite_then_revert() {
+        let p = project_with(&[(
+            "main.yml",
+            "a:\n  x: 1\n  y: 2\n$a:\n  x: \"${x + 10}\"\n$$a:\n  out: \"$x-$y\"\n$$$a:\n  out: \"$x-$y\"\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::object(IndexMap::from([("out".to_string(), Value::string("1-2"))])),
+            "the overwrite (x=11) lasts exactly one step, then reverts to the initial x=1, y=2"
+        );
+        // The intermediate step sees the overwrite: assert via a two-link chain.
+        let p = project_with(&[(
+            "main.yml",
+            "a:\n  x: 1\n  y: 2\n$a:\n  x: \"${x + 10}\"\n$$a:\n  out: \"$x-$y\"\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::object(IndexMap::from([("out".to_string(), Value::string("11-2"))])),
+            "the immediately-next step sees x overwritten to 11 (PRD `x: 11` example)"
+        );
+    }
+
+    #[test]
+    fn template_chain_object_result_new_keys_for_one_step() {
+        let p = project_with(&[(
+            "main.yml",
+            "a:\n  x: 1\n$a:\n  x: \"${x + 10}\"\n  z: 9\n$$a:\n  out: \"$x-$z\"\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::object(IndexMap::from([("out".to_string(), Value::string("11-9"))])),
+            "a key the link returns that was not in the initial args is added for that one step"
+        );
+    }
+
+    #[test]
+    fn template_chain_scalar_overwrites_dollar_zero_only() {
+        let p = project_with(&[("main.yml", "a: 7\n$a: \"$x-$0\"\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &named(&[("x", Value::string("k"))])),
+            Value::string("k-7"),
+            "the scalar overwrites `$0`; the initial named args are retained"
+        );
+    }
+
+    #[test]
+    fn template_chain_broken_link_stops() {
+        let p = project_with(&[("main.yml", "a: 10\n$$a: \"$0\"\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::int(10),
+            "missing `$a` breaks the chain; `a` does not skip to `$$a`"
+        );
+    }
+
+    #[test]
+    fn template_chain_namespaced_lookup_own_namespace_first() {
+        let p = project_with(&[
+            ("main.yml", "x: 5\n$x: \"global\"\nz: 5\n$z: \"global\"\n"),
+            ("subdir/x.yml", "x: 5\n$x: \"local\"\n"),
+            ("subdir/y.yml", "y: 5\n"),
+            ("main2.yml", "$y: \"global\"\n"),
+        ]);
+        assert_eq!(
+            compile_ok(&p, "subdir.x", &Args::None),
+            Value::string("local"),
+            "the component's own namespace wins over the global template"
+        );
+        assert_eq!(
+            compile_ok(&p, "x", &Args::None),
+            Value::string("global"),
+            "a global component uses its global template"
+        );
+        assert_eq!(
+            compile_ok(&p, "subdir.y", &Args::None),
+            Value::string("global"),
+            "a missing own-namespace template falls back to the global one"
+        );
+    }
+
+    #[test]
+    fn template_chain_plain_promotion() {
+        let p = project_with(&[
+            ("subA/a.yml", "a: 5\n"),
+            ("subB/b.yml", "$a: \"promoted\"\n"),
+        ]);
+        let plain = Options {
+            plain: PlainMode::All,
+            ..Options::default()
+        };
+        assert_eq!(
+            compile_component(&p, "subA.a", &Args::None, &plain).unwrap(),
+            Value::string("promoted"),
+            "`plain` promotes the sub-namespace template into global lookup"
+        );
+        assert_eq!(
+            compile_ok(&p, "subA.a", &Args::None),
+            Value::int(5),
+            "without `plain` the chain is broken at `$a`"
+        );
+    }
+
+    #[test]
+    fn template_chain_file_scoped() {
+        let p = project_with(&[("main.yml", "_a: 5\n$_a: \"v=$0\"\n")]);
+        assert_eq!(
+            compile_ok(&p, "_a", &Args::None),
+            Value::string("v=5"),
+            "a file-scoped `_`-prefixed chain resolves per-file"
+        );
+    }
+
+    #[test]
+    fn from_dispatch_target_runs_its_own_chain() {
+        let p = project_with(&[(
+            "main.yml",
+            "comp: \"v=$x\"\n$comp: \"T=$0\"\nmain:\n  mini: {from: comp, x: 1}\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([(
+                "mini".to_string(),
+                Value::string("T=v=1")
+            )])),
+            "a `from` target is a normal component call, so its own template chain applies"
+        );
+    }
+
+    #[test]
+    fn array_bodied_template_is_e010() {
+        let p = project_with(&[("main.yml", "a: 5\n$a:\n  - 1\n  - 2\n")]);
+        let d = compile_err(&p, "a", &Args::None);
+        assert_eq!(d.code, E010);
+        assert!(d.message.contains("rules 12–14"), "{}", d.message);
+    }
+
+    #[test]
+    fn array_result_in_non_array_chain_is_e010() {
+        let p = project_with(&[("main.yml", "a: [1, 2]\n$a: \"x\"\n")]);
+        let d = compile_err(&p, "a", &Args::None);
+        assert_eq!(d.code, E010, "origin array result into a non-array link");
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [1, 2]\na: 5\n$a: \"$arr()\"\n$$a: \"x\"\n",
+        )]);
+        let d = compile_err(&p, "a", &Args::None);
+        assert_eq!(d.code, E010, "mid-chain array result into a non-array link");
+        let p = project_with(&[("main.yml", "a: [1, 2]\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::array(vec![Value::int(1), Value::int(2)]),
+            "an array output with no further chain link is fine"
         );
     }
 }
