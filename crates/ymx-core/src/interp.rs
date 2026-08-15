@@ -8,11 +8,11 @@
 //! single interpolation keeps the interpoland's native type (Int, Float, Bool,
 //! String, Null, Object, Array — whatever the argument or the math engine
 //! yields); with surrounding text the result is a String in which each
-//! interpoland is rendered per the *Number→string rendering* rule (objects
-//! and arrays into text are `E011`).
+//! interpoland is rendered via the shared [`render_value`] helper (objects and
+//! arrays into text are `E011`).
 
 use crate::diag::{Diagnostic, Span, E003, E010, E011};
-use crate::ir::{render_f64, Value};
+use crate::ir::{render_value, Value};
 use crate::math::{MathEngine, Scope};
 
 /// One piece of an interpolated string.
@@ -149,10 +149,11 @@ pub fn scan(src: &str, base: Span) -> Result<Vec<Segment>, Diagnostic> {
 ///
 /// A single interpolation (`$name`, `$N`, or `${...}` with no surrounding
 /// text) yields the interpoland's native type. Any mixture of text and
-/// interpolations yields a String in which each interpoland is rendered per
-/// the *Number→string rendering* rule (Int plain, Float via
-/// [`render_f64`](crate::ir::render_f64), Bool `true`/`false`, Null `null`);
-/// Objects and Arrays rendered into text are `E011`.
+/// interpolations yields a String in which each interpoland is rendered via
+/// the shared [`render_value`] helper (PRD *Number→string rendering*: Int
+/// plain, Float via [`render_f64`](crate::ir::render_f64), Bool
+/// `true`/`false`, Null `null`); Objects and Arrays rendered into text are
+/// `E011`.
 ///
 /// `${...}` segments are evaluated through `engine` (the [`MathEngine`]
 /// boundary); `$name` / `$N` segments resolve against the scope's named /
@@ -219,10 +220,10 @@ fn resolve_arg(name: &str, span: Span, scope: &Scope) -> Result<Value, Diagnosti
     }
 }
 
-/// Render an interpolated value into surrounding text (per *Number→string
-/// rendering*); Objects and Arrays are `E011`.
+/// Render an interpolated value into surrounding text via the shared
+/// [`render_value`] helper; Objects and Arrays are `E011`.
 fn render_into_text(v: &Value, scope: &Scope, span: Span) -> Result<String, Diagnostic> {
-    match render_text(v) {
+    match render_value(v) {
         Ok(s) => Ok(s),
         Err(()) => Err(ctx_err(
             scope,
@@ -230,24 +231,6 @@ fn render_into_text(v: &Value, scope: &Scope, span: Span) -> Result<String, Diag
             E011,
             "objects and arrays have no string rendering".to_string(),
         )),
-    }
-}
-
-/// Number→string rendering: Int plain, Float via [`render_f64`], Bool
-/// `true`/`false`, Null `null`, String as-is. Objects and Arrays have no
-/// string rendering → `Err(())`.
-fn render_text(v: &Value) -> Result<String, ()> {
-    match v {
-        Value::Null => Ok("null".to_string()),
-        Value::Bool(b) => Ok(if *b {
-            "true".to_string()
-        } else {
-            "false".to_string()
-        }),
-        Value::Int(i) => Ok(i.to_string()),
-        Value::Float(f) => Ok(render_f64(*f)),
-        Value::String(s) => Ok(s.clone()),
-        Value::Array(_) | Value::Object(_) => Err(()),
     }
 }
 
@@ -407,6 +390,22 @@ mod tests {
             )
             .unwrap(),
             Value::string("p=123456789 r=2.5 w=2.0 f=true n=null")
+        );
+    }
+
+    #[test]
+    fn float_inside_text_keeps_fractional_part() {
+        // Integer-valued floats render with their fractional part inside
+        // interpolation (shared renderer; never Rust's `{}`).
+        let scope = scope_of(&[("ratio", Value::float(2.0))]);
+        assert_eq!(
+            resolve(&scan("ratio=$ratio", SPAN).unwrap(), &scope, &FakeEngine).unwrap(),
+            Value::string("ratio=2.0")
+        );
+        let scope = scope_of(&[("half", Value::float(2.5))]);
+        assert_eq!(
+            resolve(&scan("half=$half", SPAN).unwrap(), &scope, &FakeEngine).unwrap(),
+            Value::string("half=2.5")
         );
     }
 
