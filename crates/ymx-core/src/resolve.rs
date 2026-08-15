@@ -24,9 +24,15 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::diag::{Diagnostic, FileId, Span, E009};
+use indexmap::IndexMap;
+
+use crate::diag::{Diagnostic, FileId, Span, E002, E009};
+use crate::interp;
+use crate::ir::{Args, Value};
+use crate::math::{Scope, V1Engine};
 use crate::namespace::{classify, DefClass, Definition};
-use crate::project::{PlainMode, Project};
+use crate::parse::{key_to_string, Node};
+use crate::project::{Options, PlainMode, Project};
 
 /// Resolve the entry path `<folder.path>.<file>.<component>` against an
 /// already-loaded [`Project`].
@@ -286,6 +292,177 @@ pub fn resolve_ref<'a>(
             Err(LookupMiss::NotFound)
         }
         _ => Err(LookupMiss::NotFound),
+    }
+}
+
+// ---- Rule-1–16 resolver (milestone 1.6) ----
+
+/// Compile the namespace-qualified component `component` (a bare name resolved
+/// in the global namespace or `plain`-promoted, or a dotted namespace path
+/// `subdir.comp`) called with `args`, under `opts`.
+///
+/// For a bare `_`-prefixed (file-scoped) name there is no referencing
+/// document, so the owning file is resolved as the lowest [`FileId`] that
+/// defines the name (deterministic). `compile` resolves the entry path to the
+/// definition directly and never relies on that search.
+///
+/// Errors carry the definition's host-file path, the offending span, and the
+/// component name where sensible (invariant #5).
+pub fn compile_component(
+    project: &Project,
+    component: &str,
+    args: &Args,
+    opts: &Options,
+) -> Result<Value, Vec<Diagnostic>> {
+    let def = locate_definition(project, component, opts.plain.clone()).map_err(|d| vec![d])?;
+    Resolver::new(project, opts)
+        .call(def, args)
+        .map_err(|d| vec![d])
+}
+
+/// Convenience: resolve the entry path `opts.entry` (file-path form
+/// `<folder.path>.<file>.<component>`, invariant #1) to the component defined
+/// in the entry document and compile it with no args.
+pub fn compile(project: &Project, opts: &Options) -> Result<Value, Vec<Diagnostic>> {
+    let (file_id, namespace, component) =
+        resolve_entry(project, &opts.entry).map_err(|d| vec![d])?;
+    let def = if component.starts_with('_') {
+        project.file_scoped.get(file_id, component)
+    } else {
+        project.namespaces.get(&namespace, component)
+    };
+    let Some(def) = def else {
+        return Err(vec![Diagnostic {
+            file: Some(project.files[file_id.0 as usize].clone()),
+            line: 1,
+            col: 1,
+            component: Some(component.to_string()),
+            code: E002,
+            message: format!("component `{component}` is not defined in the entry file"),
+        }]);
+    };
+    Resolver::new(project, opts)
+        .call(def, &Args::None)
+        .map_err(|d| vec![d])
+}
+
+/// Locate the definition a `compile_component` call names: a bare non-`_` name
+/// resolves via [`resolve_ref`] (global namespace first, then `plain`
+/// promotion); a dotted name resolves against its namespace; a bare `_`
+/// (file-scoped) name resolves to its owner (lowest [`FileId`], deterministic).
+/// Misses are `E002`.
+fn locate_definition<'a>(
+    project: &'a Project,
+    component: &str,
+    plain: PlainMode,
+) -> Result<&'a Definition, Diagnostic> {
+    if component.starts_with('_') && !component.contains('.') {
+        let mut owners: Vec<(u32, &Definition)> = project
+            .file_scoped
+            .defs()
+            .filter(|(_, full, _)| *full == component)
+            .map(|(fid, _, def)| (fid.0, def))
+            .collect();
+        owners.sort_unstable_by_key(|(id, _)| *id);
+        match owners.into_iter().next() {
+            Some((_, def)) => Ok(def),
+            None => Err(unknown_component(component)),
+        }
+    } else {
+        match resolve_ref(project, component, FileId(0), plain) {
+            Ok(def) => Ok(def),
+            // FileScopeViolation is unreachable here: the `_`-prefixed branch
+            // above owns all file-scoped names.
+            Err(_) => Err(unknown_component(component)),
+        }
+    }
+}
+
+fn unknown_component(component: &str) -> Diagnostic {
+    Diagnostic {
+        file: None,
+        line: 1,
+        col: 1,
+        component: Some(component.to_string()),
+        code: E002,
+        message: format!("unknown component reference `{component}`"),
+    }
+}
+
+/// The rule-1–16 resolver: compiles one component at a time against an
+/// already-loaded [`Project`]. Created per top-level `compile` /
+/// `compile_component` call so the recursion state (depth cap, milestone 1.6
+/// task 9) is per-compilation.
+struct Resolver<'a> {
+    project: &'a Project,
+}
+
+impl<'a> Resolver<'a> {
+    fn new(project: &'a Project, _opts: &'a Options) -> Resolver<'a> {
+        Resolver { project }
+    }
+
+    /// Resolve `def` as a normal component call with `args`. Milestone 1.6
+    /// task 1: the rule-11 pipeline is a single body-resolution step; the
+    /// template chain (task 5) and `from`/shortcut dispatch (tasks 6–7) slot
+    /// in around it.
+    fn call(&self, def: &Definition, args: &Args) -> Result<Value, Diagnostic> {
+        let scope = self.scope_for(def, args);
+        self.resolve_body(&def.body, &scope)
+    }
+
+    /// The evaluation scope for `def` called with `args`: named/positional
+    /// arguments bound per rules 2/4, the definition's host-file path and key
+    /// span as diagnostic context.
+    fn scope_for(&self, def: &Definition, args: &Args) -> Scope {
+        Scope {
+            file: Some(self.project.files[def.file.0 as usize].clone()),
+            component: Some(def.full_name.clone()),
+            span: def.span,
+            named: args.named_vec(),
+            positional: args.positional_vec(),
+            last: None,
+            call: None,
+        }
+    }
+
+    /// Step 1 of rule 11 — property resolution. Task 1: the body resolves as a
+    /// plain value (scalars, arrays, objects, interpolated strings); nested
+    /// call-sites, mini-components, and key handling land with tasks 2–4.
+    fn resolve_body(&self, node: &Node, scope: &Scope) -> Result<Value, Diagnostic> {
+        self.resolve_node(node, scope)
+    }
+
+    /// Resolve one value node against `scope`. String scalars go through the
+    /// shared scanner/interpolator (bare `$name` / `$N` / `${...}`); a missing
+    /// argument is `E003` (rule 10) until the component fallback lands in
+    /// milestone 1.6 task 2.
+    fn resolve_node(&self, node: &Node, scope: &Scope) -> Result<Value, Diagnostic> {
+        match node {
+            Node::Null(_) => Ok(Value::Null),
+            Node::Bool(b, _) => Ok(Value::Bool(*b)),
+            Node::Int(i, _) => Ok(Value::Int(*i)),
+            Node::Float(f, _) => Ok(Value::Float(*f)),
+            Node::String(s, span) => {
+                let segments = interp::scan(s, *span)?;
+                interp::resolve(&segments, scope, &V1Engine)
+            }
+            Node::Array(items, _) => items
+                .iter()
+                .map(|n| self.resolve_node(n, scope))
+                .collect::<Result<Vec<Value>, _>>()
+                .map(Value::array),
+            Node::Object(entries, _) => {
+                let mut m = IndexMap::with_capacity(entries.len());
+                for entry in entries {
+                    m.insert(
+                        key_to_string(&entry.key),
+                        self.resolve_node(&entry.value, scope)?,
+                    );
+                }
+                Ok(Value::Object(m))
+            }
+        }
     }
 }
 
@@ -601,5 +778,205 @@ mod tests {
         // File-scoped resolution is not affected by promotion.
         let x = resolve_ref(&p, "_x", FileId(1), PlainMode::All).expect("owner wins");
         assert_eq!(x.file, FileId(1));
+    }
+
+    // ---- Milestone 1.6 task 1: compile / compile_component ----
+
+    /// Build a [`Project`] from `(relative_path, yaml_source)` pairs (no I/O —
+    /// ymx-core is I/O-free). The namespace of a definition is the directory
+    /// of its file (`""` for root files, dotted for subdirectories), mirroring
+    /// `load_project`.
+    fn project_with(files: &[(&str, &str)]) -> Project {
+        let mut p = Project::new();
+        p.root = PathBuf::from("/proj");
+        for (i, (path, src)) in files.iter().enumerate() {
+            p.files.push(PathBuf::from("/proj").join(path));
+            let node = crate::parse::parse_document(src).expect("parse fixture");
+            let ex = crate::namespace::extract_document(FileId(i as u32), &node);
+            let namespace = Path::new(path)
+                .parent()
+                .unwrap_or(Path::new(""))
+                .to_string_lossy()
+                .replace('/', ".");
+            for def in ex.defs {
+                p.namespaces.register(&namespace, def).unwrap();
+            }
+            for def in ex.file_scoped_defs {
+                p.file_scoped.register(FileId(i as u32), def).unwrap();
+            }
+        }
+        p
+    }
+
+    fn named(entries: &[(&str, Value)]) -> Args {
+        Args::Named(
+            entries
+                .iter()
+                .map(|(n, v)| (n.to_string(), v.clone()))
+                .collect(),
+        )
+    }
+
+    fn compile_ok(p: &Project, component: &str, args: &Args) -> Value {
+        compile_component(p, component, args, &Options::default())
+            .unwrap_or_else(|ds| panic!("{component}: {}", ds[0].message))
+    }
+
+    fn compile_err(p: &Project, component: &str, args: &Args) -> Diagnostic {
+        compile_component(p, component, args, &Options::default())
+            .unwrap_err()
+            .into_iter()
+            .next()
+            .expect("at least one diagnostic")
+    }
+
+    #[test]
+    fn compile_component_bare_global_and_dotted() {
+        let p = project_with(&[
+            ("main.yml", "main: hello\n"),
+            ("subdir/t.yml", "comp: 5\nbox: 1.5\n"),
+        ]);
+        assert_eq!(compile_ok(&p, "main", &Args::None), Value::string("hello"));
+        assert_eq!(compile_ok(&p, "subdir.comp", &Args::None), Value::int(5));
+        assert_eq!(compile_ok(&p, "subdir.box", &Args::None), Value::float(1.5));
+    }
+
+    #[test]
+    fn compile_component_unknown_name_is_e002() {
+        let p = project_with(&[("main.yml", "main: 1\n")]);
+        for component in ["nope", "subdir.nope", "a.b.c"] {
+            let d = compile_err(&p, component, &Args::None);
+            assert_eq!(d.code, E002, "{component}");
+            assert_eq!(d.component.as_deref(), Some(component), "{component}");
+        }
+    }
+
+    #[test]
+    fn compile_component_plain_promotion_for_bare_names() {
+        let p = project_with(&[("main.yml", "main: 1\n"), ("subdir/x.yml", "x: 7\n")]);
+        let err = compile_err(&p, "x", &Args::None);
+        assert_eq!(err.code, E002, "no promotion under the default plain mode");
+        let opts = Options {
+            plain: PlainMode::All,
+            ..Options::default()
+        };
+        assert_eq!(
+            compile_component(&p, "x", &Args::None, &opts).unwrap(),
+            Value::int(7),
+            "PlainMode::All promotes sub-namespace components"
+        );
+        // The dotted qualified path stays reachable alongside the promoted name.
+        assert_eq!(compile_ok(&p, "subdir.x", &Args::None), Value::int(7));
+    }
+
+    #[test]
+    fn compile_component_file_scoped_owner_search() {
+        let p = project_with(&[
+            ("main.yml", "_secret: 41\nmain: 1\n"),
+            ("a/b.yml", "_secret: 42\nb: 2\n"),
+        ]);
+        assert_eq!(
+            compile_ok(&p, "_secret", &Args::None),
+            Value::int(41),
+            "the lowest owning FileId wins deterministically"
+        );
+    }
+
+    #[test]
+    fn compile_component_binds_named_and_positional_args() {
+        let p = project_with(&[(
+            "main.yml",
+            "user:\n  name: $user_name\n  phone: $user_phone\nmain: $0 + $1\n",
+        )]);
+        assert_eq!(
+            compile_ok(
+                &p,
+                "user",
+                &named(&[
+                    ("user_name", Value::string("Mathew")),
+                    ("user_phone", Value::int(123456789))
+                ]),
+            ),
+            Value::object(IndexMap::from([
+                ("name".to_string(), Value::string("Mathew")),
+                ("phone".to_string(), Value::int(123456789)),
+            ]))
+        );
+        assert_eq!(
+            compile_ok(
+                &p,
+                "main",
+                &Args::Positional(vec![Value::int(12), Value::int(34)])
+            ),
+            Value::string("12 + 34")
+        );
+        assert_eq!(
+            compile_ok(
+                &p,
+                "main",
+                &Args::Mixed {
+                    named: vec![("x".to_string(), Value::int(1))],
+                    positional: vec![Value::int(12), Value::int(34)],
+                }
+            ),
+            Value::string("12 + 34")
+        );
+    }
+
+    #[test]
+    fn compile_component_resolves_plain_structures() {
+        let p = project_with(&[(
+            "main.yml",
+            "main:\n  a: [1, 2.5, true, null, \"x\"]\n  b:\n    c: hi\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([
+                (
+                    "a".to_string(),
+                    Value::array(vec![
+                        Value::int(1),
+                        Value::float(2.5),
+                        Value::bool(true),
+                        Value::null(),
+                        Value::string("x"),
+                    ])
+                ),
+                (
+                    "b".to_string(),
+                    Value::object(IndexMap::from([("c".to_string(), Value::string("hi"))]))
+                ),
+            ]))
+        );
+    }
+
+    #[test]
+    fn compile_resolves_entry_path_to_qualified_component() {
+        let p = project_with(&[
+            ("main.yml", "main: 1\n_private: 2\n"),
+            ("a/b.yml", "c: 3\n"),
+            ("subdir/t.yml", "t: 4\n"),
+        ]);
+        let opts = Options::default();
+        assert_eq!(compile(&p, &opts).unwrap(), Value::int(1));
+        let opts = Options {
+            entry: "a.b.c".to_string(),
+            ..Options::default()
+        };
+        assert_eq!(compile(&p, &opts).unwrap(), Value::int(3));
+        let opts = Options {
+            entry: "main._private".to_string(),
+            ..Options::default()
+        };
+        assert_eq!(compile(&p, &opts).unwrap(), Value::int(2));
+    }
+
+    #[test]
+    fn compile_missing_entry_component_is_e009() {
+        let p = project_with(&[("main.yml", "other: 1\n")]);
+        let ds = compile(&p, &Options::default()).unwrap_err();
+        assert_eq!(ds[0].code, E009);
+        assert_eq!(ds[0].file.as_deref(), Some(Path::new("/proj/main.yml")));
+        assert_eq!(ds[0].component.as_deref(), Some("main"));
     }
 }

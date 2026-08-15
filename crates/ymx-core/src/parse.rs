@@ -413,7 +413,7 @@ pub fn node_to_value(node: &Node) -> Value {
 }
 
 /// Stringify a mapping [`Key`] for [`Value::Object`] (rule-4 convention).
-fn key_to_string(key: &Key) -> String {
+pub(crate) fn key_to_string(key: &Key) -> String {
     match key {
         Key::Null => "null".to_string(),
         Key::Bool(b) => {

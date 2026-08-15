@@ -89,6 +89,28 @@ pub enum Args {
     },
 }
 
+impl Args {
+    /// The named entries of these args (empty for [`None`](Args::None) and
+    /// [`Positional`](Args::Positional)), in binding order.
+    pub fn named_vec(&self) -> Vec<(String, Value)> {
+        match self {
+            Args::None | Args::Positional(_) => Vec::new(),
+            Args::Named(v) => v.clone(),
+            Args::Mixed { named, .. } => named.clone(),
+        }
+    }
+
+    /// The positional entries of these args (empty for [`None`](Args::None)
+    /// and [`Named`](Args::Named)), in `$0`, `$1`, … order.
+    pub fn positional_vec(&self) -> Vec<Value> {
+        match self {
+            Args::None | Args::Named(_) => Vec::new(),
+            Args::Positional(v) => v.clone(),
+            Args::Mixed { positional, .. } => positional.clone(),
+        }
+    }
+}
+
 /// Single shared f64 renderer used for **both** JSON output of `Value::Float`
 /// and `${...}` string interpolation.
 ///
