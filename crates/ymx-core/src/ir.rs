@@ -107,6 +107,38 @@ pub fn render_f64(value: f64) -> String {
     buf.format(value).to_owned()
 }
 
+/// A value with no string rendering (an Array or an Object). [`render_value`]
+/// rejects these; callers raise `E011`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoStringRender;
+
+/// Single shared scalar-to-text renderer used for **both** string
+/// interpolation and math `+` string-concatenation (PRD *Number→string
+/// rendering*).
+///
+/// Int renders plainly (`20` → `"20"`), Float renders through [`render_f64`]
+/// (integer-valued floats keep their fractional part — `2.0` → `"2.0"`), Bool
+/// renders `"true"` / `"false"`, Null renders `"null"`, and String passes
+/// through unchanged. Objects and arrays have no meaningful string rendering
+/// (PRD *String syntax*) and are rejected with
+/// [`Err(NoStringRender)`](NoStringRender) — callers raise `E011`. Rust's
+/// default `{}` formatting is intentionally **not** used for floats
+/// (invariant #7).
+pub fn render_value(v: &Value) -> Result<String, NoStringRender> {
+    match v {
+        Value::Null => Ok("null".to_string()),
+        Value::Bool(b) => Ok(if *b {
+            "true".to_string()
+        } else {
+            "false".to_string()
+        }),
+        Value::Int(i) => Ok(i.to_string()),
+        Value::Float(f) => Ok(render_f64(*f)),
+        Value::String(s) => Ok(s.clone()),
+        Value::Array(_) | Value::Object(_) => Err(NoStringRender),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,6 +180,25 @@ mod tests {
         assert_eq!(render_f64(0.1), "0.1");
         assert_eq!(render_f64(2.5), "2.5");
         assert_eq!(render_f64(3.0_f64), "3.0");
+    }
+
+    #[test]
+    fn render_value_renders_scalars_to_text() {
+        assert_eq!(render_value(&Value::Int(20)).unwrap(), "20");
+        assert_eq!(render_value(&Value::Int(-7)).unwrap(), "-7");
+        assert_eq!(render_value(&Value::Float(2.0)).unwrap(), "2.0");
+        assert_eq!(render_value(&Value::Float(2.5)).unwrap(), "2.5");
+        assert_eq!(render_value(&Value::Float(0.1)).unwrap(), "0.1");
+        assert_eq!(render_value(&Value::Bool(true)).unwrap(), "true");
+        assert_eq!(render_value(&Value::Bool(false)).unwrap(), "false");
+        assert_eq!(render_value(&Value::Null).unwrap(), "null");
+        assert_eq!(render_value(&Value::string("x")).unwrap(), "x");
+    }
+
+    #[test]
+    fn render_value_rejects_containers() {
+        assert!(render_value(&Value::Array(vec![])).is_err());
+        assert!(render_value(&Value::Object(IndexMap::new())).is_err());
     }
 
     #[test]
