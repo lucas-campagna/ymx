@@ -21,6 +21,7 @@
 //! at the call boundary), and the diagnostic context.
 
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use crate::diag::{Diagnostic, Span, E002, E003, E008, E010, E011};
 use crate::ir::{render_value, Value};
@@ -32,12 +33,21 @@ use crate::ir::{render_value, Value};
 /// component-call hook. The trait is the boundary for swapping to a
 /// Lua/Python/JavaScript engine in the future (PRD *Architecture: Math*).
 pub trait MathEngine {
-    fn eval(&self, src: &str, scope: &Scope) -> Result<Value, Diagnostic>;
+    fn eval(&self, src: &str, scope: &Scope<'_>) -> Result<Value, Diagnostic>;
 }
 
 /// Component-call dispatch hook for math `name(...)` calls: receives the
-/// (possibly dotted) name and the positional argument values.
-pub type CallHook = Box<dyn Fn(&str, &[Value]) -> Result<Value, Diagnostic>>;
+/// (possibly dotted) name and the positional argument values. `Rc` keeps
+/// [`Scope`] clonable (the resolver builds child scopes per chain/dispatch
+/// step).
+pub type CallHook<'a> = Rc<dyn Fn(&str, &[Value]) -> Result<Value, Diagnostic> + 'a>;
+
+/// Bare-`$name` component fallback hook (rule 2): receives the argument name
+/// after the named-argument lookup misses; `Ok(Some(v))` is the fallback
+/// value, `Ok(None)` keeps the `E003` missing-argument error. Never consulted
+/// inside `${...}` math context (there is no fallback there — PRD *String
+/// syntax*).
+pub type FallbackHook<'a> = Rc<dyn Fn(&str) -> Result<Option<Value>, Diagnostic> + 'a>;
 
 /// Evaluation scope for `${...}` math and string interpolation.
 ///
@@ -45,10 +55,12 @@ pub type CallHook = Box<dyn Fn(&str, &[Value]) -> Result<Value, Diagnostic>>;
 /// the previous step's result in a reduce (`last`, rules 13/16 — `None`
 /// outside a reduce step or on its first step), the component-call dispatch
 /// hook for math `name(...)` calls (wired by the resolver in milestone 1.6,
-/// including the `E008` depth check at the call boundary), and the diagnostic
-/// context (`file`, `component`, and the base `span` math diagnostics are
-/// attributed to).
-pub struct Scope {
+/// including the `E008` depth check at the call boundary), the bare-`$name`
+/// component fallback hook (rule 2, string-interpolation path only), and the
+/// diagnostic context (`file`, `component`, and the base `span` math
+/// diagnostics are attributed to).
+#[derive(Clone)]
+pub struct Scope<'a> {
     /// Resolved host-file path for diagnostics.
     pub file: Option<PathBuf>,
     /// Compiling component name for diagnostics.
@@ -66,18 +78,21 @@ pub struct Scope {
     pub last: Option<Value>,
     /// Component-call dispatch hook for math `name(...)` calls ([`CallHook`]).
     /// `None` means no hook is registered (`invoke` then reports `E002`).
-    pub call: Option<CallHook>,
+    pub call: Option<CallHook<'a>>,
+    /// Bare-`$name` component fallback hook (rule 2); `None` keeps the plain
+    /// `E003` missing-argument error.
+    pub fallback: Option<FallbackHook<'a>>,
 }
 
-impl Default for Scope {
+impl<'a> Default for Scope<'a> {
     fn default() -> Self {
         Scope::new()
     }
 }
 
-impl Scope {
+impl<'a> Scope<'a> {
     /// Empty scope: no arguments, not in a reduce, no diagnostic context.
-    pub fn new() -> Scope {
+    pub fn new() -> Scope<'a> {
         Scope {
             file: None,
             component: None,
@@ -86,12 +101,13 @@ impl Scope {
             positional: Vec::new(),
             last: None,
             call: None,
+            fallback: None,
         }
     }
 
     /// Scope for a plain (non-reduce) call with `named` and `positional`
     /// arguments.
-    pub fn with_args(named: Vec<(String, Value)>, positional: Vec<Value>) -> Scope {
+    pub fn with_args(named: Vec<(String, Value)>, positional: Vec<Value>) -> Scope<'a> {
         Scope {
             named,
             positional,
@@ -103,7 +119,11 @@ impl Scope {
     /// step's result. The first step — or any evaluation outside a reduce —
     /// uses [`Scope::with_args`] / [`Scope::new`] instead, leaving `last`
     /// unset so that referencing `last` is `E003`.
-    pub fn reduce_step(named: Vec<(String, Value)>, positional: Vec<Value>, last: Value) -> Scope {
+    pub fn reduce_step(
+        named: Vec<(String, Value)>,
+        positional: Vec<Value>,
+        last: Value,
+    ) -> Scope<'a> {
         Scope {
             named,
             positional,
@@ -973,22 +993,22 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    fn eval_ok(src: &str, scope: &Scope) -> Value {
+    fn eval_ok(src: &str, scope: &Scope<'_>) -> Value {
         V1Engine
             .eval(src, scope)
             .unwrap_or_else(|d| panic!("{src}: {}", d.message))
     }
 
-    fn eval_err(src: &str, scope: &Scope) -> Diagnostic {
+    fn eval_err(src: &str, scope: &Scope<'_>) -> Diagnostic {
         match V1Engine.eval(src, scope) {
             Err(d) => d,
             Ok(v) => panic!("{src}: expected error, got {v:?}"),
         }
     }
 
-    fn hook(f: impl Fn(&str, &[Value]) -> Result<Value, Diagnostic> + 'static) -> Scope {
+    fn hook(f: impl Fn(&str, &[Value]) -> Result<Value, Diagnostic> + 'static) -> Scope<'static> {
         Scope {
-            call: Some(Box::new(f)),
+            call: Some(Rc::new(f)),
             ..Scope::new()
         }
     }

@@ -23,13 +23,14 @@
 //! to `E005`.
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use indexmap::IndexMap;
 
-use crate::diag::{Diagnostic, FileId, Span, E002, E009};
+use crate::diag::{Diagnostic, FileId, Span, E002, E009, E010};
 use crate::interp;
 use crate::ir::{Args, Value};
-use crate::math::{Scope, V1Engine};
+use crate::math::{FallbackHook, Scope, V1Engine};
 use crate::namespace::{classify, DefClass, Definition};
 use crate::parse::{key_to_string, Node};
 use crate::project::{Options, PlainMode, Project};
@@ -395,26 +396,37 @@ fn unknown_component(component: &str) -> Diagnostic {
 /// task 9) is per-compilation.
 struct Resolver<'a> {
     project: &'a Project,
+    opts: &'a Options,
 }
 
 impl<'a> Resolver<'a> {
-    fn new(project: &'a Project, _opts: &'a Options) -> Resolver<'a> {
-        Resolver { project }
+    fn new(project: &'a Project, opts: &'a Options) -> Resolver<'a> {
+        Resolver { project, opts }
     }
 
     /// Resolve `def` as a normal component call with `args`. Milestone 1.6
-    /// task 1: the rule-11 pipeline is a single body-resolution step; the
-    /// template chain (task 5) and `from`/shortcut dispatch (tasks 6–7) slot
-    /// in around it.
+    /// task 2: the rule-11 pipeline is step 1 (property resolution incl. the
+    /// rule-4 slots and the rule-2 fallback) followed by the output
+    /// conversion; the template chain (task 5) and `from`/shortcut dispatch
+    /// (tasks 6–7) slot in around it.
     fn call(&self, def: &Definition, args: &Args) -> Result<Value, Diagnostic> {
         let scope = self.scope_for(def, args);
-        self.resolve_body(&def.body, &scope)
+        let body = self.resolve_body(&def.body, &scope)?;
+        Ok(match body {
+            ResolvedBody::Value(v) => v,
+            ResolvedBody::Object(set) => set.to_object(),
+        })
     }
 
     /// The evaluation scope for `def` called with `args`: named/positional
     /// arguments bound per rules 2/4, the definition's host-file path and key
-    /// span as diagnostic context.
-    fn scope_for(&self, def: &Definition, args: &Args) -> Scope {
+    /// span as diagnostic context, and the rule-2 bare-`$name` fallback hook
+    /// (looks up the regular component `name` from `def`'s file and calls it
+    /// with no args; `_`-prefixed names resolve file-scoped).
+    fn scope_for<'s>(&'s self, def: &Definition, args: &Args) -> Scope<'s> {
+        let file = def.file;
+        let fallback: FallbackHook<'s> =
+            Rc::new(move |name: &str| self.lookup_component(file, name));
         Scope {
             file: Some(self.project.files[def.file.0 as usize].clone()),
             component: Some(def.full_name.clone()),
@@ -423,21 +435,102 @@ impl<'a> Resolver<'a> {
             positional: args.positional_vec(),
             last: None,
             call: None,
+            fallback: Some(fallback),
         }
     }
 
-    /// Step 1 of rule 11 — property resolution. Task 1: the body resolves as a
-    /// plain value (scalars, arrays, objects, interpolated strings); nested
-    /// call-sites, mini-components, and key handling land with tasks 2–4.
-    fn resolve_body(&self, node: &Node, scope: &Scope) -> Result<Value, Diagnostic> {
-        self.resolve_node(node, scope)
+    /// Rule-2 fallback (b): a regular component `name` reachable from `file`
+    /// is called with no args. `NotFound` / file-scope violations yield
+    /// `Ok(None)` so the caller reports the plain `E003`.
+    fn lookup_component(&self, file: FileId, name: &str) -> Result<Option<Value>, Diagnostic> {
+        match resolve_ref(self.project, name, file, self.opts.plain.clone()) {
+            Ok(def) => Ok(Some(self.call(def, &Args::None)?)),
+            Err(LookupMiss::NotFound | LookupMiss::FileScopeViolation { .. }) => Ok(None),
+        }
+    }
+
+    /// Step 1 of rule 11 — property resolution. The component body resolves
+    /// as either a plain value or a property set: an object body is a
+    /// [`PropertySet`] where non-negative integer keys denote positional
+    /// slots (rule 4); every other node resolves as a plain value (arrays,
+    /// scalars, interpolated strings, nested objects).
+    fn resolve_body(&self, node: &Node, scope: &Scope<'_>) -> Result<ResolvedBody, Diagnostic> {
+        match node {
+            Node::Object(entries, _) => self.resolve_property_set(entries, scope),
+            other => self.resolve_node(other, scope).map(ResolvedBody::Value),
+        }
+    }
+
+    /// Resolve an object component body into a [`PropertySet`] (rule 4):
+    /// integer keys `0..N` are slots — defaults for `$0..$N` that the call's
+    /// positional arguments overwrite; string keys (and negative/non-integer
+    /// keys) are ordinary named properties, the string `"0"` included.
+    ///
+    /// Two phases: the slots resolve first against the call's positional
+    /// arguments (a slot default referencing `$N` sees only the call's
+    /// positional args), then the named properties resolve against the
+    /// positional arguments padded with the slot defaults for every index the
+    /// call did not provide (rule 4: a body may provide a default `$N` by
+    /// writing the integer key).
+    fn resolve_property_set(
+        &self,
+        entries: &[crate::parse::Entry],
+        scope: &Scope<'_>,
+    ) -> Result<ResolvedBody, Diagnostic> {
+        let mut set = PropertySet::default();
+        for entry in entries {
+            match &entry.key {
+                crate::parse::Key::Int(i) if *i >= 0 => {
+                    let idx = *i as usize;
+                    if idx > MAX_SLOTS {
+                        return Err(ctx_err(
+                            scope,
+                            E010,
+                            format!("slot key `{i}` is too large (max {MAX_SLOTS})"),
+                        ));
+                    }
+                    // The call's positional argument overwrites the slot
+                    // (rule 4: a call may set a positional slot via the
+                    // integer key); the body value is the default.
+                    let default = self.resolve_node(&entry.value, scope)?;
+                    let value = scope.positional.get(idx).cloned().unwrap_or(default);
+                    if set.slots.len() <= idx {
+                        set.slots.resize(idx + 1, Value::Null);
+                    }
+                    set.slots[idx] = value;
+                    set.order.push(PropKey::Slot(idx));
+                }
+                _ => {
+                    let name = key_to_string(&entry.key);
+                    set.order.push(PropKey::Named(name));
+                }
+            }
+        }
+        let padded = Scope {
+            positional: padded_positional(&scope.positional, &set.slots),
+            ..scope.clone()
+        };
+        for entry in entries {
+            match &entry.key {
+                crate::parse::Key::String(name) => {
+                    let value = self.resolve_node(&entry.value, &padded)?;
+                    set.named.insert(name.clone(), value);
+                }
+                crate::parse::Key::Int(i) if *i < 0 => {
+                    let name = i.to_string();
+                    let value = self.resolve_node(&entry.value, &padded)?;
+                    set.named.insert(name, value);
+                }
+                _ => {}
+            }
+        }
+        Ok(ResolvedBody::Object(set))
     }
 
     /// Resolve one value node against `scope`. String scalars go through the
-    /// shared scanner/interpolator (bare `$name` / `$N` / `${...}`); a missing
-    /// argument is `E003` (rule 10) until the component fallback lands in
-    /// milestone 1.6 task 2.
-    fn resolve_node(&self, node: &Node, scope: &Scope) -> Result<Value, Diagnostic> {
+    /// shared scanner/interpolator: `$name` / `$N` / `${...}`, with the rule-2
+    /// component fallback after a named-argument miss.
+    fn resolve_node(&self, node: &Node, scope: &Scope<'_>) -> Result<Value, Diagnostic> {
         match node {
             Node::Null(_) => Ok(Value::Null),
             Node::Bool(b, _) => Ok(Value::Bool(*b)),
@@ -466,10 +559,81 @@ impl<'a> Resolver<'a> {
     }
 }
 
+/// Upper bound on slot indices (a cap far beyond any real document; guard
+/// against a hostile `999999999:` key resizing the slots vector).
+const MAX_SLOTS: usize = 65_535;
+
+/// A resolved object component body (rule 11 step 1): the named properties,
+/// the positional slots, and the source order for output.
+#[derive(Default)]
+struct PropertySet {
+    /// Named properties (string keys and stringified non-slot keys).
+    named: IndexMap<String, Value>,
+    /// Slot values (`$N` defaults, overwritten by the call's positional
+    /// arguments).
+    slots: Vec<Value>,
+    /// Source order of the body's keys, for output and later chain views.
+    order: Vec<PropKey>,
+}
+
+/// One key of a resolved property set, in source order.
+#[derive(Debug, Clone, PartialEq)]
+enum PropKey {
+    /// A named property key.
+    Named(String),
+    /// A positional slot (integer key `0`, `1`, …).
+    Slot(usize),
+}
+
+/// The result of rule-11 step 1: a plain value or an object property set.
+enum ResolvedBody {
+    Value(Value),
+    Object(PropertySet),
+}
+
+impl PropertySet {
+    /// The output object: keys in source order, slots stringified as their
+    /// decimal index, duplicates dropped (first occurrence wins).
+    fn to_object(&self) -> Value {
+        let mut m = IndexMap::with_capacity(self.order.len());
+        for key in &self.order {
+            let (name, value) = match key {
+                PropKey::Named(name) => (name.clone(), self.named[name].clone()),
+                PropKey::Slot(idx) => (idx.to_string(), self.slots[*idx].clone()),
+            };
+            m.entry(name).or_insert(value);
+        }
+        Value::Object(m)
+    }
+}
+
+/// The call's positional arguments padded with the slot defaults for every
+/// index the call did not provide (rule 4: slots are defaults).
+fn padded_positional(call: &[Value], slots: &[Value]) -> Vec<Value> {
+    let mut v = call.to_vec();
+    if v.len() < slots.len() {
+        v.extend_from_slice(&slots[v.len()..]);
+    }
+    v
+}
+
+/// A diagnostic attributed to `scope`'s file/component context at its base
+/// span.
+fn ctx_err(scope: &Scope<'_>, code: &'static str, message: String) -> Diagnostic {
+    Diagnostic {
+        file: scope.file.clone(),
+        line: scope.span.line,
+        col: scope.span.col,
+        component: scope.component.clone(),
+        code,
+        message,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diag::Span;
+    use crate::diag::{Span, E003};
     use crate::namespace::Definition;
     use crate::parse::Node;
 
@@ -978,5 +1142,208 @@ mod tests {
         assert_eq!(ds[0].code, E009);
         assert_eq!(ds[0].file.as_deref(), Some(Path::new("/proj/main.yml")));
         assert_eq!(ds[0].component.as_deref(), Some("main"));
+    }
+
+    // ---- Milestone 1.6 task 2: arg binding, rule-2 fallback, rule-4 slots ----
+
+    #[test]
+    fn bare_dollar_name_fallback_order() {
+        let p = project_with(&[(
+            "main.yml",
+            "x: 5\ncaller: \"got $x\"\nmissing: \"$nope\"\nargs_user: \"hi $0\"\ngreeter: \"$args_user\"\n",
+        )]);
+        // (b) no named arg in scope -> regular component called with no args.
+        assert_eq!(
+            compile_ok(&p, "caller", &Args::None),
+            Value::string("got 5")
+        );
+        // (a) named arg in scope wins over the component.
+        assert_eq!(
+            compile_ok(&p, "caller", &named(&[("x", Value::string("arg"))])),
+            Value::string("got arg")
+        );
+        // (c) neither -> E003.
+        let d = compile_err(&p, "missing", &Args::None);
+        assert_eq!(d.code, E003);
+        assert!(d.message.contains("nope"), "{}", d.message);
+        // The fallback call passes no args: `args_user` needs `$0`, so the
+        // error surfaces from inside the callee (even when the caller itself
+        // was invoked with positional args — the fallback is always no-args).
+        let d = compile_err(&p, "greeter", &Args::None);
+        assert_eq!(d.code, E003);
+        assert!(d.message.contains("$0"), "{}", d.message);
+        let d = compile_err(&p, "greeter", &Args::Positional(vec![Value::string("bob")]));
+        assert_eq!(d.code, E003);
+    }
+
+    #[test]
+    fn bare_dollar_name_fallback_consults_own_scope_only() {
+        let p = project_with(&[("main.yml", "main: \"n=$x\"\n"), ("a/b.yml", "x: 7\n")]);
+        // The fallback resolves from the referencing component's file: the
+        // sub-namespace `x` is NOT visible from main.yml.
+        let d = compile_err(&p, "main", &Args::None);
+        assert_eq!(d.code, E003);
+        // But `subdir.x`-style qualified names work via math, not bare `$name`.
+        let opts = Options {
+            plain: PlainMode::All,
+            ..Options::default()
+        };
+        assert_eq!(
+            compile_component(&p, "main", &Args::None, &opts).unwrap(),
+            Value::string("n=7"),
+            "PlainMode::All promotes the sub-namespace component"
+        );
+    }
+
+    #[test]
+    fn bare_dollar_name_fallback_resolves_file_scoped() {
+        let p = project_with(&[("main.yml", "_secret: 41\nmain: \"v=$_secret\"\n")]);
+        assert_eq!(compile_ok(&p, "main", &Args::None), Value::string("v=41"));
+        // A file-scoped name from another file is not visible.
+        let p = project_with(&[
+            ("main.yml", "main: \"v=$_secret\"\n"),
+            ("a/b.yml", "_secret: 41\nb: 1\n"),
+        ]);
+        let d = compile_err(&p, "main", &Args::None);
+        assert_eq!(d.code, E003);
+    }
+
+    #[test]
+    fn no_fallback_inside_math_context() {
+        let p = project_with(&[("main.yml", "x: 5\nmain: \"${x}\"\n")]);
+        // PRD *String syntax*: math bare identifiers have no component
+        // fallback; `x` is neither an argument nor `last` -> E003.
+        let d = compile_err(&p, "main", &Args::None);
+        assert_eq!(d.code, E003);
+        assert!(d.message.contains("x"), "{}", d.message);
+    }
+
+    #[test]
+    fn integer_keys_are_positional_slots() {
+        let p = project_with(&[("main.yml", "main:\n  0: hello\n  name: $0\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([
+                ("0".to_string(), Value::string("hello")),
+                ("name".to_string(), Value::string("hello")),
+            ])),
+            "slots appear stringified and named props read the slot default"
+        );
+        assert_eq!(
+            compile_ok(&p, "main", &Args::Positional(vec![Value::string("x")])),
+            Value::object(IndexMap::from([
+                ("0".to_string(), Value::string("x")),
+                ("name".to_string(), Value::string("x")),
+            ])),
+            "the call's positional argument overwrites the slot"
+        );
+    }
+
+    #[test]
+    fn slots_are_defaults_for_missing_positionals_only() {
+        let p = project_with(&[(
+            "main.yml",
+            "main:\n  0: d0\n  1: d1\n  2: d2\n  out: \"$0/$1/$2\"\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([
+                ("0".to_string(), Value::string("d0")),
+                ("1".to_string(), Value::string("d1")),
+                ("2".to_string(), Value::string("d2")),
+                ("out".to_string(), Value::string("d0/d1/d2")),
+            ]))
+        );
+        assert_eq!(
+            compile_ok(&p, "main", &Args::Positional(vec![Value::string("a")])),
+            Value::object(IndexMap::from([
+                ("0".to_string(), Value::string("a")),
+                ("1".to_string(), Value::string("d1")),
+                ("2".to_string(), Value::string("d2")),
+                ("out".to_string(), Value::string("a/d1/d2")),
+            ])),
+            "only the provided index is overwritten"
+        );
+        assert_eq!(
+            compile_ok(
+                &p,
+                "main",
+                &Args::Mixed {
+                    named: vec![("k".to_string(), Value::int(9))],
+                    positional: vec![Value::string("a"), Value::string("b")],
+                }
+            ),
+            Value::object(IndexMap::from([
+                ("0".to_string(), Value::string("a")),
+                ("1".to_string(), Value::string("b")),
+                ("2".to_string(), Value::string("d2")),
+                ("out".to_string(), Value::string("a/b/d2")),
+            ]))
+        );
+    }
+
+    #[test]
+    fn slot_defaults_resolve_against_the_call_scope() {
+        let p = project_with(&[("main.yml", "main:\n  0: \"hi $n\"\n  out: $0\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &named(&[("n", Value::string("bob"))])),
+            Value::object(IndexMap::from([
+                ("0".to_string(), Value::string("hi bob")),
+                ("out".to_string(), Value::string("hi bob")),
+            ]))
+        );
+    }
+
+    #[test]
+    fn string_zero_and_negative_keys_are_ordinary() {
+        let p = project_with(&[(
+            "main.yml",
+            "main:\n  0: slot\n  \"0\": named\n  -1: neg\n  x: 1\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([
+                ("0".to_string(), Value::string("slot")),
+                ("-1".to_string(), Value::string("neg")),
+                ("x".to_string(), Value::int(1)),
+            ])),
+            "duplicate output keys drop the later occurrence (first wins)"
+        );
+    }
+
+    #[test]
+    fn slot_keys_keep_source_order_in_output() {
+        let p = project_with(&[("main.yml", "main:\n  a: 1\n  0: z\n  b: 2\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([
+                ("a".to_string(), Value::int(1)),
+                ("0".to_string(), Value::string("z")),
+                ("b".to_string(), Value::int(2)),
+            ]))
+        );
+    }
+
+    #[test]
+    fn nested_objects_have_no_slot_semantics() {
+        let p = project_with(&[("main.yml", "main:\n  a:\n    0: x\n    1: y\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([(
+                "a".to_string(),
+                Value::object(IndexMap::from([
+                    ("0".to_string(), Value::string("x")),
+                    ("1".to_string(), Value::string("y")),
+                ])),
+            )]))
+        );
+    }
+
+    #[test]
+    fn oversized_slot_key_is_e010() {
+        let p = project_with(&[("main.yml", "main:\n  65536: x\n")]);
+        let d = compile_err(&p, "main", &Args::None);
+        assert_eq!(d.code, E010);
+        assert!(d.message.contains("slot"), "{}", d.message);
     }
 }
