@@ -246,12 +246,9 @@ fn parse_b(
     b_check(project, file, component, value)?;
     let args = match m.get("args") {
         None => TestArgs::None,
-        Some(Value::Object(named)) => TestArgs::Named(
-            named
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-        ),
+        Some(Value::Object(named)) => {
+            TestArgs::Named(named.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        }
         Some(Value::Array(positional)) => TestArgs::Positional(positional.clone()),
         Some(scalar) => TestArgs::Scalar(scalar.clone()),
     };
@@ -383,7 +380,11 @@ pub fn run_tests(project: &Project, opts: &Options) -> Vec<TestResult> {
                     Ok(_) => false,
                 },
             };
-            TestResult { test, actual, passed }
+            TestResult {
+                test,
+                actual,
+                passed,
+            }
         })
         .collect()
 }
@@ -397,5 +398,483 @@ fn test_args(args: &TestArgs) -> Args {
         TestArgs::Named(named) => Args::Named(named.clone()),
         TestArgs::Positional(positional) => Args::Positional(positional.clone()),
         TestArgs::Scalar(scalar) => Args::Positional(vec![scalar.clone()]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    use ymx_core::diag::{E001, E002, E009, E010};
+    use ymx_core::namespace::Definition;
+    use ymx_core::parse::{node_to_value, parse_document, Node};
+
+    const SPAN: Span = Span { line: 1, col: 1 };
+
+    fn def(file: u32, name: &str) -> Definition {
+        Definition {
+            file: FileId(file),
+            full_name: name.to_string(),
+            span: SPAN,
+            body: Node::Int(1, SPAN),
+        }
+    }
+
+    fn def_body(file: u32, name: &str, body: Node) -> Definition {
+        Definition {
+            file: FileId(file),
+            full_name: name.to_string(),
+            span: SPAN,
+            body,
+        }
+    }
+
+    /// Project rooted at `/proj`:
+    /// * `main.yml`     (FileId 0): `main`, `result`, `args`, `error`; file-scoped `_x`
+    /// * `a/b.yml`      (FileId 1): `x`
+    /// * `subdir/t.yml` (FileId 2): `t`, `x`
+    fn project() -> Project {
+        let mut p = Project::new();
+        p.root = PathBuf::from("/proj");
+        p.files = vec![
+            PathBuf::from("/proj/main.yml"),
+            PathBuf::from("/proj/a/b.yml"),
+            PathBuf::from("/proj/subdir/t.yml"),
+        ];
+        p.namespaces.register("", def(0, "main")).unwrap();
+        p.namespaces.register("", def(0, "$box")).unwrap();
+        p.namespaces.register("", def(0, "result")).unwrap();
+        p.namespaces.register("", def(0, "args")).unwrap();
+        p.namespaces.register("", def(0, "error")).unwrap();
+        p.namespaces.register("a", def(1, "x")).unwrap();
+        p.namespaces.register("subdir", def(2, "t")).unwrap();
+        p.namespaces.register("subdir", def(2, "x")).unwrap();
+        p.file_scoped.register(FileId(0), def(0, "_x")).unwrap();
+        p
+    }
+
+    /// Raw span-less value of inline YAML (mirrors ymx-config's `value_of`).
+    fn value_of(src: &str) -> Value {
+        node_to_value(&parse_document(src).expect("parse inline yaml"))
+    }
+
+    /// Attach a raw `_test` value to document `file`.
+    fn with_test(mut p: Project, file: u32, src: &str) -> Project {
+        p.raw_meta_test.push((FileId(file), value_of(src)));
+        p
+    }
+
+    // ---- malformed `_test` B mappings -> E010 (unreachable-by-construction
+    // diagnostics, exercised via crate #[test]) ----
+
+    #[test]
+    fn b_mapping_missing_both_result_and_error_is_e010() {
+        // The top-level / type-2 disambiguation only classifies a mapping as a
+        // B when it contains `result` or `error`, so a both-missing B is
+        // unreachable through parse_tests; the invariant is enforced
+        // defensively and exercised here against the B validator directly.
+        let p = project();
+        let v = value_of("args: [1]\n");
+        let diag = b_check(&p, FileId(0), Some("main"), &v).unwrap_err();
+        assert_eq!(diag.code, E010);
+        assert_eq!(diag.file.as_deref(), Some(Path::new("/proj/main.yml")));
+        assert_eq!((diag.line, diag.col), (1, 1));
+        assert_eq!(diag.component.as_deref(), Some("main"));
+        assert!(diag.message.contains("result"), "{}", diag.message);
+    }
+
+    #[test]
+    fn type2_b_with_both_result_and_error_is_e010() {
+        let p = with_test(project(), 0, "main:\n  result: 1\n  error: \"E002\"\n");
+        let diags = parse_tests(&p).unwrap_err();
+        assert_eq!(diags.len(), 1);
+        let d = &diags[0];
+        assert_eq!(d.code, E010);
+        assert_eq!(d.file.as_deref(), Some(Path::new("/proj/main.yml")));
+        assert_eq!((d.line, d.col), (1, 1));
+        assert_eq!(d.component.as_deref(), Some("main"));
+        assert!(d.message.contains("mutually exclusive"), "{}", d.message);
+    }
+
+    #[test]
+    fn bare_b_with_both_result_and_error_is_e010() {
+        let p = with_test(project(), 0, "result: 1\nerror: \"E002\"\n");
+        let diags = parse_tests(&p).unwrap_err();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, E010);
+        assert_eq!(
+            diags[0].component, None,
+            "a bare B is not keyed by a target"
+        );
+    }
+
+    #[test]
+    fn type2_b_with_non_string_error_is_e010() {
+        for src in ["main:\n  error: 5\n", "main:\n  error: [\"E002\"]\n"] {
+            let p = with_test(project(), 0, src);
+            let diags = parse_tests(&p).unwrap_err();
+            assert_eq!(diags.len(), 1, "{src}");
+            assert_eq!(diags[0].code, E010, "{src}");
+            assert_eq!(diags[0].component.as_deref(), Some("main"), "{src}");
+            assert!(
+                diags[0].message.contains("string"),
+                "{src}: {}",
+                diags[0].message
+            );
+        }
+    }
+
+    #[test]
+    fn bare_b_with_non_string_error_is_e010() {
+        let p = with_test(project(), 0, "error: 5\n");
+        let diags = parse_tests(&p).unwrap_err();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, E010);
+        assert_eq!(diags[0].component, None);
+    }
+
+    #[test]
+    fn list_element_that_is_not_a_mapping_is_e010() {
+        // A list element can never be bare A/B (same anchoring), so a scalar
+        // element is malformed; the other element still parses.
+        let p = with_test(project(), 0, "- main: 1\n- 2\n");
+        let diags = parse_tests(&p).unwrap_err();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, E010);
+        assert_eq!(diags[0].component, None);
+    }
+
+    // ---- host-doc E001 (unreachable-by-construction: an un-parseable
+    // carrier document never reaches parse_tests) ----
+
+    #[test]
+    fn host_doc_parse_error_is_e001() {
+        let err = parse_document("---\na: 1\n---\nb: 2\n").unwrap_err();
+        let d = err.into_diagnostic(PathBuf::from("/proj/main.yml"));
+        assert_eq!(d.code, E001);
+        assert_eq!(d.file.as_deref(), Some(Path::new("/proj/main.yml")));
+        assert!(d.message.contains("multi-document"), "{}", d.message);
+    }
+
+    // ---- shapes ----
+
+    #[test]
+    fn bare_a_targets_the_entry_with_no_args() {
+        let p = with_test(project(), 0, "42\n");
+        let tests = parse_tests(&p).expect("bare A");
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].target, "main");
+        assert_eq!(tests[0].args, TestArgs::None);
+        assert_eq!(tests[0].expected, Expected::Value(Value::Int(42)));
+        assert_eq!(tests[0].file, FileId(0));
+        assert_eq!(tests[0].span, SPAN);
+    }
+
+    #[test]
+    fn bare_b_value_targets_the_entry() {
+        let p = with_test(project(), 0, "result: 5\n");
+        let tests = parse_tests(&p).expect("bare B value");
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].target, "main");
+        assert_eq!(tests[0].expected, Expected::Value(Value::Int(5)));
+
+        let p = with_test(project(), 0, "args: [1]\nresult: 5\n");
+        let tests = parse_tests(&p).expect("bare B value with args");
+        assert_eq!(tests[0].args, TestArgs::Positional(vec![Value::Int(1)]));
+    }
+
+    #[test]
+    fn bare_b_error_targets_the_entry() {
+        let p = with_test(project(), 0, "error: \"E002\"\n");
+        let tests = parse_tests(&p).expect("bare B error");
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].target, "main");
+        assert_eq!(
+            tests[0].expected,
+            Expected::Error {
+                code: "E002".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn top_level_result_mapping_is_bare_b_not_type2() {
+        // `result:` at the top level is a bare B targeting the entry — the
+        // list-wrapping escape is what redirects it to a component named
+        // `result`.
+        let p = with_test(project(), 0, "result: 1\n");
+        let tests = parse_tests(&p).expect("bare B");
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].target, "main");
+        assert_eq!(tests[0].expected, Expected::Value(Value::Int(1)));
+    }
+
+    #[test]
+    fn type2_map_value_and_error_variants() {
+        let p = with_test(project(), 0, "main: 1\n$box: {args: [2], result: 3}\n");
+        let tests = parse_tests(&p).expect("type-2 map");
+        assert_eq!(tests.len(), 2);
+        assert_eq!(tests[0].target, "main");
+        assert_eq!(tests[0].expected, Expected::Value(Value::Int(1)));
+        assert_eq!(tests[1].target, "$box");
+        assert_eq!(tests[1].args, TestArgs::Positional(vec![Value::Int(2)]));
+        assert_eq!(tests[1].expected, Expected::Value(Value::Int(3)));
+
+        let p = with_test(project(), 0, "main: {error: \"E002\"}\n");
+        let tests = parse_tests(&p).expect("type-2 error variant");
+        assert_eq!(tests.len(), 1);
+        assert_eq!(
+            tests[0].expected,
+            Expected::Error {
+                code: "E002".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn type2_mapping_value_without_result_or_error_is_a_literal_a() {
+        // A mapping value without `result`/`error` is an A: the expected value
+        // is the mapping itself.
+        let p = with_test(project(), 0, "main: {a: 1}\n");
+        let tests = parse_tests(&p).expect("type-2 A");
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].expected, Expected::Value(value_of("a: 1\n")));
+    }
+
+    #[test]
+    fn type2_sub_namespace_targets_emit_dotted_form() {
+        // The `_test` block lives in subdir/t.yml (FileId 2), so its same-doc
+        // targets `t`/`x` emit the dotted `subdir.t`/`subdir.x` forms.
+        let p = with_test(project(), 2, "t: 1\nx: {args: 2, result: 3}\n");
+        let tests = parse_tests(&p).expect("subdir type-2 map");
+        assert_eq!(tests.len(), 2);
+        assert_eq!(tests[0].target, "subdir.t");
+        assert_eq!(tests[1].target, "subdir.x");
+        assert_eq!(tests[1].args, TestArgs::Scalar(Value::Int(2)));
+    }
+
+    #[test]
+    fn file_scoped_underscore_target_resolves_bare() {
+        let p = with_test(project(), 0, "_x: 1\n");
+        let tests = parse_tests(&p).expect("file-scoped target");
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].target, "_x");
+        assert_eq!(tests[0].expected, Expected::Value(Value::Int(1)));
+    }
+
+    #[test]
+    fn list_of_type2_maps() {
+        let p = with_test(project(), 0, "- main: 1\n- main: 2\n");
+        let tests = parse_tests(&p).expect("list of type-2 maps");
+        assert_eq!(tests.len(), 2);
+        assert_eq!(tests[0].target, "main");
+        assert_eq!(tests[0].expected, Expected::Value(Value::Int(1)));
+        assert_eq!(tests[1].expected, Expected::Value(Value::Int(2)));
+    }
+
+    #[test]
+    fn list_wrapping_escape_targets_named_result_args_error() {
+        // Wrapped in a list, `result`/`args`/`error` are type-2 target names;
+        // unwrapped they would be bare-B keys targeting the entry.
+        let p = with_test(project(), 0, "- result: 1\n- args: 2\n- error: 3\n");
+        let tests = parse_tests(&p).expect("list-wrapping escape");
+        assert_eq!(tests.len(), 3);
+        assert_eq!(tests[0].target, "result");
+        assert_eq!(tests[0].expected, Expected::Value(Value::Int(1)));
+        assert_eq!(tests[1].target, "args");
+        assert_eq!(tests[2].target, "error");
+        assert_eq!(tests[2].expected, Expected::Value(Value::Int(3)));
+    }
+
+    #[test]
+    fn b_args_forms_map_to_test_args() {
+        let cases = [
+            (
+                "main: {args: {a: 1, b: 2}, result: 3}\n",
+                TestArgs::Named(vec![
+                    ("a".to_string(), Value::Int(1)),
+                    ("b".to_string(), Value::Int(2)),
+                ]),
+            ),
+            (
+                "main: {args: [1, 2], result: 3}\n",
+                TestArgs::Positional(vec![Value::Int(1), Value::Int(2)]),
+            ),
+            (
+                "main: {args: 7, result: 8}\n",
+                TestArgs::Scalar(Value::Int(7)),
+            ),
+            ("main: {result: 1}\n", TestArgs::None),
+        ];
+        for (src, expected_args) in cases {
+            let p = with_test(project(), 0, src);
+            let tests = parse_tests(&p).expect(src);
+            assert_eq!(tests.len(), 1, "{src}");
+            assert_eq!(tests[0].args, expected_args, "{src}");
+        }
+    }
+
+    #[test]
+    fn extra_keys_in_a_b_mapping_are_ignored() {
+        let p = with_test(project(), 0, "main: {result: 1, extra: 2}\n");
+        let tests = parse_tests(&p).expect("extra keys ignored");
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].expected, Expected::Value(Value::Int(1)));
+    }
+
+    // ---- same-document targeting ----
+
+    #[test]
+    fn cross_document_target_is_e002() {
+        // `x` is defined in a/b.yml and subdir/t.yml, not in main.yml, which
+        // hosts the `_test` block; `t` is likewise foreign. All misses are
+        // collected (no short-circuit).
+        let p = with_test(project(), 0, "x: 1\nt: 2\n");
+        let diags = parse_tests(&p).unwrap_err();
+        assert_eq!(diags.len(), 2);
+        for d in &diags {
+            assert_eq!(d.code, E002);
+            assert_eq!(d.file.as_deref(), Some(Path::new("/proj/main.yml")));
+            assert_eq!((d.line, d.col), (1, 1));
+        }
+        let components: Vec<&str> = diags
+            .iter()
+            .map(|d| d.component.as_deref().unwrap())
+            .collect();
+        assert_eq!(components, ["x", "t"]);
+    }
+
+    #[test]
+    fn unknown_target_with_malformed_b_reports_both() {
+        // `nope` is unknown (E002) and its B is malformed (both result+error,
+        // E010) — independent errors, both collected.
+        let p = with_test(project(), 0, "nope:\n  result: 1\n  error: \"E002\"\n");
+        let diags = parse_tests(&p).unwrap_err();
+        assert_eq!(diags.len(), 2);
+        assert!(diags.iter().any(|d| d.code == E002));
+        assert!(diags.iter().any(|d| d.code == E010));
+    }
+
+    #[test]
+    fn no_test_blocks_parse_to_empty_without_entry() {
+        let p = project();
+        let tests = parse_tests(&p).expect("no _test blocks");
+        assert!(tests.is_empty());
+
+        // No tests and no entry file: the entry is never resolved.
+        let mut p = Project::new();
+        p.root = PathBuf::from("/proj");
+        p.files = vec![PathBuf::from("/proj/a/b.yml")];
+        p.namespaces.register("a", def(1, "x")).unwrap();
+        assert!(parse_tests(&p).expect("no tests").is_empty());
+    }
+
+    #[test]
+    fn unresolvable_default_entry_is_e009() {
+        // No main.yml anywhere, yet a `_test` block exists: bare A/B cannot
+        // produce a target, so the default-entry E009 propagates.
+        let mut p = Project::new();
+        p.root = PathBuf::from("/proj");
+        p.files = vec![PathBuf::from("/proj/a/b.yml")];
+        p.namespaces.register("a", def(1, "x")).unwrap();
+        let p = with_test(p, 1, "5\n");
+        let diags = parse_tests(&p).unwrap_err();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, E009);
+    }
+
+    // ---- run_tests ----
+
+    #[test]
+    fn run_tests_value_match_and_mismatch() {
+        let p = with_test(project(), 0, "main: 1\n");
+        let results = run_tests(&p, &Options::default());
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed);
+        assert!(
+            matches!(&results[0].actual, Ok(v) if v == &Value::Int(1)),
+            "actual = Ok for value tests"
+        );
+
+        let p = with_test(project(), 0, "main: 2\n");
+        let results = run_tests(&p, &Options::default());
+        assert!(!results[0].passed);
+        assert!(matches!(&results[0].actual, Ok(v) if v == &Value::Int(1)));
+    }
+
+    #[test]
+    fn run_tests_error_code_match_and_mismatch() {
+        let p = with_test(nope_project(), 0, "main: {error: \"E002\"}\n");
+        let results = run_tests(&p, &Options::default());
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed, "E002 matches the compile diagnostic");
+        assert!(results[0].actual.is_err());
+
+        let p = with_test(nope_project(), 0, "main: {error: \"E008\"}\n");
+        let results = run_tests(&p, &Options::default());
+        assert!(!results[0].passed, "E008 does not match");
+        assert!(results[0].actual.is_err());
+    }
+
+    /// `main.yml` defining `main` whose body calls the unknown component
+    /// `nope` — a compile-time `E002` on every call.
+    fn nope_project() -> Project {
+        let mut p = Project::new();
+        p.root = PathBuf::from("/proj");
+        p.files = vec![PathBuf::from("/proj/main.yml")];
+        p.namespaces
+            .register(
+                "",
+                def_body(0, "main", Node::String("$nope(1)".to_string(), SPAN)),
+            )
+            .unwrap();
+        p
+    }
+
+    #[test]
+    fn run_tests_args_are_literal_and_bind_into_the_target() {
+        // `$x` inside `args` is a literal string; `main`'s body `$a` resolves
+        // it against the bound argument, so the result is the literal `$x`.
+        let mut p = Project::new();
+        p.root = PathBuf::from("/proj");
+        p.files = vec![PathBuf::from("/proj/main.yml")];
+        p.namespaces
+            .register(
+                "",
+                def_body(0, "main", Node::String("$a".to_string(), SPAN)),
+            )
+            .unwrap();
+        let p = with_test(p, 0, "main: {args: {a: \"$x\"}, result: \"$x\"}\n");
+        let results = run_tests(&p, &Options::default());
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].test.args,
+            TestArgs::Named(vec![("a".to_string(), Value::String("$x".to_string()))])
+        );
+        assert!(results[0].passed);
+
+        // A scalar binds `$0`; the literal value flows into the target.
+        let mut p = Project::new();
+        p.root = PathBuf::from("/proj");
+        p.files = vec![PathBuf::from("/proj/main.yml")];
+        p.namespaces
+            .register(
+                "",
+                def_body(0, "main", Node::String("$0".to_string(), SPAN)),
+            )
+            .unwrap();
+        let p = with_test(p, 0, "main: {args: 5, result: 5}\n");
+        let results = run_tests(&p, &Options::default());
+        assert!(results[0].passed);
+    }
+
+    #[test]
+    fn run_tests_internal_parse_error_returns_empty() {
+        // The caller is required to surface parse_tests' Err first; run_tests
+        // re-parses internally and degrades to no results on failure.
+        let p = with_test(project(), 0, "main:\n  result: 1\n  error: \"E002\"\n");
+        assert!(parse_tests(&p).is_err());
+        assert!(run_tests(&p, &Options::default()).is_empty());
     }
 }

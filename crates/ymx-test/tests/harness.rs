@@ -128,7 +128,8 @@ fn value_text(v: &Value) -> String {
 /// Diagnostics rendered one per line in the `[code] file:line:col
 /// (component): message` format.
 fn render_diags(diags: &[Diagnostic]) -> String {
-    diags.iter()
+    diags
+        .iter()
         .map(|d| d.render())
         .collect::<Vec<String>>()
         .join("\n")
