@@ -2605,4 +2605,75 @@ mod tests {
             "the shortcut runs against the post-template property set"
         );
     }
+
+    // ---- Milestone 1.6 task 8: rules 9/10 — unknown props ignored;
+    // referenced props required (E003) ----
+
+    #[test]
+    fn rule9_unknown_extra_args_are_ignored() {
+        let p = project_with(&[("main.yml", "a: \"$x + $y\"\n")]);
+        assert_eq!(
+            compile_ok(
+                &p,
+                "a",
+                &named(&[
+                    ("a", Value::int(1)),
+                    ("b", Value::int(2)),
+                    ("c", Value::int(3)),
+                    ("x", Value::int(1)),
+                    ("y", Value::int(2)),
+                ])
+            ),
+            Value::string("1 + 2"),
+            "PRD rule-9 example: only the referenced `x` and `y` are read; `a`/`b`/`c` are ignored"
+        );
+    }
+
+    #[test]
+    fn rule10_missing_named_arg_is_e003_with_context() {
+        let p = project_with(&[("main.yml", "a: \"v=$x\"\n")]);
+        let d = compile_err(&p, "a", &Args::None);
+        assert_eq!(d.code, E003);
+        assert!(d.message.contains("`x`"), "{}", d.message);
+        assert_eq!(d.component.as_deref(), Some("a"));
+        assert!(d.file.is_some(), "E003 carries the resolved file path");
+    }
+
+    #[test]
+    fn rule10_missing_arg_in_math_is_e003() {
+        let p = project_with(&[("main.yml", "a: \"${x + 1}\"\n")]);
+        let d = compile_err(&p, "a", &Args::None);
+        assert_eq!(
+            d.code, E003,
+            "a bare identifier inside math is a required argument"
+        );
+        assert!(d.message.contains("`x`"), "{}", d.message);
+    }
+
+    #[test]
+    fn rule10_missing_positional_is_e003() {
+        let p = project_with(&[("main.yml", "a: \"$0\"\n")]);
+        let d = compile_err(&p, "a", &Args::None);
+        assert_eq!(d.code, E003);
+        assert!(d.message.contains("`$0`"), "{}", d.message);
+        let p = project_with(&[("main.yml", "a: \"$0\"\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::Positional(vec![Value::int(7)])),
+            Value::int(7),
+            "the same body is fine once the argument is supplied"
+        );
+    }
+
+    #[test]
+    fn rule9_extra_props_to_dispatch_targets_are_ignored() {
+        let p = project_with(&[(
+            "main.yml",
+            "comp: \"v=$x\"\nmain:\n  mini: {from: comp, x: 1, junk: 2}\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([("mini".to_string(), Value::string("v=1"))])),
+            "the `from` target resolves only the props it references; `junk` is ignored"
+        );
+    }
 }
