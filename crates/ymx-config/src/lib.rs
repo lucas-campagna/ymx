@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-use ymx_core::diag::{Diagnostic, E010};
+use ymx_core::diag::{Diagnostic, E004, E010};
 use ymx_core::ir::Value;
 use ymx_core::project::{Format, Options, PlainMode, Project};
 use ymx_core::resolve::resolve_entry;
@@ -84,6 +84,13 @@ impl CliOverrides {
 ///
 /// Non-entry `_ymx` blocks are never touched: only the entry file's raw value
 /// is consulted, so a malformed block elsewhere is not an error.
+///
+/// Once the effective `plain` mode is known, the sub-namespace names it would
+/// promote are checked against the global namespace: a promoted name colliding
+/// with an existing global definition of the same full name is `E004`
+/// (anchored at 1:1 of the promoted definition's host file, `component` = the
+/// name), collected alongside the `_ymx` errors. Under `TemplatesOnly` only
+/// `$`-prefixed names can clash; under `False` nothing is promoted.
 pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options, Vec<Diagnostic>> {
     let entry = cli.entry.clone().unwrap_or_else(|| "main.main".to_string());
     let (file_id, _, _) = match resolve_entry(project, &entry) {
@@ -208,7 +215,32 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
     opts.max_depth = cli.max_depth.or(max_depth).unwrap_or(256);
     opts.pretty = cli.pretty.or(pretty).unwrap_or(false);
     opts.format = cli.format.clone().or(format).unwrap_or(Format::Json);
-    opts.plain = cli.plain.clone().or(plain).unwrap_or(PlainMode::False);
+    let effective_plain = cli.plain.clone().or(plain).unwrap_or(PlainMode::False);
+    opts.plain = effective_plain.clone();
+
+    // Promotion clash check: under the effective `plain`, a sub-namespace name
+    // that would be promoted must not collide with an existing global
+    // definition of the same full name (E004). Under `TemplatesOnly` only
+    // `$`-prefixed names can clash; under `False` nothing is promoted.
+    let view = project.effective_global_namespace(effective_plain);
+    for (name, path, def) in &view.promoted {
+        if view
+            .global
+            .iter()
+            .any(|(global_name, _)| global_name == name)
+        {
+            diags.push(Diagnostic {
+                file: Some(project.files[def.file.0 as usize].clone()),
+                line: 1,
+                col: 1,
+                component: Some((*name).to_string()),
+                code: E004,
+                message: format!(
+                    "promotion clash: `{name}` is already defined in the global namespace; the promoted `{path}.{name}` collides"
+                ),
+            });
+        }
+    }
 
     if diags.is_empty() {
         Ok(opts)

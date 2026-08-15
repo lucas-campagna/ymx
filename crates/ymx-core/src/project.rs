@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use crate::diag::FileId;
 use crate::ir::Value;
-use crate::namespace::{FileScopeStore, NamespaceStore};
+use crate::namespace::{Definition, FileScopeStore, NamespaceStore};
 
 /// Output format selection for a compiled entry.
 #[derive(Debug, Clone, PartialEq)]
@@ -107,6 +107,29 @@ pub struct Project {
     pub raw_meta_test: Vec<(FileId, Value)>,
 }
 
+/// The effective global namespace under a [`PlainMode`].
+///
+/// [`global`](EffectiveNamespace::global) lists the root namespace's
+/// definitions; [`promoted`](EffectiveNamespace::promoted) lists the
+/// sub-namespace definitions that `plain` promotes into the global namespace.
+/// Promotion is deterministic: sub-namespaces are visited in lexicographic
+/// dotted-path order and their definitions in lexicographic full-name order.
+/// `PlainMode::False` promotes nothing; `PlainMode::All` promotes components
+/// **and** templates; `PlainMode::TemplatesOnly` promotes only `$`-prefixed
+/// templates. This mirrors [`resolve_ref`](crate::resolve::resolve_ref)'s
+/// lookup-time promotion semantics (global wins; promoted names are consulted
+/// in lexicographic order). `ymx-config` uses it for the extraction-time
+/// `E004` promotion-clash check; the resolver (milestone 1.6) can use it for
+/// bare-name lookups.
+pub struct EffectiveNamespace<'a> {
+    /// The global namespace's definitions, `(full_name, definition)`.
+    pub global: Vec<(&'a str, &'a Definition)>,
+    /// Promoted sub-namespace definitions,
+    /// `(full_name, namespace_dotted_path, definition)` — the path lets
+    /// callers render the qualified promoted name (e.g. `subdir.name`).
+    pub promoted: Vec<(&'a str, &'a str, &'a Definition)>,
+}
+
 impl Project {
     /// Empty project (no files, no definitions).
     pub fn new() -> Self {
@@ -122,11 +145,146 @@ impl Project {
     pub fn has_no_test(&self) -> bool {
         self.raw_meta_test.is_empty()
     }
+
+    /// The effective global namespace under `plain` (see
+    /// [`EffectiveNamespace`]): the root namespace's definitions plus the
+    /// sub-namespace definitions that `plain` promotes.
+    pub fn effective_global_namespace(&self, plain: PlainMode) -> EffectiveNamespace<'_> {
+        let mut global: Vec<(&str, &Definition)> = self
+            .namespaces
+            .namespace("")
+            .map(|ns| ns.defs().collect())
+            .unwrap_or_default();
+        global.sort_unstable_by_key(|(a, _)| *a);
+        if plain == PlainMode::False {
+            return EffectiveNamespace {
+                global,
+                promoted: Vec::new(),
+            };
+        }
+        let templates_only = plain == PlainMode::TemplatesOnly;
+        let mut paths: Vec<&str> = self
+            .namespaces
+            .namespaces()
+            .map(|(path, _)| path)
+            .filter(|path| !path.is_empty())
+            .collect();
+        paths.sort_unstable();
+        let mut promoted: Vec<(&str, &str, &Definition)> = Vec::new();
+        for path in paths {
+            let ns = self
+                .namespaces
+                .namespace(path)
+                .expect("path came from namespaces()");
+            let mut defs: Vec<(&str, &Definition)> = ns.defs().collect();
+            defs.sort_unstable_by_key(|(a, _)| *a);
+            for (name, def) in defs {
+                if !templates_only || name.starts_with('$') {
+                    promoted.push((name, path, def));
+                }
+            }
+        }
+        EffectiveNamespace { global, promoted }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diag::Span;
+    use crate::parse::Node;
+
+    const SPAN: Span = Span { line: 1, col: 1 };
+
+    fn def(file: u32, name: &str) -> Definition {
+        Definition {
+            file: FileId(file),
+            full_name: name.to_string(),
+            span: SPAN,
+            body: Node::Int(1, SPAN),
+        }
+    }
+
+    /// Project rooted at `/proj`:
+    /// * `main.yml`     (FileId 0): `main`, `$box`
+    /// * `a/b.yml`      (FileId 1): `x`, `$xbox`
+    /// * `subdir/t.yml` (FileId 2): `t`, `$tbox`, `x`
+    fn project() -> Project {
+        let mut p = Project::new();
+        p.root = PathBuf::from("/proj");
+        p.files = vec![
+            PathBuf::from("/proj/main.yml"),
+            PathBuf::from("/proj/a/b.yml"),
+            PathBuf::from("/proj/subdir/t.yml"),
+        ];
+        p.namespaces.register("", def(0, "main")).unwrap();
+        p.namespaces.register("", def(0, "$box")).unwrap();
+        p.namespaces.register("a", def(1, "x")).unwrap();
+        p.namespaces.register("a", def(1, "$xbox")).unwrap();
+        p.namespaces.register("subdir", def(2, "t")).unwrap();
+        p.namespaces.register("subdir", def(2, "$tbox")).unwrap();
+        p.namespaces.register("subdir", def(2, "x")).unwrap();
+        p
+    }
+
+    #[test]
+    fn effective_global_namespace_false_promotes_nothing() {
+        let p = project();
+        let view = p.effective_global_namespace(PlainMode::False);
+        let names: Vec<&str> = view.global.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, ["$box", "main"], "global defs sorted by name");
+        assert!(view.promoted.is_empty(), "False promotes nothing");
+    }
+
+    #[test]
+    fn effective_global_namespace_all_promotes_components_and_templates() {
+        let p = project();
+        let view = p.effective_global_namespace(PlainMode::All);
+        let names: Vec<&str> = view.global.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, ["$box", "main"]);
+        let promoted: Vec<(&str, &str, u32)> = view
+            .promoted
+            .iter()
+            .map(|(name, path, def)| (*name, *path, def.file.0))
+            .collect();
+        assert_eq!(
+            promoted,
+            [
+                ("$xbox", "a", 1),
+                ("x", "a", 1),
+                ("$tbox", "subdir", 2),
+                ("t", "subdir", 2),
+                ("x", "subdir", 2),
+            ],
+            "lexicographic (path, name) order; components and templates both promoted"
+        );
+    }
+
+    #[test]
+    fn effective_global_namespace_templates_only_promotes_dollar_names() {
+        let p = project();
+        let view = p.effective_global_namespace(PlainMode::TemplatesOnly);
+        let promoted: Vec<(&str, &str)> = view
+            .promoted
+            .iter()
+            .map(|(name, path, _)| (*name, *path))
+            .collect();
+        assert_eq!(
+            promoted,
+            [("$xbox", "a"), ("$tbox", "subdir")],
+            "only $ names are promoted under TemplatesOnly"
+        );
+    }
+
+    #[test]
+    fn effective_global_namespace_empty_project_promotes_nothing() {
+        let p = Project::new();
+        for plain in [PlainMode::False, PlainMode::All, PlainMode::TemplatesOnly] {
+            let view = p.effective_global_namespace(plain.clone());
+            assert!(view.global.is_empty(), "{plain:?}");
+            assert!(view.promoted.is_empty(), "{plain:?}");
+        }
+    }
 
     #[test]
     fn options_default_matches_engine_defaults() {
