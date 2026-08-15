@@ -588,9 +588,11 @@ impl<'a> Resolver<'a> {
     /// call (its own three-step flow): its args derive from the chain's
     /// initial args, so an overwrite lasts exactly one step and reverts
     /// (rule 5); `chain_initial` is threaded down unchanged (for a fresh
-    /// origin the first derivation defines it). v1: array-bodied templates
-    /// and array results in a non-array chain are `E010` when reached
-    /// (rules 12–14, milestone 1.7).
+    /// origin the first derivation defines it). Only the **first** link of
+    /// a chain (per the rule-11 step-2 exception) may use array semantics:
+    /// an array component output through a non-array-bodied template is a
+    /// rule-12 map ([`Resolver::map_over`]); array-bodied templates are
+    /// `E010` when reached until rules 13/14 land.
     fn chain_link(
         &self,
         def: &Definition,
@@ -613,9 +615,70 @@ impl<'a> Resolver<'a> {
                 ),
             ));
         }
+        if chain_initial.is_none() && matches!(result, Value::Array(_)) {
+            return Ok(Some(self.map_over(tpl, result)?));
+        }
         let link_args = self.derive_chain_args(initial, result, def)?;
         let threaded = chain_initial.unwrap_or(&link_args);
         Ok(Some(self.call(tpl, &link_args, Some(threaded))?))
+    }
+
+    /// Rule 12 (map): a non-array-bodied `$template` over an array
+    /// component output — each item of the array passes through the
+    /// template body, producing one output item per input item. Object
+    /// items bind their properties as named args (the PRD map examples);
+    /// any other item binds `$0`. An empty array maps to an empty array.
+    /// Each item evaluation is a template step: the rule-11 three-step
+    /// flow minus the template chain (an empty chain), consuming one
+    /// depth slot.
+    fn map_over(&self, tpl: &Definition, result: &Value) -> Result<Value, Diagnostic> {
+        let Value::Array(items) = result else {
+            unreachable!("rule-12 map requires an array component output")
+        };
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            let args = item_args(item);
+            out.push(self.resolve_array_step(tpl, &tpl.body, &args, None)?);
+        }
+        Ok(Value::Array(out))
+    }
+
+    /// One array-template step (a rule-12 map item; a rule-13/14 reduce
+    /// step from milestone 1.7 tasks 2–3): the item node runs through the
+    /// rule-11 three-step flow minus the template chain (an empty chain)
+    /// against a scope built from `args` (and the previous reduce step's
+    /// result as `last`, when given). The step is a recursive op like any
+    /// template step: it checks the depth cap at entry (`E008` at the
+    /// boundary) and consumes one slot (invariant #6).
+    fn resolve_array_step(
+        &self,
+        tpl: &Definition,
+        item: &Node,
+        args: &Args,
+        last: Option<&Value>,
+    ) -> Result<Value, Diagnostic> {
+        let depth = self.depth.get();
+        if depth == self.opts.max_depth {
+            return Err(self.def_err(
+                tpl,
+                E008,
+                format!("max recursion depth ({}) exceeded", self.opts.max_depth),
+            ));
+        }
+        self.depth.set(depth + 1);
+        let result = (|| {
+            let mut scope = self.scope_for(tpl, args);
+            scope.last = last.cloned();
+            let body = self.resolve_body(item, &scope, tpl.file)?;
+            match &body {
+                ResolvedBody::Object(props) => {
+                    self.dispatch_from(props, tpl.file, Some(&tpl.full_name))
+                }
+                ResolvedBody::Value(v) => self.step3(v, tpl.file, Some(&tpl.full_name)),
+            }
+        })();
+        self.depth.set(depth);
+        result
     }
 
     /// Rule-5 chain lookup: the component's own namespace first, then the
@@ -1202,6 +1265,20 @@ fn args_from(named: Vec<(String, Value)>, positional: Vec<Value>) -> Args {
         (false, true) => Args::Named(named),
         (true, false) => Args::Positional(positional),
         (false, false) => Args::Mixed { named, positional },
+    }
+}
+
+/// The [`Args`] an array-template step passes to the template for one
+/// input item: an object item binds its properties as named args (rule
+/// 12's map examples), anything else binds `$0` (rule 13's scalar `a`
+/// case and rule 14's scalar elements).
+fn item_args(item: &Value) -> Args {
+    match item {
+        Value::Object(m) => args_from(
+            m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            Vec::new(),
+        ),
+        _ => Args::Positional(vec![item.clone()]),
     }
 }
 
@@ -2407,9 +2484,14 @@ mod tests {
 
     #[test]
     fn array_result_in_non_array_chain_is_e010() {
+        // The first link maps (rule 12): a non-array-bodied template over
+        // an array component output is not mixed-shape.
         let p = project_with(&[("main.yml", "a: [1, 2]\n$a: \"x\"\n")]);
-        let d = compile_err(&p, "a", &Args::None);
-        assert_eq!(d.code, E010, "origin array result into a non-array link");
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::array(vec![Value::string("x"), Value::string("x")]),
+            "an origin array result into a non-array-bodied first link maps (rule 12)"
+        );
         let p = project_with(&[(
             "main.yml",
             "arr: [1, 2]\na: 5\n$a: \"$arr()\"\n$$a: \"x\"\n",
@@ -2421,6 +2503,103 @@ mod tests {
             compile_ok(&p, "a", &Args::None),
             Value::array(vec![Value::int(1), Value::int(2)]),
             "an array output with no further chain link is fine"
+        );
+    }
+
+    // ---- Milestone 1.7 task 1: rule 12 (map) ----
+
+    #[test]
+    fn rule12_map_object_items_bind_named_args() {
+        let p = project_with(&[(
+            "main.yml",
+            "$a:\n  prop1: ${x + 1}\n  prop2: ${y * x}\na:\n  - x: 1\n    y: 2\n  - x: 3\n    y: 4\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::array(vec![
+                Value::object(IndexMap::from([
+                    ("prop1".to_string(), Value::int(2)),
+                    ("prop2".to_string(), Value::int(2)),
+                ])),
+                Value::object(IndexMap::from([
+                    ("prop1".to_string(), Value::int(4)),
+                    ("prop2".to_string(), Value::int(12)),
+                ])),
+            ]),
+            "PRD rule-12 example 1: each object item's properties bind the template's named args"
+        );
+    }
+
+    #[test]
+    fn rule12_map_string_template_over_object_array() {
+        let p = project_with(&[(
+            "main.yml",
+            "$a: $x + $y\na:\n  - x: 1\n    y: 2\n  - x: 3\n    y: 4\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::array(vec![Value::string("1 + 2"), Value::string("3 + 4")]),
+            "PRD rule-12 example 2: one output item per input item"
+        );
+    }
+
+    #[test]
+    fn rule12_map_scalar_items_bind_dollar_zero() {
+        let p = project_with(&[("main.yml", "$a: \"${$0 * 2}\"\na: [1, 2, 3]\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::array(vec![Value::int(2), Value::int(4), Value::int(6)]),
+            "non-object items bind `$0` per item"
+        );
+    }
+
+    #[test]
+    fn rule12_map_empty_array_outputs_empty_array() {
+        let p = project_with(&[("main.yml", "$a: \"v=$x\"\na: []\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::array(vec![]),
+            "an empty array component maps to an empty array (no template call)"
+        );
+    }
+
+    #[test]
+    fn rule12_map_items_run_their_own_three_step_flow() {
+        let p = project_with(&[(
+            "main.yml",
+            "b: \"$default|$x\"\n$a:\n  b: 1\n  x: $x\na:\n  - x: 1\n  - x: 2\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::array(vec![Value::string("1|1"), Value::string("1|2")]),
+            "each item step resolves its own body against the item's args and runs step-3 shortcut dispatch"
+        );
+    }
+
+    #[test]
+    fn rule12_map_item_steps_consume_depth_slots() {
+        let opts = Options {
+            max_depth: 1,
+            ..Options::default()
+        };
+        let p = project_with(&[("main.yml", "a: [1]\n$a: \"v\"\n")]);
+        assert_eq!(
+            compile_component(&p, "a", &Args::None, &opts).unwrap(),
+            Value::array(vec![Value::string("v")]),
+            "one map item step is the first recursive op"
+        );
+        let p = project_with(&[("main.yml", "a: [1]\n$a: \"$b()\"\nb: 1\n")]);
+        let d = compile_err_with(&p, "a", &Args::None, &opts);
+        assert_eq!(
+            d.code, E008,
+            "the item step plus its inline call exceed the cap"
+        );
+        assert_eq!(d.component.as_deref(), Some("b"));
+        let p = project_with(&[("main.yml", "a: []\n$a: \"$b()\"\nb: 1\n")]);
+        assert_eq!(
+            compile_component(&p, "a", &Args::None, &opts).unwrap(),
+            Value::array(vec![]),
+            "an empty map consumes no slots"
         );
     }
 
