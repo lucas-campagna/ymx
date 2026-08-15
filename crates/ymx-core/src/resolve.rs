@@ -22,16 +22,17 @@
 //! [`LookupMiss::NotFound`] to `E002` and [`LookupMiss::FileScopeViolation`]
 //! to `E005`.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use indexmap::IndexMap;
 
 use crate::callsite;
-use crate::diag::{Diagnostic, FileId, Span, E002, E005, E006, E009, E010};
+use crate::diag::{Diagnostic, FileId, Span, E002, E005, E006, E008, E009, E010};
 use crate::interp;
 use crate::ir::{Args, Value};
-use crate::math::{FallbackHook, Scope, V1Engine};
+use crate::math::{CallHook, FallbackHook, Scope, V1Engine};
 use crate::namespace::{classify, DefClass, Definition};
 use crate::parse::{key_to_string, Node};
 use crate::project::{Options, PlainMode, Project};
@@ -318,7 +319,7 @@ pub fn compile_component(
 ) -> Result<Value, Vec<Diagnostic>> {
     let def = locate_definition(project, component, opts.plain.clone()).map_err(|d| vec![d])?;
     Resolver::new(project, opts)
-        .call(def, args, None)
+        .call_root(def, args, None)
         .map_err(|d| vec![d])
 }
 
@@ -344,7 +345,7 @@ pub fn compile(project: &Project, opts: &Options) -> Result<Value, Vec<Diagnosti
         }]);
     };
     Resolver::new(project, opts)
-        .call(def, &Args::None, None)
+        .call_root(def, &Args::None, None)
         .map_err(|d| vec![d])
 }
 
@@ -398,11 +399,16 @@ fn unknown_component(component: &str) -> Diagnostic {
 struct Resolver<'a> {
     project: &'a Project,
     opts: &'a Options,
+    depth: Cell<u32>,
 }
 
 impl<'a> Resolver<'a> {
     fn new(project: &'a Project, opts: &'a Options) -> Resolver<'a> {
-        Resolver { project, opts }
+        Resolver {
+            project,
+            opts,
+            depth: Cell::new(0),
+        }
     }
 
     /// Resolve `def` as a normal component call with `args`. Milestone 1.6
@@ -410,7 +416,38 @@ impl<'a> Resolver<'a> {
     /// rule-4 slots, the rule-2 fallback, and rule-3 inline call-sites)
     /// followed by the output conversion; the template chain (task 5) and
     /// `from`/shortcut dispatch (tasks 6–7) slot in around it.
+    ///
+    /// Invariant #6 (task 9): every recursive operation — an inline
+    /// `$comp(...)` call, a math `comp(...)` call, a bare-`$name` component
+    /// fallback, a template step, or a `from` dispatch — checks the depth
+    /// counter **before** incrementing: at `depth == max_depth` the operation
+    /// aborts with `E008`; otherwise the counter is bumped for the duration
+    /// of the operation and restored on the way out, so at most `max_depth`
+    /// recursive operations are allowed per compilation (default 256). All
+    /// five operations invoke a component call, so the guard lives here; the
+    /// top-level `compile` / `compile_component` entries use the unguarded
+    /// [`Resolver::call_root`] and do not consume a slot.
     fn call(
+        &self,
+        def: &Definition,
+        args: &Args,
+        chain_initial: Option<&Args>,
+    ) -> Result<Value, Diagnostic> {
+        let depth = self.depth.get();
+        if depth == self.opts.max_depth {
+            return Err(self.def_err(
+                def,
+                E008,
+                format!("max recursion depth ({}) exceeded", self.opts.max_depth),
+            ));
+        }
+        self.depth.set(depth + 1);
+        let result = self.call_root(def, args, chain_initial);
+        self.depth.set(depth);
+        result
+    }
+
+    fn call_root(
         &self,
         def: &Definition,
         args: &Args,
@@ -671,6 +708,34 @@ impl<'a> Resolver<'a> {
         let file = def.file;
         let fallback: FallbackHook<'s> =
             Rc::new(move |name: &str| self.lookup_component(file, name));
+        let call: CallHook<'s> = {
+            let file = def.file;
+            let span = def.span;
+            Rc::new(move |name: &str, args: &[Value]| {
+                match resolve_ref(self.project, name, file, self.opts.plain.clone()) {
+                    Ok(target) => self.call(target, &Args::Positional(args.to_vec()), None),
+                    Err(LookupMiss::NotFound) => Err(Diagnostic {
+                        file: Some(self.project.files[file.0 as usize].clone()),
+                        line: span.line,
+                        col: span.col,
+                        component: Some(name.to_string()),
+                        code: E002,
+                        message: format!("unknown component reference `{name}`"),
+                    }),
+                    Err(LookupMiss::FileScopeViolation { owner }) => Err(Diagnostic {
+                        file: Some(self.project.files[file.0 as usize].clone()),
+                        line: span.line,
+                        col: span.col,
+                        component: Some(name.to_string()),
+                        code: E005,
+                        message: format!(
+                            "file-scope violation: `{name}` is defined only in `{}`",
+                            self.project.files[owner.0 as usize].display()
+                        ),
+                    }),
+                }
+            })
+        };
         Scope {
             file: Some(self.project.files[def.file.0 as usize].clone()),
             component: Some(def.full_name.clone()),
@@ -678,7 +743,7 @@ impl<'a> Resolver<'a> {
             named: args.named_vec(),
             positional: args.positional_vec(),
             last: None,
-            call: None,
+            call: Some(call),
             fallback: Some(fallback),
         }
     }
@@ -2180,6 +2245,12 @@ mod tests {
             ])),
             "unmodified keys are unaffected"
         );
+        let p = project_with(&[("main.yml", "a: 1\n$a:\n  x?: 2\n")]);
+        let d = compile_err(&p, "a", &Args::None);
+        assert_eq!(
+            d.code, E010,
+            "a template-link body is a step-1 surface: its keys are rejected too"
+        );
     }
 
     // ---- Milestone 1.6 task 5: template chain (rule 5, step 2) ----
@@ -2675,5 +2746,186 @@ mod tests {
             Value::object(IndexMap::from([("mini".to_string(), Value::string("v=1"))])),
             "the `from` target resolves only the props it references; `junk` is ignored"
         );
+    }
+
+    // ---- Milestone 1.6 task 9: depth cap (invariant #6) ----
+
+    fn compile_err_with(p: &Project, component: &str, args: &Args, opts: &Options) -> Diagnostic {
+        compile_component(p, component, args, opts)
+            .unwrap_err()
+            .into_iter()
+            .next()
+            .expect("at least one diagnostic")
+    }
+
+    #[test]
+    fn depth_cap_default_permits_deep_chains() {
+        let mut src = String::from("a:\n  x: 1\n");
+        for i in 1..=200 {
+            src.push_str(&format!("{}a: \"v=$x\"\n", "$".repeat(i)));
+        }
+        let p = project_with(&[("main.yml", &src)]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::string("v=1"),
+            "default max_depth 256 permits a 200-step template chain"
+        );
+    }
+
+    #[test]
+    fn depth_cap_small_max_raises_e008_on_boundary_op() {
+        let opts = Options {
+            max_depth: 3,
+            ..Options::default()
+        };
+        let p = project_with(&[(
+            "main.yml",
+            "a:\n  x: 1\n$a: \"v=$x\"\n$$a: \"v=$x\"\n$$$a: \"v=$x\"\n",
+        )]);
+        assert_eq!(
+            compile_component(&p, "a", &Args::None, &opts).unwrap(),
+            Value::string("v=1"),
+            "exactly max_depth recursive ops are allowed"
+        );
+        let p = project_with(&[(
+            "main.yml",
+            "a:\n  x: 1\n$a: \"v=$x\"\n$$a: \"v=$x\"\n$$$a: \"v=$x\"\n$$$$a: \"v=$x\"\n",
+        )]);
+        let d = compile_err_with(&p, "a", &Args::None, &opts);
+        assert_eq!(d.code, E008);
+        assert_eq!(d.component.as_deref(), Some("$$$$a"));
+        assert!(d.file.is_some(), "E008 carries the resolved file path");
+        assert!(d.message.contains("3"), "{}", d.message);
+    }
+
+    #[test]
+    fn depth_cap_applies_to_inline_calls() {
+        let opts = Options {
+            max_depth: 1,
+            ..Options::default()
+        };
+        let p = project_with(&[("main.yml", "a: \"$b()\"\nb: \"v=1\"\n")]);
+        assert_eq!(
+            compile_component(&p, "a", &Args::None, &opts).unwrap(),
+            Value::string("v=1"),
+            "the first recursive op is allowed"
+        );
+        let p = project_with(&[("main.yml", "a: \"$b()\"\nb: \"$c()\"\nc: \"v=1\"\n")]);
+        let d = compile_err_with(&p, "a", &Args::None, &opts);
+        assert_eq!(d.code, E008);
+        assert_eq!(d.component.as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn depth_cap_applies_to_bare_name_fallback() {
+        let opts = Options {
+            max_depth: 1,
+            ..Options::default()
+        };
+        let p = project_with(&[("main.yml", "a: \"$b\"\nb: \"v=1\"\n")]);
+        assert_eq!(
+            compile_component(&p, "a", &Args::None, &opts).unwrap(),
+            Value::string("v=1"),
+            "the bare-`$name` fallback is the first recursive op"
+        );
+        let p = project_with(&[("main.yml", "a: \"$b\"\nb: \"$c\"\nc: \"v=1\"\n")]);
+        let d = compile_err_with(&p, "a", &Args::None, &opts);
+        assert_eq!(d.code, E008);
+        assert_eq!(d.component.as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn depth_cap_applies_to_from_dispatch() {
+        let opts = Options {
+            max_depth: 1,
+            ..Options::default()
+        };
+        let p = project_with(&[("main.yml", "a: {from: b, x: 1}\nb: \"v=$x\"\n")]);
+        assert_eq!(
+            compile_component(&p, "a", &Args::None, &opts).unwrap(),
+            Value::string("v=1"),
+            "the `from` dispatch is the first recursive op"
+        );
+        let p = project_with(&[(
+            "main.yml",
+            "a: {from: b, x: 1}\nb: {from: c, x: 1}\nc: \"v=$x\"\n",
+        )]);
+        let d = compile_err_with(&p, "a", &Args::None, &opts);
+        assert_eq!(d.code, E008);
+        assert_eq!(d.component.as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn depth_cap_restores_after_e008_for_sibling_calls() {
+        let opts = Options {
+            max_depth: 1,
+            ..Options::default()
+        };
+        let p = project_with(&[("main.yml", "a: \"$b()\"\nb: \"$c()\"\nc: \"v=1\"\n")]);
+        let d = compile_err_with(&p, "a", &Args::None, &opts);
+        assert_eq!(d.code, E008);
+        let p = project_with(&[("main.yml", "a: \"$b()\"\nb: \"v=1\"\n")]);
+        assert_eq!(
+            compile_component(&p, "a", &Args::None, &opts).unwrap(),
+            Value::string("v=1"),
+            "the counter is restored after the aborted op"
+        );
+    }
+
+    // ---- Milestone 1.6 task 9 gap: math `comp(...)` calls (PRD rule 7) ----
+
+    #[test]
+    fn math_component_calls_resolve_rule7_example() {
+        let p = project_with(&[(
+            "main.yml",
+            "a: \"${b(12,34) + c(28)}\"\nb: \"${$0 + $1}\"\nc: \"${$0 * 2}\"\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::int(102),
+            "PRD rule-7 example: b(12,34) = 46, c(28) = 56, sum 102"
+        );
+    }
+
+    #[test]
+    fn math_component_call_missing_is_e002() {
+        let p = project_with(&[("main.yml", "a: \"${nope(1)}\"\n")]);
+        let d = compile_err(&p, "a", &Args::None);
+        assert_eq!(d.code, E002);
+        assert!(d.message.contains("nope"), "{}", d.message);
+    }
+
+    #[test]
+    fn math_component_call_file_scoped() {
+        let p = project_with(&[("main.yml", "a: \"${_b(1)}\"\n_b: \"v=1\"\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::string("v=1"),
+            "a `_`-prefixed math call resolves file-scoped from the same document"
+        );
+        let p = project_with(&[("main.yml", "a: \"${_b(1)}\"\n"), ("other.yml", "_b: 1\n")]);
+        let d = compile_err(&p, "a", &Args::None);
+        assert_eq!(
+            d.code, E005,
+            "a cross-document `_` math call is a file-scope violation"
+        );
+    }
+
+    #[test]
+    fn math_component_calls_consume_depth_slots() {
+        let opts = Options {
+            max_depth: 1,
+            ..Options::default()
+        };
+        let p = project_with(&[("main.yml", "a: \"${b(1)}\"\nb: \"v=1\"\n")]);
+        assert_eq!(
+            compile_component(&p, "a", &Args::None, &opts).unwrap(),
+            Value::string("v=1"),
+            "the first math call is the first recursive op"
+        );
+        let p = project_with(&[("main.yml", "a: \"${b(1)}\"\nb: \"${c(1)}\"\nc: \"v=1\"\n")]);
+        let d = compile_err_with(&p, "a", &Args::None, &opts);
+        assert_eq!(d.code, E008, "the boundary op is a math component call");
+        assert_eq!(d.component.as_deref(), Some("c"));
     }
 }
