@@ -27,7 +27,8 @@ use std::rc::Rc;
 
 use indexmap::IndexMap;
 
-use crate::diag::{Diagnostic, FileId, Span, E002, E009, E010};
+use crate::callsite;
+use crate::diag::{Diagnostic, FileId, Span, E002, E005, E009, E010};
 use crate::interp;
 use crate::ir::{Args, Value};
 use crate::math::{FallbackHook, Scope, V1Engine};
@@ -405,13 +406,13 @@ impl<'a> Resolver<'a> {
     }
 
     /// Resolve `def` as a normal component call with `args`. Milestone 1.6
-    /// task 2: the rule-11 pipeline is step 1 (property resolution incl. the
-    /// rule-4 slots and the rule-2 fallback) followed by the output
-    /// conversion; the template chain (task 5) and `from`/shortcut dispatch
-    /// (tasks 6–7) slot in around it.
+    /// task 3: the rule-11 pipeline is step 1 (property resolution incl. the
+    /// rule-4 slots, the rule-2 fallback, and rule-3 inline call-sites)
+    /// followed by the output conversion; the template chain (task 5) and
+    /// `from`/shortcut dispatch (tasks 6–7) slot in around it.
     fn call(&self, def: &Definition, args: &Args) -> Result<Value, Diagnostic> {
         let scope = self.scope_for(def, args);
-        let body = self.resolve_body(&def.body, &scope)?;
+        let body = self.resolve_body(&def.body, &scope, def.file)?;
         Ok(match body {
             ResolvedBody::Value(v) => v,
             ResolvedBody::Object(set) => set.to_object(),
@@ -453,11 +454,19 @@ impl<'a> Resolver<'a> {
     /// as either a plain value or a property set: an object body is a
     /// [`PropertySet`] where non-negative integer keys denote positional
     /// slots (rule 4); every other node resolves as a plain value (arrays,
-    /// scalars, interpolated strings, nested objects).
-    fn resolve_body(&self, node: &Node, scope: &Scope<'_>) -> Result<ResolvedBody, Diagnostic> {
+    /// scalars, interpolated strings, nested objects). `file` is the
+    /// referencing document for name lookups (call-sites, fallback).
+    fn resolve_body(
+        &self,
+        node: &Node,
+        scope: &Scope<'_>,
+        file: FileId,
+    ) -> Result<ResolvedBody, Diagnostic> {
         match node {
-            Node::Object(entries, _) => self.resolve_property_set(entries, scope),
-            other => self.resolve_node(other, scope).map(ResolvedBody::Value),
+            Node::Object(entries, _) => self.resolve_property_set(entries, scope, file),
+            other => self
+                .resolve_node(other, scope, file)
+                .map(ResolvedBody::Value),
         }
     }
 
@@ -476,6 +485,7 @@ impl<'a> Resolver<'a> {
         &self,
         entries: &[crate::parse::Entry],
         scope: &Scope<'_>,
+        file: FileId,
     ) -> Result<ResolvedBody, Diagnostic> {
         let mut set = PropertySet::default();
         for entry in entries {
@@ -492,7 +502,7 @@ impl<'a> Resolver<'a> {
                     // The call's positional argument overwrites the slot
                     // (rule 4: a call may set a positional slot via the
                     // integer key); the body value is the default.
-                    let default = self.resolve_node(&entry.value, scope)?;
+                    let default = self.resolve_node(&entry.value, scope, file)?;
                     let value = scope.positional.get(idx).cloned().unwrap_or(default);
                     if set.slots.len() <= idx {
                         set.slots.resize(idx + 1, Value::Null);
@@ -513,12 +523,12 @@ impl<'a> Resolver<'a> {
         for entry in entries {
             match &entry.key {
                 crate::parse::Key::String(name) => {
-                    let value = self.resolve_node(&entry.value, &padded)?;
+                    let value = self.resolve_node(&entry.value, &padded, file)?;
                     set.named.insert(name.clone(), value);
                 }
                 crate::parse::Key::Int(i) if *i < 0 => {
                     let name = i.to_string();
-                    let value = self.resolve_node(&entry.value, &padded)?;
+                    let value = self.resolve_node(&entry.value, &padded, file)?;
                     set.named.insert(name, value);
                 }
                 _ => {}
@@ -529,20 +539,25 @@ impl<'a> Resolver<'a> {
 
     /// Resolve one value node against `scope`. String scalars go through the
     /// shared scanner/interpolator: `$name` / `$N` / `${...}`, with the rule-2
-    /// component fallback after a named-argument miss.
-    fn resolve_node(&self, node: &Node, scope: &Scope<'_>) -> Result<Value, Diagnostic> {
+    /// component fallback after a named-argument miss — unless the whole
+    /// string is an inline call-site `$name(...)` (rule 3), which calls the
+    /// component directly. `file` is the referencing document for name
+    /// lookups.
+    fn resolve_node(
+        &self,
+        node: &Node,
+        scope: &Scope<'_>,
+        file: FileId,
+    ) -> Result<Value, Diagnostic> {
         match node {
             Node::Null(_) => Ok(Value::Null),
             Node::Bool(b, _) => Ok(Value::Bool(*b)),
             Node::Int(i, _) => Ok(Value::Int(*i)),
             Node::Float(f, _) => Ok(Value::Float(*f)),
-            Node::String(s, span) => {
-                let segments = interp::scan(s, *span)?;
-                interp::resolve(&segments, scope, &V1Engine)
-            }
+            Node::String(s, span) => self.resolve_string(s, *span, scope, file),
             Node::Array(items, _) => items
                 .iter()
-                .map(|n| self.resolve_node(n, scope))
+                .map(|n| self.resolve_node(n, scope, file))
                 .collect::<Result<Vec<Value>, _>>()
                 .map(Value::array),
             Node::Object(entries, _) => {
@@ -550,11 +565,131 @@ impl<'a> Resolver<'a> {
                 for entry in entries {
                     m.insert(
                         key_to_string(&entry.key),
-                        self.resolve_node(&entry.value, scope)?,
+                        self.resolve_node(&entry.value, scope, file)?,
                     );
                 }
                 Ok(Value::Object(m))
             }
+        }
+    }
+
+    /// Resolve a string scalar: a whole-string `$name(...)` is an inline
+    /// call-site (rule 3); anything else goes through interpolation.
+    fn resolve_string(
+        &self,
+        s: &str,
+        span: Span,
+        scope: &Scope<'_>,
+        file: FileId,
+    ) -> Result<Value, Diagnostic> {
+        match callsite::parse(s) {
+            Ok(Some(call)) => self.resolve_call(&call, span, scope, file),
+            Ok(None) => {
+                let segments = interp::scan(s, span)?;
+                interp::resolve(&segments, scope, &V1Engine)
+            }
+            Err((code, message)) => Err(ctx_err(scope, code, message)),
+        }
+    }
+
+    /// Resolve a parsed inline call-site: evaluate its arguments against the
+    /// caller's scope (nested call-sites recurse), then call the target
+    /// component. `$name(...)` unconditionally calls the component and
+    /// bypasses the argument lookup (rule 2).
+    fn resolve_call(
+        &self,
+        call: &callsite::ParsedCall,
+        span: Span,
+        scope: &Scope<'_>,
+        file: FileId,
+    ) -> Result<Value, Diagnostic> {
+        let (named, positional) = self.resolve_call_args(&call.args, span, scope, file)?;
+        let args = match (named.is_empty(), positional.is_empty()) {
+            (true, true) => Args::None,
+            (false, true) => Args::Named(named),
+            (true, false) => Args::Positional(positional),
+            (false, false) => Args::Mixed { named, positional },
+        };
+        self.call_by_name(file, &call.name, &args, span)
+    }
+
+    /// Evaluate a call-site argument list against `scope` (the rule-2
+    /// fallback and math apply inside argument values).
+    fn resolve_call_args(
+        &self,
+        args: &[callsite::ParsedArg],
+        span: Span,
+        scope: &Scope<'_>,
+        file: FileId,
+    ) -> Result<CallArgs, Diagnostic> {
+        let mut named = Vec::new();
+        let mut positional = Vec::new();
+        for arg in args {
+            let value = self.resolve_parsed_value(&arg.value, span, scope, file)?;
+            match &arg.key {
+                Some(key) => named.push((key.clone(), value)),
+                None => positional.push(value),
+            }
+        }
+        Ok((named, positional))
+    }
+
+    /// Resolve one parsed argument value. `$name` / `$N` references and
+    /// `${...}` expressions re-enter the scanner/interpolator (so the rule-2
+    /// fallback and math apply); nested call-sites recurse.
+    fn resolve_parsed_value(
+        &self,
+        value: &callsite::ParsedValue,
+        span: Span,
+        scope: &Scope<'_>,
+        file: FileId,
+    ) -> Result<Value, Diagnostic> {
+        match value {
+            callsite::ParsedValue::Literal(v) => Ok(v.clone()),
+            callsite::ParsedValue::Raw(s) => Ok(Value::string(s.clone())),
+            callsite::ParsedValue::Ref { name } => {
+                let segments = interp::scan(&format!("${name}"), span)?;
+                interp::resolve(&segments, scope, &V1Engine)
+            }
+            callsite::ParsedValue::Math { src } => {
+                let segments = interp::scan(&format!("${{{src}}}"), span)?;
+                interp::resolve(&segments, scope, &V1Engine)
+            }
+            callsite::ParsedValue::Call(nested) => self.resolve_call(nested, span, scope, file),
+        }
+    }
+
+    /// Call the regular component `name` reachable from `file` with `args`.
+    /// `NotFound` is `E002`; a file-scope violation (`_`-prefixed name owned
+    /// by another document) is `E005`.
+    fn call_by_name(
+        &self,
+        file: FileId,
+        name: &str,
+        args: &Args,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match resolve_ref(self.project, name, file, self.opts.plain.clone()) {
+            Ok(def) => self.call(def, args),
+            Err(LookupMiss::NotFound) => Err(Diagnostic {
+                file: Some(self.project.files[file.0 as usize].clone()),
+                line: span.line,
+                col: span.col,
+                component: Some(name.to_string()),
+                code: E002,
+                message: format!("unknown component reference `{name}`"),
+            }),
+            Err(LookupMiss::FileScopeViolation { owner }) => Err(Diagnostic {
+                file: Some(self.project.files[file.0 as usize].clone()),
+                line: span.line,
+                col: span.col,
+                component: Some(name.to_string()),
+                code: E005,
+                message: format!(
+                    "file-scope violation: `{name}` is defined only in `{}`",
+                    self.project.files[owner.0 as usize].display()
+                ),
+            }),
         }
     }
 }
@@ -590,6 +725,9 @@ enum ResolvedBody {
     Value(Value),
     Object(PropertySet),
 }
+
+/// The result of evaluating a call-site argument list: named + positional.
+type CallArgs = (Vec<(String, Value)>, Vec<Value>);
 
 impl PropertySet {
     /// The output object: keys in source order, slots stringified as their
@@ -633,7 +771,7 @@ fn ctx_err(scope: &Scope<'_>, code: &'static str, message: String) -> Diagnostic
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diag::{Span, E003};
+    use crate::diag::{Span, E003, E012, E013};
     use crate::namespace::Definition;
     use crate::parse::Node;
 
@@ -1345,5 +1483,172 @@ mod tests {
         let d = compile_err(&p, "main", &Args::None);
         assert_eq!(d.code, E010);
         assert!(d.message.contains("slot"), "{}", d.message);
+    }
+
+    // ---- Milestone 1.6 task 3: inline call-sites (rule 3) ----
+
+    #[test]
+    fn inline_call_site_binds_positional_and_named_args() {
+        let p = project_with(&[(
+            "main.yml",
+            "sum: \"$0 + $1\"\ngreet: \"hi $name\"\nmain: [\"$sum(12, 34)\", \"$greet(name=Bob)\"]\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::array(vec![Value::string("12 + 34"), Value::string("hi Bob")])
+        );
+    }
+
+    #[test]
+    fn inline_call_site_no_args_and_bypass() {
+        let p = project_with(&[(
+            "main.yml",
+            "five: 5\nx: 42\nvia_arg: \"$x\"\nvia_call: \"$x()\"\nmain: \"$five()\"\n",
+        )]);
+        assert_eq!(compile_ok(&p, "main", &Args::None), Value::int(5));
+        // `$name(...)` bypasses the argument lookup (rule 2): the component
+        // wins even with an in-scope argument of the same name.
+        assert_eq!(
+            compile_ok(&p, "via_call", &named(&[("x", Value::string("arg"))])),
+            Value::int(42)
+        );
+        assert_eq!(
+            compile_ok(&p, "via_arg", &named(&[("x", Value::string("arg"))])),
+            Value::string("arg"),
+            "bare `$x` keeps the rule-2 argument-first order"
+        );
+    }
+
+    #[test]
+    fn inline_call_site_argument_values() {
+        let p = project_with(&[(
+            "main.yml",
+            "echo: $0\nmain: [\"$echo(null)\", \"$echo(~)\", \"$echo(true)\", \"$echo(12)\", \"$echo(-3)\", \"$echo(1.5)\", \"$echo(abc)\", \"$echo('s')\", \"$echo(\\\"t\\\")\"]\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::array(vec![
+                Value::null(),
+                Value::null(),
+                Value::bool(true),
+                Value::int(12),
+                Value::int(-3),
+                Value::float(1.5),
+                Value::string("abc"),
+                Value::string("s"),
+                Value::string("t"),
+            ])
+        );
+    }
+
+    #[test]
+    fn inline_call_site_nested_calls_refs_and_math() {
+        let p = project_with(&[(
+            "main.yml",
+            "id: $0\nsix: 6\nfive: 5\nmain: [\"$id($id($five()))\", \"$id(${1+2})\", \"$id($0)\", \"$id($n)\", \"$id($six)\"]\n",
+        )]);
+        assert_eq!(
+            compile_ok(
+                &p,
+                "main",
+                &Args::Mixed {
+                    named: vec![("n".to_string(), Value::int(7))],
+                    positional: vec![Value::int(9)],
+                }
+            ),
+            Value::array(vec![
+                Value::int(5),
+                Value::int(3),
+                Value::int(9),
+                Value::int(7),
+                Value::int(6),
+            ])
+        );
+    }
+
+    #[test]
+    fn inline_call_site_slot_defaults_apply() {
+        let p = project_with(&[(
+            "main.yml",
+            "comp:\n  0: d\n  out: $0\nmain: \"$comp(x)\"\nwith_default: \"$comp()\"\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &Args::None),
+            Value::object(IndexMap::from([
+                ("0".to_string(), Value::string("x")),
+                ("out".to_string(), Value::string("x")),
+            ])),
+            "call-site positional args set the callee's slots"
+        );
+        assert_eq!(
+            compile_ok(&p, "with_default", &Args::None),
+            Value::object(IndexMap::from([
+                ("0".to_string(), Value::string("d")),
+                ("out".to_string(), Value::string("d")),
+            ])),
+            "no positional arg keeps the slot default"
+        );
+    }
+
+    #[test]
+    fn inline_call_site_missing_target_is_e002() {
+        let p = project_with(&[("main.yml", "main: \"$nope(1)\"\n")]);
+        let d = compile_err(&p, "main", &Args::None);
+        assert_eq!(d.code, E002);
+        assert_eq!(d.component.as_deref(), Some("nope"), "{}", d.message);
+        assert!(d.message.contains("nope"), "{}", d.message);
+    }
+
+    #[test]
+    fn inline_call_site_cross_file_scoped_target_is_e005() {
+        let p = project_with(&[
+            ("main.yml", "main: \"$_s(1)\"\n"),
+            ("a/b.yml", "_s: 1\nb: 2\n"),
+        ]);
+        let d = compile_err(&p, "main", &Args::None);
+        assert_eq!(d.code, E005);
+        assert!(d.message.contains("_s"), "{}", d.message);
+    }
+
+    #[test]
+    fn inline_call_site_grammar_errors() {
+        let p = project_with(&[
+            ("main.yml", "id: $0\nmain: \"$id(a=1, 2)\"\n"),
+            ("arr.yml", "arr: \"$id([1,2])\"\n"),
+            ("unterm.yml", "unterm: \"$id(\"\n"),
+            ("esc.yml", "esc: \"$id(\\\"a\\\\qb\\\")\"\n"),
+        ]);
+        let d = compile_err(&p, "main", &Args::None);
+        assert_eq!(d.code, E012, "positional after named");
+        let d = compile_err(&p, "arr", &Args::None);
+        assert_eq!(d.code, E013, "array literal as direct arg");
+        let d = compile_err(&p, "unterm", &Args::None);
+        assert_eq!(d.code, E010, "unterminated call-site");
+        let d = compile_err(&p, "esc", &Args::None);
+        assert_eq!(d.code, E010, "invalid escape in quoted arg");
+    }
+
+    #[test]
+    fn non_call_site_strings_stay_interpolated() {
+        let p = project_with(&[("main.yml", "main: \"$x(1)!\"\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &named(&[("x", Value::int(5))])),
+            Value::string("5(1)!"),
+            "trailing text after the parens is not a call-site"
+        );
+        let p = project_with(&[("main.yml", "main: \"$$box(1)\"\n")]);
+        let d = compile_err(&p, "main", &Args::None);
+        assert_eq!(
+            d.code, E010,
+            "templates are not inline-callable (dangling `$` in scan)"
+        );
+    }
+
+    #[test]
+    fn inline_call_site_callee_missing_arg_is_e003() {
+        let p = project_with(&[("main.yml", "comp: \"$0\"\nmain: \"$comp()\"\n")]);
+        let d = compile_err(&p, "main", &Args::None);
+        assert_eq!(d.code, E003);
+        assert!(d.message.contains("$0"), "{}", d.message);
     }
 }

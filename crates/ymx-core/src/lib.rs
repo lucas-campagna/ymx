@@ -1,4 +1,5 @@
 pub mod builtin;
+pub(crate) mod callsite;
 pub mod diag;
 pub mod interp;
 pub mod ir;
