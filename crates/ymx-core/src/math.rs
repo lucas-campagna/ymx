@@ -10,7 +10,10 @@
 //! (left-associative), then `+ -` (left-associative). There are **no**
 //! comparison, equality, or boolean operators — they are literal text in
 //! strings (rule 13) — and no quoted string literals in v1; any token outside
-//! the grammar is `E010`.
+//! the grammar is `E010`. String-valued operands are re-parsed and evaluated
+//! as math in the current scope ([`resolve_operand`], *Math operand
+//! resolution* in the PRD); a String that does not parse stays a plain
+//! operand (`+` concatenates, numeric operators raise `E011`).
 //!
 //! [`Scope`] carries the in-scope named/positional arguments, the reduce-step
 //! `last` value, the component-call dispatch hook for math `name(...)` calls
@@ -19,7 +22,7 @@
 
 use std::path::PathBuf;
 
-use crate::diag::{Diagnostic, Span, E002, E003, E010, E011};
+use crate::diag::{Diagnostic, Span, E002, E003, E008, E010, E011};
 use crate::ir::{render_value, Value};
 
 /// The math-engine boundary: evaluates the contents of a `${...}` expression.
@@ -156,10 +159,20 @@ pub struct V1Engine;
 
 impl MathEngine for V1Engine {
     fn eval(&self, src: &str, scope: &Scope) -> Result<Value, Diagnostic> {
-        let expr =
-            parse(src).map_err(|(offset, message)| err(scope, src, offset, E010, message))?;
-        eval_expr(&expr, src, scope)
+        eval_inner(src, scope, 0)
     }
+}
+
+/// Bound on String re-scan nesting ([`resolve_operand`]): a self-referential
+/// string (e.g. `x = "x"`) cannot recurse forever and aborts with `E008`
+/// instead of overflowing the stack. The rule-11 depth cap is wired by the
+/// resolver (milestone 1.6) at component-call boundaries; this bounds the
+/// math-internal re-scan loop.
+const RESCAN_LIMIT: u32 = 256;
+
+fn eval_inner(src: &str, scope: &Scope, depth: u32) -> Result<Value, Diagnostic> {
+    let expr = parse(src).map_err(|(offset, message)| err(scope, src, offset, E010, message))?;
+    eval_expr(&expr, src, scope, depth)
 }
 
 // ---- Lexer ----
@@ -581,38 +594,54 @@ impl Parser {
 
 // ---- Evaluator ----
 
-fn eval_expr(e: &Expr, src: &str, scope: &Scope) -> Result<Value, Diagnostic> {
+fn eval_expr(e: &Expr, src: &str, scope: &Scope, depth: u32) -> Result<Value, Diagnostic> {
     match e {
         Expr::Num(v, _) => Ok(v.clone()),
-        Expr::Arg { name, offset } => match scope.lookup(name) {
-            Some(v) => Ok(v.clone()),
-            None => Err(err(
-                scope,
-                src,
-                *offset,
-                E003,
-                format!("missing required argument `{name}`"),
-            )),
-        },
-        Expr::Pos { index, offset } => match scope.positional_at(*index) {
-            Some(v) => Ok(v.clone()),
-            None => Err(err(
-                scope,
-                src,
-                *offset,
-                E003,
-                format!("missing required argument `${index}`"),
-            )),
-        },
+        Expr::Arg { name, offset } => {
+            let v = match scope.lookup(name) {
+                Some(v) => v.clone(),
+                None => {
+                    return Err(err(
+                        scope,
+                        src,
+                        *offset,
+                        E003,
+                        format!("missing required argument `{name}`"),
+                    ));
+                }
+            };
+            resolve_operand(v, src, scope, *offset, depth)
+        }
+        Expr::Pos { index, offset } => {
+            let v = match scope.positional_at(*index) {
+                Some(v) => v.clone(),
+                None => {
+                    return Err(err(
+                        scope,
+                        src,
+                        *offset,
+                        E003,
+                        format!("missing required argument `${index}`"),
+                    ));
+                }
+            };
+            resolve_operand(v, src, scope, *offset, depth)
+        }
         Expr::Call { name, args, .. } => {
             let mut values = Vec::with_capacity(args.len());
             for arg in args {
-                values.push(eval_expr(arg, src, scope)?);
+                values.push(eval_expr(arg, src, scope, depth)?);
             }
             scope.invoke(name, &values)
         }
         Expr::Neg { inner, offset } => {
-            let v = eval_expr(inner, src, scope)?;
+            let v = resolve_operand(
+                eval_expr(inner, src, scope, depth)?,
+                src,
+                scope,
+                *offset,
+                depth,
+            )?;
             match v {
                 Value::Int(i) => match i.checked_neg() {
                     Some(n) => Ok(Value::Int(n)),
@@ -634,10 +663,74 @@ fn eval_expr(e: &Expr, src: &str, scope: &Scope) -> Result<Value, Diagnostic> {
             right,
             offset,
         } => {
-            let l = eval_expr(left, src, scope)?;
-            let r = eval_expr(right, src, scope)?;
+            let l = resolve_operand(
+                eval_expr(left, src, scope, depth)?,
+                src,
+                scope,
+                *offset,
+                depth,
+            )?;
+            let r = resolve_operand(
+                eval_expr(right, src, scope, depth)?,
+                src,
+                scope,
+                *offset,
+                depth,
+            )?;
             apply_bin(op, l, r, src, scope, *offset)
         }
+    }
+}
+
+/// Re-scan a String-valued operand as a math expression in the current scope.
+///
+/// PRD *Math operand resolution*: when an operand — a bare identifier,
+/// `last`, or a `$N` positional — resolves to a String, that String is
+/// re-parsed and evaluated as math in the **current** scope (the same scope
+/// as the enclosing `${...}`, including `last` and all in-scope arguments):
+/// `"1 + 2"` → `3`, `"123"` → `123`, `"x + 1"` (with `x` in scope) →
+/// `x + 1`. A String that does **not** parse as math (free text like
+/// `"hello"`) is left as a plain String operand of the surrounding operator
+/// (numeric operators then raise `E011`; `+` concatenates). Non-String
+/// operands are used directly. Applies uniformly to *every* String-valued
+/// operand in math, including a single-operand whole expression (`${last}`
+/// with `last = "1 + 2"` → `3`); only a parse failure (`E010`) keeps the
+/// String — errors from evaluating the re-scanned expression propagate.
+///
+/// Gotcha: because re-scan evaluates in the current scope, a String argument
+/// whose content is a bare-identifier-looking token resolves to that
+/// identifier. E.g. `${ x }` with `x = "y"` re-scans as `y`, which looks up
+/// the argument `y` (→ `E003` if absent). Keep String arguments used in math
+/// either numeric or full math expressions; avoid re-using argument names as
+/// string contents.
+///
+/// Re-scan recursion is bounded by [`RESCAN_LIMIT`]: a self-referential
+/// string (e.g. `x = "x"`) aborts with `E008` instead of overflowing.
+fn resolve_operand(
+    v: Value,
+    src: &str,
+    scope: &Scope,
+    offset: usize,
+    depth: u32,
+) -> Result<Value, Diagnostic> {
+    match v {
+        Value::String(s) => {
+            if depth >= RESCAN_LIMIT {
+                return Err(err(
+                    scope,
+                    src,
+                    offset,
+                    E008,
+                    "max-depth exceeded during math string re-scan".to_string(),
+                ));
+            }
+            match eval_inner(&s, scope, depth + 1) {
+                Ok(v) => Ok(v),
+                Err(d) if d.code == E010 => Ok(Value::string(s)),
+                Err(d) => Err(d),
+            }
+        }
+        v => Ok(v),
     }
 }
 
@@ -1043,7 +1136,7 @@ mod tests {
         assert_eq!(eval_ok("-5.9 % 2", &empty), Value::int(-1));
         assert_eq!(eval_err("5 % 0", &empty).code, E011);
         assert_eq!(eval_err("5 % 0.0", &empty).code, E011);
-        let scope = Scope::with_args(vec![("s".to_string(), Value::string("x"))], vec![]);
+        let scope = Scope::with_args(vec![("s".to_string(), Value::string("x y"))], vec![]);
         assert_eq!(eval_err("s % 2", &scope).code, E011);
     }
 
@@ -1089,14 +1182,15 @@ mod tests {
 
     #[test]
     fn add_string_concatenation_semantics() {
+        // Non-parseable string operands are left as Strings and concatenate.
         let scope = Scope::with_args(
             vec![
-                ("a".to_string(), Value::string("foo")),
-                ("b".to_string(), Value::string("bar")),
+                ("a".to_string(), Value::string("foo bar")),
+                ("b".to_string(), Value::string("baz qux")),
             ],
             vec![],
         );
-        assert_eq!(eval_ok("a + b", &scope), Value::string("foobar"));
+        assert_eq!(eval_ok("a + b", &scope), Value::string("foo barbaz qux"));
         let scope = Scope::with_args(
             vec![
                 ("s".to_string(), Value::string("n=")),
@@ -1116,7 +1210,7 @@ mod tests {
             vec![
                 ("flag".to_string(), Value::bool(true)),
                 ("nothing".to_string(), Value::null()),
-                ("s".to_string(), Value::string("x")),
+                ("s".to_string(), Value::string("x y")),
             ],
             vec![],
         );
@@ -1133,7 +1227,10 @@ mod tests {
 
     #[test]
     fn numeric_ops_require_numbers() {
-        let scope = Scope::with_args(vec![("s".to_string(), Value::string("hello"))], vec![]);
+        let scope = Scope::with_args(
+            vec![("s".to_string(), Value::string("hello world"))],
+            vec![],
+        );
         for src in [
             "s - 1", "s * 2", "s / 2", "s % 2", "s ** 2", "1 - s", "2 * s", "2 / s", "2 % s",
             "2 ** s", "-s",
@@ -1185,6 +1282,90 @@ mod tests {
         );
         assert_eq!(eval_ok("x + last", &scope), Value::int(7));
         assert_eq!(eval_err("last", &Scope::new()).code, E003);
+    }
+
+    // ---- String re-scan (operand resolution) ----
+
+    #[test]
+    fn string_operands_are_rescanned_as_math() {
+        let scope = Scope::reduce_step(vec![], vec![], Value::string("1 + 2"));
+        assert_eq!(eval_ok("last", &scope), Value::int(3));
+
+        let scope = Scope::with_args(vec![("n".to_string(), Value::string("123"))], vec![]);
+        assert_eq!(eval_ok("n", &scope), Value::int(123));
+
+        let scope = Scope::with_args(
+            vec![
+                ("s".to_string(), Value::string("x + 1")),
+                ("x".to_string(), Value::int(41)),
+            ],
+            vec![],
+        );
+        assert_eq!(eval_ok("s", &scope), Value::int(42));
+
+        let scope = Scope::with_args(vec![("x".to_string(), Value::string("5"))], vec![]);
+        assert_eq!(eval_ok("x + 1", &scope), Value::int(6));
+
+        let scope = Scope::reduce_step(vec![], vec![], Value::string("1 + 2"));
+        assert_eq!(eval_ok("last * 2", &scope), Value::int(6));
+
+        let scope = Scope::with_args(vec![], vec![Value::string("2 * 3")]);
+        assert_eq!(eval_ok("$0 + 1", &scope), Value::int(7));
+    }
+
+    #[test]
+    fn non_parseable_strings_stay_string_operands() {
+        let scope = Scope::with_args(
+            vec![
+                ("a".to_string(), Value::string("free text")),
+                ("b".to_string(), Value::string("two words")),
+                ("s".to_string(), Value::string("n=")),
+            ],
+            vec![],
+        );
+        assert_eq!(eval_ok("a", &scope), Value::string("free text"));
+        assert_eq!(
+            eval_ok("a + b", &scope),
+            Value::string("free texttwo words")
+        );
+        assert_eq!(eval_ok("s + a", &scope), Value::string("n=free text"));
+        assert_eq!(eval_err("a * 2", &scope).code, E011);
+        assert_eq!(eval_err("a - 1", &scope).code, E011);
+        assert_eq!(eval_err("-a", &scope).code, E011);
+    }
+
+    #[test]
+    fn rescanned_string_errors_propagate() {
+        let scope = Scope::with_args(vec![("x".to_string(), Value::string("y"))], vec![]);
+        let d = eval_err("x", &scope);
+        assert_eq!(d.code, E003, "gotcha: re-scan resolves the identifier `y`");
+        assert!(d.message.contains('y'), "{}", d.message);
+
+        let scope = Scope::with_args(vec![("x".to_string(), Value::string("5 / 0"))], vec![]);
+        let d = eval_err("x", &scope);
+        assert_eq!(d.code, E011, "semantic errors from the re-scan propagate");
+        assert!(d.message.contains("zero"), "{}", d.message);
+    }
+
+    #[test]
+    fn rescanned_string_uses_current_scope_arguments() {
+        let scope = Scope::with_args(
+            vec![
+                ("expr".to_string(), Value::string("x + y")),
+                ("x".to_string(), Value::int(2)),
+                ("y".to_string(), Value::int(40)),
+            ],
+            vec![],
+        );
+        assert_eq!(eval_ok("expr", &scope), Value::int(42));
+    }
+
+    #[test]
+    fn self_referential_string_hits_depth_limit() {
+        let scope = Scope::with_args(vec![("x".to_string(), Value::string("x"))], vec![]);
+        let d = eval_err("x", &scope);
+        assert_eq!(d.code, E008);
+        assert!(d.message.contains("max-depth"), "{}", d.message);
     }
 
     #[test]

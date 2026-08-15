@@ -543,6 +543,22 @@ mod tests {
     }
 
     #[test]
+    fn rescanned_last_in_math_segment() {
+        use crate::math::V1Engine;
+        let scope = Scope::reduce_step(vec![], vec![], Value::string("1 + 2"));
+        assert_eq!(
+            resolve(&scan("${last}", SPAN).unwrap(), &scope, &V1Engine).unwrap(),
+            Value::int(3)
+        );
+        let scope = Scope::with_args(vec![("a".to_string(), Value::string("free text"))], vec![]);
+        let err = resolve(&scan("${a * 2}", SPAN).unwrap(), &scope, &V1Engine).unwrap_err();
+        assert_eq!(
+            err.code, E011,
+            "non-parseable string left as-is then numeric op"
+        );
+    }
+
+    #[test]
     fn plain_text_round_trips() {
         let scope = scope_of(&[]);
         assert_eq!(
