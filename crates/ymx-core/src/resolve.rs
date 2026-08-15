@@ -1,25 +1,32 @@
-//! Entry-path resolution (invariant #1) — and, from milestone 1.6, the
-//! rule-1–16 resolver.
+//! Entry-path resolution (invariant #1) and namespace-qualified lookup — and,
+//! from milestone 1.6, the rule-1–16 resolver.
 //!
 //! The **entry path** is a file-path address `<folder.path>.<file>.<component>`
 //! (e.g. `main.main` = root folder + `main.yml` + component `main`; `a.b.c` =
 //! folder `a` + `b.yml` + component `c`). It is **not** a namespace dotted
 //! path: `from: subdir.comp` and math `subdir.comp(...)` address namespaces,
 //! while the entry pinpoints one file (the front-matter source) plus one
-//! component for compilation. [`resolve_entry`] is pure — no I/O — because
-//! everything it needs already lives in [`Project`] (root, files, stores).
+//! component for compilation.
+//!
+//! [`resolve_ref`] is the namespace lookup primitive used by `from`, bare
+//! `$name` fallback, and builtins (milestone 1.6). Both functions are pure —
+//! no I/O — because everything they need already lives in [`Project`] (root,
+//! files, stores).
 //!
 //! `E009` (options stage) covers: malformed entry paths (fewer than two
 //! segments, empty segments, separator-bearing segments), a missing entry
 //! file, an ambiguous `.yml`/`.yaml` stem, and a component not defined in the
 //! entry file — including names that can never be components (builtins, meta
-//! keys, invalid identifiers).
+//! keys, invalid identifiers). `resolve_ref` returns an explicit miss /
+//! file-scope-violation outcome instead of a code: the call site (1.6) maps
+//! [`LookupMiss::NotFound`] to `E002` and [`LookupMiss::FileScopeViolation`]
+//! to `E005`.
 
 use std::path::{Path, PathBuf};
 
 use crate::diag::{Diagnostic, FileId, Span, E009};
-use crate::namespace::{classify, DefClass};
-use crate::project::Project;
+use crate::namespace::{classify, DefClass, Definition};
+use crate::project::{PlainMode, Project};
 
 /// Resolve the entry path `<folder.path>.<file>.<component>` against an
 /// already-loaded [`Project`].
@@ -179,6 +186,109 @@ fn component_missing(entry: &str, component: &str, file_path: &Path) -> Diagnost
     }
 }
 
+/// Why [`resolve_ref`] did not resolve a name. Callers (milestone 1.6) map
+/// [`NotFound`](LookupMiss::NotFound) to `E002` (unknown component reference)
+/// and [`FileScopeViolation`](LookupMiss::FileScopeViolation) to `E005`
+/// (file-scope violation) — the miss/violation distinction is the contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LookupMiss {
+    /// No definition anywhere for this name.
+    NotFound,
+    /// A file-scoped `_`-prefixed name exists, but only in document(s) other
+    /// than the referencing one. `owner` is the lowest-[`FileId`] document
+    /// that defines it (deterministic for diagnostics).
+    FileScopeViolation { owner: FileId },
+}
+
+/// Resolve a namespace-qualified reference (used by `from`, bare `$name`
+/// fallback, and builtins in milestone 1.6) against an already-loaded
+/// [`Project`].
+///
+/// `name` is the reference as written: a bare name (`main`, `$box`, `_x`) or a
+/// dotted namespace address (`subdir.comp`, `subdir.$tbox`). `from_file` is
+/// the referencing document's [`FileId`] — it decides file-scope visibility.
+/// `plain` is the effective `_ymx.plain` mode (wired from [`Options`] by
+/// `ymx-config` in milestone 1.4); `PlainMode::False` disables promotion.
+///
+/// Resolution order:
+/// 1. **Dotted names** (`a.b`, `subdir.$tbox`) — the part before the last dot
+///    is the namespace path, the rest (with any leading `$`s) is the name.
+///    Namespaces never hold `_`-prefixed definitions (they are file-scoped),
+///    so a dotted ref to a `_`-name is always [`LookupMiss::NotFound`].
+/// 2. **File-scoped names** — the effective identifier (leading `$`s
+///    stripped) starts with `_`. Looked up in the *referencing* document's
+///    file-scope store by full name (`_x`, `$_a`, …); found → resolved. Not
+///    found in `from_file` but present in another document →
+///    [`LookupMiss::FileScopeViolation`]; absent everywhere →
+///    [`LookupMiss::NotFound`].
+/// 3. **Bare names** — global namespace first; on a miss, `plain` promotion
+///    scans sub-namespaces in lexicographic dotted-path order (deterministic)
+///    for the full name, promoting components **and** templates under
+///    `PlainMode::All` but only templates (leading `$`) under
+///    `PlainMode::TemplatesOnly`.
+///
+/// Names that can never be definitions — meta keys (`_ymx`, `_test`), builtin
+/// effective ids (`map`/`reduce`/`merge`), reserved `$`-meta variants, invalid
+/// identifiers — resolve to [`LookupMiss::NotFound`] defensively.
+pub fn resolve_ref<'a>(
+    project: &'a Project,
+    name: &str,
+    from_file: FileId,
+    plain: PlainMode,
+) -> Result<&'a Definition, LookupMiss> {
+    if name.contains('.') {
+        let Some(dot) = name.rfind('.') else {
+            return Err(LookupMiss::NotFound);
+        };
+        let (namespace, short) = (&name[..dot], &name[dot + 1..]);
+        return project
+            .namespaces
+            .get(namespace, short)
+            .ok_or(LookupMiss::NotFound);
+    }
+    match classify(name, Span { line: 1, col: 1 }) {
+        DefClass::Component(meta) if meta.file_scoped => {
+            if let Some(def) = project.file_scoped.get(from_file, name) {
+                return Ok(def);
+            }
+            let owner = project
+                .file_scoped
+                .defs()
+                .filter(|(owner, full, _)| *owner != from_file && *full == name)
+                .map(|(owner, _, _)| owner)
+                .min_by_key(|owner| owner.0);
+            match owner {
+                Some(owner) => Err(LookupMiss::FileScopeViolation { owner }),
+                None => Err(LookupMiss::NotFound),
+            }
+        }
+        DefClass::Component(_) => {
+            if let Some(def) = project.namespaces.get("", name) {
+                return Ok(def);
+            }
+            if plain != PlainMode::False {
+                let mut paths: Vec<&str> = project
+                    .namespaces
+                    .namespaces()
+                    .map(|(path, _)| path)
+                    .filter(|path| !path.is_empty())
+                    .collect();
+                paths.sort_unstable();
+                let templates_only = plain == PlainMode::TemplatesOnly;
+                for path in paths {
+                    if let Some(def) = project.namespaces.get(path, name) {
+                        if !templates_only || def.full_name.starts_with('$') {
+                            return Ok(def);
+                        }
+                    }
+                }
+            }
+            Err(LookupMiss::NotFound)
+        }
+        _ => Err(LookupMiss::NotFound),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,9 +308,10 @@ mod tests {
     }
 
     /// Project rooted at `/proj`:
-    /// * `main.yml`      (FileId 0): `main`, `$box`, `_x`
-    /// * `a/b.yml`       (FileId 1): `x`, `c`
+    /// * `main.yml`      (FileId 0): `main`, `$box`; file-scoped `_x`, `$_a`
+    /// * `a/b.yml`       (FileId 1): `x`, `c`; file-scoped `_x`
     /// * `a/other.yml`   (FileId 2): `y`
+    /// * `subdir/t.yml`  (FileId 3): `t`, `$tbox`, `x`
     fn project() -> Project {
         let mut p = Project::new();
         p.root = PathBuf::from("/proj");
@@ -208,13 +319,19 @@ mod tests {
             PathBuf::from("/proj/main.yml"),
             PathBuf::from("/proj/a/b.yml"),
             PathBuf::from("/proj/a/other.yml"),
+            PathBuf::from("/proj/subdir/t.yml"),
         ];
         p.namespaces.register("", def(0, "main")).unwrap();
         p.namespaces.register("", def(0, "$box")).unwrap();
         p.namespaces.register("a", def(1, "x")).unwrap();
         p.namespaces.register("a", def(1, "c")).unwrap();
         p.namespaces.register("a", def(2, "y")).unwrap();
+        p.namespaces.register("subdir", def(3, "t")).unwrap();
+        p.namespaces.register("subdir", def(3, "$tbox")).unwrap();
+        p.namespaces.register("subdir", def(3, "x")).unwrap();
         p.file_scoped.register(FileId(0), def(0, "_x")).unwrap();
+        p.file_scoped.register(FileId(0), def(0, "$_a")).unwrap();
+        p.file_scoped.register(FileId(1), def(1, "_x")).unwrap();
         p
     }
 
@@ -332,5 +449,157 @@ mod tests {
                 "{entry}: the document exists"
             );
         }
+    }
+
+    // ---- Task 6: namespace-qualified lookup ----
+
+    fn lookup<'a>(
+        project: &'a Project,
+        name: &str,
+        from_file: u32,
+    ) -> Result<&'a Definition, LookupMiss> {
+        resolve_ref(project, name, FileId(from_file), PlainMode::False)
+    }
+
+    #[test]
+    fn bare_name_hits_global_namespace() {
+        let p = project();
+        let main = lookup(&p, "main", 0).expect("global main");
+        assert_eq!(main.file, FileId(0));
+        assert_eq!(main.full_name, "main");
+        let boxed = lookup(&p, "$box", 0).expect("global template $box");
+        assert_eq!(boxed.full_name, "$box");
+        // Global definitions are visible from every document.
+        let from_other = lookup(&p, "main", 2).expect("global visible cross-document");
+        assert_eq!(from_other.file, FileId(0));
+    }
+
+    #[test]
+    fn dotted_ref_hits_subnamespace() {
+        let p = project();
+        let x = lookup(&p, "a.x", 0).expect("a.x");
+        assert_eq!(x.file, FileId(1));
+        let t = lookup(&p, "subdir.t", 0).expect("subdir.t");
+        assert_eq!(t.file, FileId(3));
+        let tbox = lookup(&p, "subdir.$tbox", 0).expect("subdir.$tbox template");
+        assert_eq!(tbox.full_name, "$tbox");
+    }
+
+    #[test]
+    fn dotted_ref_miss_is_not_found() {
+        let p = project();
+        assert_eq!(lookup(&p, "a.nope", 0).err(), Some(LookupMiss::NotFound));
+        assert_eq!(
+            lookup(&p, "subdir.inner.x", 0).err(),
+            Some(LookupMiss::NotFound)
+        );
+        assert_eq!(lookup(&p, "a.b", 0).err(), Some(LookupMiss::NotFound));
+        assert_eq!(lookup(&p, "a.", 0).err(), Some(LookupMiss::NotFound));
+    }
+
+    #[test]
+    fn dotted_ref_to_file_scoped_name_is_not_found() {
+        // `_`-prefixed definitions never enter a namespace: `subdir._x` is
+        // absent from the `subdir` namespace even though a doc under subdir/
+        // might own a file-scoped `_x` (call sites map this to E002).
+        let p = project();
+        assert_eq!(lookup(&p, "subdir._x", 3).err(), Some(LookupMiss::NotFound));
+        assert_eq!(lookup(&p, "a._x", 1).err(), Some(LookupMiss::NotFound));
+    }
+
+    #[test]
+    fn file_scoped_hit_from_owning_document() {
+        let p = project();
+        let x = lookup(&p, "_x", 0).expect("owning doc resolves its _x");
+        assert_eq!(x.file, FileId(0));
+        let x = lookup(&p, "_x", 1).expect("a/b.yml resolves its own _x");
+        assert_eq!(x.file, FileId(1));
+        let a = lookup(&p, "$_a", 0).expect("owning doc resolves file-scoped template");
+        assert_eq!(a.full_name, "$_a");
+    }
+
+    #[test]
+    fn file_scoped_ref_from_other_document_is_violation() {
+        let p = project();
+        let err = lookup(&p, "_x", 2).expect_err("a/other.yml does not own _x");
+        assert_eq!(
+            err,
+            LookupMiss::FileScopeViolation { owner: FileId(0) },
+            "lowest owning FileId reported (deterministic)"
+        );
+        let err = lookup(&p, "$_a", 2).expect_err("file-scoped template violates too");
+        assert_eq!(err, LookupMiss::FileScopeViolation { owner: FileId(0) });
+    }
+
+    #[test]
+    fn file_scoped_name_absent_anywhere_is_not_found() {
+        let p = project();
+        assert_eq!(lookup(&p, "_z", 0).err(), Some(LookupMiss::NotFound));
+        assert_eq!(lookup(&p, "_z", 2).err(), Some(LookupMiss::NotFound));
+    }
+
+    #[test]
+    fn meta_and_builtin_names_never_resolve() {
+        let p = project();
+        for name in [
+            "_ymx", "_test", "map", "reduce", "merge", "$_ymx", "$$_test",
+        ] {
+            assert_eq!(
+                lookup(&p, name, 0).err(),
+                Some(LookupMiss::NotFound),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn promotion_all_promotes_components_and_templates() {
+        let p = project();
+        let promoted = resolve_ref(&p, "x", FileId(0), PlainMode::All).expect("component promoted");
+        assert_eq!(
+            promoted.file,
+            FileId(1),
+            "`a` sorts before `subdir` — lexicographic scan"
+        );
+        let t = resolve_ref(&p, "t", FileId(0), PlainMode::All).expect("component promoted");
+        assert_eq!(t.file, FileId(3));
+        let tbox = resolve_ref(&p, "$tbox", FileId(0), PlainMode::All).expect("template promoted");
+        assert_eq!(tbox.full_name, "$tbox");
+    }
+
+    #[test]
+    fn promotion_templates_only_promotes_templates_but_not_components() {
+        let p = project();
+        let tbox = resolve_ref(&p, "$tbox", FileId(0), PlainMode::TemplatesOnly)
+            .expect("template promoted");
+        assert_eq!(tbox.full_name, "$tbox");
+        assert_eq!(
+            resolve_ref(&p, "x", FileId(0), PlainMode::TemplatesOnly).err(),
+            Some(LookupMiss::NotFound),
+            "components are not promoted under TemplatesOnly"
+        );
+        assert_eq!(
+            resolve_ref(&p, "t", FileId(0), PlainMode::TemplatesOnly).err(),
+            Some(LookupMiss::NotFound)
+        );
+    }
+
+    #[test]
+    fn promotion_disabled_by_default_mode() {
+        let p = project();
+        assert_eq!(lookup(&p, "x", 0).err(), Some(LookupMiss::NotFound));
+        assert_eq!(lookup(&p, "t", 0).err(), Some(LookupMiss::NotFound));
+        assert_eq!(lookup(&p, "$tbox", 0).err(), Some(LookupMiss::NotFound));
+    }
+
+    #[test]
+    fn promotion_never_shadows_global_or_owner() {
+        let p = project();
+        // A name already in the global namespace wins without scanning.
+        let main = resolve_ref(&p, "main", FileId(2), PlainMode::All).expect("global wins");
+        assert_eq!(main.file, FileId(0));
+        // File-scoped resolution is not affected by promotion.
+        let x = resolve_ref(&p, "_x", FileId(1), PlainMode::All).expect("owner wins");
+        assert_eq!(x.file, FileId(1));
     }
 }
