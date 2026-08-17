@@ -12,6 +12,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
 
+      # ---------------------------------------------------------------------
+      # Threshold stance (initial): unenforced.
+      # ---------------------------------------------------------------------
+      # The `cargo llvm-cov` invocations below do NOT pass
+      # `--fail-under-regions` or `--fail-under-lines`. This intentionally
+      # preserves coverage production (the lcov artifact uploads and, once
+      # uncommented, the Codecov upload) without gating CI on a coverage
+      # percentage while a stable baseline is being collected across the
+      # scenario suite (`tests/cases/rule-NN/*`).
+      #
+      # Follow-up task: once milestone 1.11's scenario suite is green AND a
+      # stable coverage baseline has been observed across multiple CI runs,
+      # add `--fail-under-regions=<pct>` (and/or `--fail-under-lines=<pct>`)
+      # to the `cargo llvm-cov` invocation(s) below so that a drop below the
+      # established baseline fails CI. Pick the threshold from the observed
+      # baseline (e.g. the median of the last N green runs), not a target.
+      # ---------------------------------------------------------------------
       - name: Generate lcov coverage report
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
 
