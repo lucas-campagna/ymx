@@ -36,6 +36,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.14 | `done` | Build-time & binary-size metrics | (repo) | [1.14-build-metrics.md](1.14-build-metrics.md) | 1.10 |
 | 1.15 | `done` | CLI file-based entry refactor | ymx-cli | [1.15-cli-file-entry.md](1.15-cli-file-entry.md) | 1.10 |
 | 1.16 | `done` | Entry component optionality (E009/E002 split) | ymx-core, ymx-config, ymx-test, ymx-cli | [1.16-entry-component-optional.md](1.16-entry-component-optional.md) | 1.15 |
+| 1.17 | `planned` | Recursive test discovery | ymx-cli | [1.17-recursive-tests.md](1.17-recursive-tests.md) | 1.10 |
 
 ## Cross-cutting notes
 

@@ -150,7 +150,7 @@ A document may carry two reserved **meta keys** at its top level — `_ymx` (fro
 ## CLI
 
 ```
-ymx <file> [flags]
+ymx [path] [flags]
 ```
 
 - `--entry <component>`: name of the component within `<file>` to compile (default `main`). The project root is the file's parent directory; the entry path is derived internally as `<file_stem>.<component>` (always exactly 2 segments). If the file is missing or the entry name is not a valid component identifier, the CLI emits `E009` at option-resolution and exits non-zero. If the file exists but the component is not defined in it, the CLI emits `E002` at compile time and exits non-zero.
@@ -162,9 +162,14 @@ ymx <file> [flags]
 - `--plain`: promote sub-namespace components **and** templates into the global namespace (equivalent to `_ymx.plain: true`).
 - `--plain-template`: promote sub-namespace **templates only** into the global namespace (equivalent to `_ymx.plain: template`). `--plain` and `--plain-template` are mutually exclusive (CLI arg error). Each overrides the entry-file `_ymx.plain` value per the precedence rule.
 - `--format <json|diagnostics>`: output style (v1: `json`; `diagnostics` lists errors only).
-- `--test`: run inline `_test` cases (via `ymx-test`) instead of compiling the entry. Emits one line per test (`PASS`/`FAIL` + target + diff on failure) and exits non-zero if any test fails or any `_test` block fails to parse (`E010`) — no JSON is emitted. A test passes when its expectation is met: `Expected::Value` requires the target to compile to the expected value; `Expected::Error` requires the target to produce a diagnostic with the expected code. Flag defaults still come from `_ymx` front matter.
+- `--test`: run inline `_test` cases (via `ymx-test`) instead of compiling the entry.
+  When `path` is omitted it defaults to `.` (the current directory). When `path`
+  is a **directory**, recursively walk it and run all `_test` blocks in every
+  subdirectory containing `.yml`/`.yaml` files (each is an independent project);
+  aggregate results across all projects and exit non-zero if any test fails. When
+  `path` is a **file**, run tests for that single project (the existing behaviour).
 
-**Orchestration.** The CLI is the canonical full pipeline: `ymx_lib::load_project(path.parent())` → `ymx_config::extract_options(&project, &cli)` → `ymx_core::compile(&project, &opts)` (or `ymx_test::run_tests(&project, &opts)` under `--test`) → serialize/emit. The project root is derived from the file's parent directory; `--entry` is resolved before `extract_options` because it selects the front-matter source file (see *`_ymx` — front matter*).
+**Orchestration.** The CLI is the canonical full pipeline: `ymx_lib::load_project(path.parent())` → `ymx_config::extract_options(&project, &cli)` → `ymx_core::compile(&project, &opts)` (or `ymx_test::run_tests(&project, &opts)` under `--test`) → serialize/emit. The project root is derived from the file's parent directory; `--entry` is resolved before `extract_options` because it selects the front-matter source file (see *`_ymx` — front matter*). When `--test` is given with a directory path (or `.` by default), the CLI walks that directory recursively, treating each subdirectory containing `.yml`/`.yaml` files as an independent project, and runs `load_project` → `extract_options` → `parse_tests` + `run_tests` per project, aggregating results and exiting non-zero if any test fails across all projects.
 
 **Exit codes.** `0` on success; non-zero (default `1`) when any diagnostic is produced — including parse/namespace errors (`E001`, `E004`, …), a missing entry file or invalid entry name (`E009`), a missing entry component (`E002`), max-depth (`E008`), or a failing `_test` under `--test`. With `--format diagnostics` on a successful compile, stdout is empty and the exit code is `0`.
 
@@ -299,6 +304,21 @@ pub fn parse_tests(project: &Project) -> Result<Vec<Test>, Vec<Diagnostic>>;
 /// target has `code == expected.code`. Only codes arising after a successful
 /// load are matchable (load-time codes are not `_test`-driveable).
 pub fn run_tests(project: &Project, opts: &Options) -> Vec<TestResult>;
+```
+
+### `ymx-cli` — argument parsing
+
+```rust
+/// Parsed command-line arguments (produced by `ymx_cli::parse()`).
+pub struct ParsedCli {
+    pub path: PathBuf,           // resolved input path (file or directory)
+    pub entry: Option<String>,  // --entry override (None = use file stem as comp)
+    pub test_dir: Option<PathBuf>, // set when `--test` is given and `path` resolves
+                                   // to a directory at parse time (recursive mode);
+                                   // None means single-project file mode
+    /* other fields: from_keyword, default_keyword, max_depth, output, pretty,
+       plain, plain_template, format */
+}
 ```
 
 ### Serialization & errors
