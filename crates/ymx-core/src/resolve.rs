@@ -986,6 +986,10 @@ impl<'a> Resolver<'a> {
             if !caller_supplied(&base_name) {
                 let value = self.resolve_node(&entry.value, &padded, file)?;
                 set.named.insert(base_name, value);
+            } else {
+                if let Some((_, v)) = scope.named.iter().find(|(n, _)| *n == base_name) {
+                    set.named.insert(base_name, v.clone());
+                }
             }
         }
 

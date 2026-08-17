@@ -1,9 +1,9 @@
 ---
 version: "1.x"
 title: "YMX v1 implementation plan"
-short: "Index of versioned implementation milestones (1.1 – 1.14)"
+short: "Index of versioned implementation milestones (1.1 – 1.19)"
 description: |
-  Tracks the build of YMX v1 per docs/PRD.md: the rules-1–16 resolver, JSON
+  Tracks the build of YMX v1 per docs/PRD.md: the rules-1–18 resolver, JSON
   output, CLI + library, inline `_test`, file-path entry addressing, and
   namespace promotion via `_ymx.plain`. Each milestone is a separate file with
   frontmatter (version, title, short description, dependencies, status) and
@@ -37,7 +37,8 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.15 | `done` | CLI file-based entry refactor | ymx-cli | [1.15-cli-file-entry.md](1.15-cli-file-entry.md) | 1.10 |
 | 1.16 | `done` | Entry component optionality (E009/E002 split) | ymx-core, ymx-config, ymx-test, ymx-cli | [1.16-entry-component-optional.md](1.16-entry-component-optional.md) | 1.15 |
 | 1.17 | `done` | Recursive test discovery | ymx-cli | [1.17-recursive-tests.md](1.17-recursive-tests.md) | 1.10 |
-| 1.18 | `done` | Rule 17: `?` optional/default-merge property-key modifier | ymx-core | [1.18-optional-merge.md](1.18-optional-merge.md) | 1.6 |
+| 1.18 | `planned` | Rule 18: `$` math shorthand property-key modifier | ymx-core | [1.18-math-shorthand.md](1.18-math-shorthand.md) | 1.6 |
+| 1.19 | `done` | Rule 17: `?` optional/default-merge property-key modifier | ymx-core | [1.19-optional-merge.md](1.19-optional-merge.md) | 1.6 |
 
 ## Cross-cutting notes
 
