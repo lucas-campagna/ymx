@@ -413,7 +413,7 @@ Referencing a file-scoped component from outside its document is a hard error (`
 
 - `?` (optional / default-merge — rule 17, **v1**): `x?: v` declares a default `v` for `x` and activates object-merge mode for the enclosing component.
 - `$` (math shorthand — rule 18, **v2**): `x$: src` ≡ `x: ${src}` — the value is a math source string, evaluated to produce the property value.
-- Combination `?$` (**v2**): `x?$: src` ≡ `x?: ${src}` (default whose value is a math-evaluated expression); `x$?:` is `E010` (wrong order).
+- Combination `?$` (**v1**): `x?$: src` ≡ `x?: ${src}` — an optional property whose default is a math-evaluated expression. `x$?:` is `E010` (wrong order).
 - The modifiers apply to **all property keys** — ordinary string names, integer positional keys (`0?:`, `1$:` ⇒ default for / math-evaluate `$0`, `$1`), and the template/component-name position (the leading name of a top-level pair: `a$: src` ≡ `a: ${src}`). They do **not** apply to the reserved meta fields `_ymx`/`_test` nor to any field *inside* those meta blocks: those are not callable components (no template, no `from`, no `${...}`, no `$N`) and the modifiers are rejected on them (`E010`).
 
 ### 1. Top-level keys are components
@@ -966,7 +966,7 @@ Calling `a` with no `x` → `{"x": 2, "y": 4, "z": "Value: 2"}`. Calling `a` wit
 
 > **Lazy defaults.** A `?:` default `v` is evaluated (interpolation, math, inline `$call(...)` resolved) **only** when the caller did **not** supply `<name>`. If the caller supplies the key, `v` is never evaluated — dead work in unused defaults is skipped, and errors in an unused default do not surface. The plain (non-`?:`) properties of the callee are evaluated as usual during step 1 of rule 11.
 
-> **Scope of `?:`.** `?:` applies to ordinary property names and to integer positional keys (`0?:` ⇒ default for `$0`, `1?:` ⇒ default for `$1`, …). It does **not** apply to the reserved meta fields `_ymx`/`_test` or to any field *inside* those meta blocks (they are not callable components); a `?:` on such a key is `E010` (see *Property-key modifiers*).
+> **Scope of `?:`.** `?:` applies to ordinary property names and to integer positional keys (`0?:` ⇒ default for `$0`, `1?:` ⇒ default for `$1`, …). The `?$` combination (`0?$:` ⇒ optional slot with math-evaluated default) is also v1. `?:` does **not** apply to the reserved meta fields `_ymx`/`_test` or to any field *inside* those meta blocks; a `?:` on such a key is `E010` (see *Property-key modifiers*).
 
 ### 18. Math shorthand (`$` suffix) *(v2)*
 

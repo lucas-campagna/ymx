@@ -39,6 +39,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.17 | `done` | Recursive test discovery | ymx-cli | [1.17-recursive-tests.md](1.17-recursive-tests.md) | 1.10 |
 | 1.18 | `done` | Rule 18: `$` math shorthand property-key modifier | ymx-core | [1.18-math-shorthand.md](1.18-math-shorthand.md) | 1.6 |
 | 1.19 | `done` | Rule 17: `?` optional/default-merge property-key modifier | ymx-core | [1.19-optional-merge.md](1.19-optional-merge.md) | 1.6 |
+| 1.20 | `planned` | Rule 17+18: `?$` optional property with math-evaluated default | ymx-core | [1.20-combination.md](1.20-combination.md) | 1.18, 1.19 |
 
 ## Cross-cutting notes
 
