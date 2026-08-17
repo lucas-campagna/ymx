@@ -34,6 +34,8 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.12 | `done` | CI gate & dependency security | (repo) | [1.12-ci-gate.md](1.12-ci-gate.md) | 1.1 |
 | 1.13 | `done` | Code coverage reporting (cargo-llvm-cov) | (repo) | [1.13-coverage.md](1.13-coverage.md) | 1.9 |
 | 1.14 | `done` | Build-time & binary-size metrics | (repo) | [1.14-build-metrics.md](1.14-build-metrics.md) | 1.10 |
+| 1.15 | `done` | CLI file-based entry refactor | ymx-cli | [1.15-cli-file-entry.md](1.15-cli-file-entry.md) | 1.10 |
+| 1.16 | `planned` | Entry component optionality (E009/E002 split) | ymx-core, ymx-config, ymx-test, ymx-cli | [1.16-entry-component-optional.md](1.16-entry-component-optional.md) | 1.15 |
 
 ## Cross-cutting notes
 
