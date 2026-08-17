@@ -39,8 +39,9 @@ FLAGS
                               component main in the entry file). The entry path internally
                               is <file_stem>.<component> (always exactly 2 segments). If the
                               file defines both <stem>.yml and <stem>.yaml the entry is
-                              ambiguous (E009). If the file is missing or does not define
-                              the component, the CLI emits E009 and exits non-zero.
+                              ambiguous (E009). If the file is missing the CLI emits E009
+                              and exits non-zero; if the file exists but the component is
+                              not defined the CLI emits E002 and exits non-zero.
 
     --from-keyword <kw>       Override the `from` keyword (default: from).
 
@@ -98,7 +99,9 @@ EXIT CODES
     1   A runtime diagnostic or test failure — load error (E001/E004/E007/E015),
         entry/options error (E009/E010), a malformed `_test` block (E010), a
         failing test under --test, or any error during compile
-        (E002/E003/E005/E006/E008/E010/E011/E012/E013). Diagnostics are
+        (E002/E003/E005/E006/E008/E010/E011/E012/E013). E002 covers missing entry
+        components; E009 covers missing files, ambiguous stems, and invalid
+        component names. Diagnostics are
         rendered to stderr as `[code] file:line:col (component): message`.
     2   Usage error — missing or extra positional path, bad --max-depth, bad
         --format, unknown flag, a flag missing its value, or --plain together

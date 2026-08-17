@@ -124,10 +124,10 @@ fn output_file_not_created_on_compile_error() {
         out_path.to_str().unwrap(),
         dir.path().join("other.yml").to_str().unwrap(),
     ]);
-    assert!(!result.0.status.success(), "non-zero exit on E009");
+    assert!(!result.0.status.success(), "non-zero exit on E002");
     assert!(!out_path.exists(), "no output file on diagnostic");
     let stderr = stderr(&result.0);
-    assert!(stderr.contains("E009"), "stderr renders E009: {stderr}");
+    assert!(stderr.contains("E002"), "stderr renders E002: {stderr}");
     assert_eq!(stdout(&result.0), "", "no stdout on diagnostic");
 }
 
@@ -176,11 +176,11 @@ fn format_diagnostics_on_compile_error_renders_diagnostic_to_stderr() {
         "diagnostics",
         dir.path().join("other.yml").to_str().unwrap(),
     ]);
-    assert!(!out.0.status.success(), "non-zero exit on E009");
+    assert!(!out.0.status.success(), "non-zero exit on E002");
     assert_eq!(stdout(&out.0), "", "no stdout on diagnostic");
     assert!(
-        stderr(&out.0).contains("E009"),
-        "stderr renders E009: {}",
+        stderr(&out.0).contains("E002"),
+        "stderr renders E002: {}",
         stderr(&out.0)
     );
 }
