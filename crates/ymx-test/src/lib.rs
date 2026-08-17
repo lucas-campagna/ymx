@@ -95,9 +95,10 @@ pub struct TestResult {
 /// [`resolve_entry`](ymx_core::resolve::resolve_entry) against the literal
 /// default entry path `main.main` (this crate has no [`Options`], so the
 /// `--entry` override is invisible here; the harness uses
-/// `CliOverrides::default_for_tests()`, so nothing in 1.9 observes it). An
-/// unresolvable default entry (`E009`) propagates as the sole parse error: no
-/// test targets can be produced without a resolvable entry.
+/// `CliOverrides::default_for_tests()`, so nothing in 1.9 observes it). If
+/// the entry file cannot be located the parse fails (`E009`); if the entry
+/// component is not defined bare A/B also fail to resolve, but type-2-only
+/// `_test` blocks parse successfully without ever consulting the entry component.
 ///
 /// Same-document targeting: every type-2 key must resolve to a definition
 /// hosted by the `_test` block's own document — namespace defs (global +
@@ -118,15 +119,33 @@ pub fn parse_tests(project: &Project) -> Result<Vec<Test>, Vec<Diagnostic>> {
     if project.raw_meta_test.is_empty() {
         return Ok(Vec::new());
     }
-    let entry_target = match resolve_entry(project, "main.main") {
-        Ok((_, namespace, component)) => {
-            if namespace.is_empty() {
-                component.to_string()
-            } else {
-                format!("{namespace}.{component}")
+
+    // First pass: determine if any test block is bare A or bare B.
+    // Bare B = top-level object with `result` or `error` key.
+    // Bare A = scalar (Null/Bool/Int/Float/String, never mixed with type-2 in the same doc).
+    // A top-level list is always shape 4 (type-2 only).
+    let has_bare_ab = project.raw_meta_test.iter().any(|(_, value)| match value {
+        Value::Object(m) if m.contains_key("result") || m.contains_key("error") => true,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::String(_) => true,
+        Value::Object(_) | Value::Array(_) => false,
+    });
+
+    // Only resolve the entry when bare A/B shapes are present.
+    // Type-2-only projects never consult the entry component.
+    let entry_target = if has_bare_ab {
+        match resolve_entry(project, "main.main") {
+            Ok((_, namespace, component)) => {
+                if namespace.is_empty() {
+                    component.to_string()
+                } else {
+                    format!("{namespace}.{component}")
+                }
             }
+            Err(diag) => return Err(vec![diag]),
         }
-        Err(diag) => return Err(vec![diag]),
+    } else {
+        // Type-2 only: entry_target is unused but we need a sentinel.
+        String::new()
     };
 
     let mut tests: Vec<Test> = Vec::new();
@@ -137,6 +156,7 @@ pub fn parse_tests(project: &Project) -> Result<Vec<Test>, Vec<Diagnostic>> {
             // Bare B: a mapping containing `result` or `error`, targeting the
             // entry component.
             Value::Object(m) if m.contains_key("result") || m.contains_key("error") => {
+                debug_assert!(has_bare_ab);
                 match parse_b(project, *file, span, value, &entry_target, None) {
                     Ok(test) => tests.push(test),
                     Err(diag) => diags.push(diag),
@@ -164,13 +184,16 @@ pub fn parse_tests(project: &Project) -> Result<Vec<Test>, Vec<Diagnostic>> {
                 }
             }
             // Bare A: a scalar targeting the entry component with no args.
-            scalar => tests.push(Test {
-                target: entry_target.clone(),
-                args: TestArgs::None,
-                expected: Expected::Value(scalar.clone()),
-                file: *file,
-                span,
-            }),
+            scalar => {
+                debug_assert!(has_bare_ab);
+                tests.push(Test {
+                    target: entry_target.clone(),
+                    args: TestArgs::None,
+                    expected: Expected::Value(scalar.clone()),
+                    file: *file,
+                    span,
+                });
+            }
         }
     }
     if diags.is_empty() {
@@ -782,6 +805,23 @@ mod tests {
         let diags = parse_tests(&p).unwrap_err();
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, E009);
+    }
+
+    #[test]
+    fn type2_only_scenario_without_main_parses_successfully() {
+        // A project with a/b.yml defining `x`, a _test block `{x: {result: 7}}`,
+        // and NO main.yml at all — parse_tests returns Ok because type-2 maps
+        // never consult the entry component.
+        let mut p = Project::new();
+        p.root = PathBuf::from("/proj");
+        p.files = vec![PathBuf::from("/proj/a/b.yml")];
+        p.namespaces.register("a", def(1, "x")).unwrap();
+        let p = with_test(p, 1, "x: {result: 7}\n");
+        let tests = parse_tests(&p).expect("type-2 only, no main");
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].target, "a.x");
+        assert_eq!(tests[0].args, TestArgs::None);
+        assert!(matches!(&tests[0].expected, Expected::Value(Value::Int(7))));
     }
 
     // ---- run_tests ----
