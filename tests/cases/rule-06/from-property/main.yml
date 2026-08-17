@@ -1,4 +1,3 @@
-main: placeholder
 CompA:
   from: CompB
   x: 12

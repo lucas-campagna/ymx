@@ -1,4 +1,3 @@
-main: placeholder
 target: $0 + $name
 comp: "$target(name=1, 2)"
 _test:

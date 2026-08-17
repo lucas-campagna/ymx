@@ -1,4 +1,3 @@
-main: placeholder
 $a:
   prop1: ${x + 1}
   prop2: ${y * x}

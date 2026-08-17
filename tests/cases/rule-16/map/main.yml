@@ -1,4 +1,3 @@
-main: placeholder
 adder: $a + $b
 items:
   - {a: 1, b: 2}

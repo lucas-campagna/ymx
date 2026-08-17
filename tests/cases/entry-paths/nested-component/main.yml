@@ -1,5 +1,4 @@
-main: placeholder
 helper: hello
 _test:
-  main:
-    result: placeholder
+  helper:
+    result: hello

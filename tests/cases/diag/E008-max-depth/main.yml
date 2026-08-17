@@ -1,6 +1,5 @@
 _ymx:
   max_depth: 2
-main: placeholder
 self_ref: $self_ref()
 _test:
   self_ref:

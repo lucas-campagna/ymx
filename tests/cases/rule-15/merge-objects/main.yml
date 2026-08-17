@@ -1,4 +1,3 @@
-main: placeholder
 a: {x: 1, y: 0}
 b: {y: 2, z: 3}
 c: $merge($a, $b)

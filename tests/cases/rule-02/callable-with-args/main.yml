@@ -1,4 +1,3 @@
-main: placeholder
 user:
   name: $user_name
   phone: $user_phone

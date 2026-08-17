@@ -1,4 +1,3 @@
-main: placeholder
 comp: "$_secret()"
 _test:
   comp:

@@ -1,4 +1,3 @@
-main: placeholder
 greeter:
   out: "hi $name"
 _test:

@@ -1,4 +1,3 @@
-main: placeholder
 comp: $id("\q")
 id: $0
 _test:

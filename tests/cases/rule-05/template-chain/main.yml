@@ -1,4 +1,3 @@
-main: placeholder
 $box:
   from: div
   children: "Hello, $name!"
