@@ -1,0 +1,59 @@
+name: Coverage
+
+on: [push, pull_request]
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Update stable toolchain
+        run: rustup update stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      # ---------------------------------------------------------------------
+      # Threshold stance (initial): unenforced.
+      # ---------------------------------------------------------------------
+      # The `cargo llvm-cov` invocations below do NOT pass
+      # `--fail-under-regions` or `--fail-under-lines`. This intentionally
+      # preserves coverage production (the lcov artifact uploads and, once
+      # uncommented, the Codecov upload) without gating CI on a coverage
+      # percentage while a stable baseline is being collected across the
+      # scenario suite (`tests/cases/rule-NN/*`).
+      #
+      # Follow-up task: once milestone 1.11's scenario suite is green AND a
+      # stable coverage baseline has been observed across multiple CI runs,
+      # add `--fail-under-regions=<pct>` (and/or `--fail-under-lines=<pct>`)
+      # to the `cargo llvm-cov` invocation(s) below so that a drop below the
+      # established baseline fails CI. Pick the threshold from the observed
+      # baseline (e.g. the median of the last N green runs), not a target.
+      # ---------------------------------------------------------------------
+      - name: Generate lcov coverage report
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+      - name: Upload lcov artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov
+          path: lcov.info
+
+      # ---------------------------------------------------------------------
+      # Codecov upload path (commented-in form).
+      # ---------------------------------------------------------------------
+      # The two steps below upload coverage to Codecov. They require a remote
+      # (e.g. GitHub) and a `CODECOV_TOKEN` repository secret to be configured
+      # before they can run. Uncomment these steps once a remote + token exist
+      # so coverage uploads to Codecov and the badge in `docs/impl/README.md`
+      # can render. Left commented while the repo has no remote; the lcov
+      # artifact path above is the token-free fallback.
+      # ---------------------------------------------------------------------
+      # - name: Generate codecov coverage report
+      #   run: cargo llvm-cov --workspace --codecov --output-path codecov.json
+      #
+      # - name: Upload coverage to Codecov
+      #   uses: codecov/codecov-action@v5
+      #   with:
+      #     files: codecov.json
+      #     token: ${{ secrets.CODECOV_TOKEN }}
+      #     fail_ci_if_error: true
