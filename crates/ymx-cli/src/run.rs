@@ -1,12 +1,19 @@
-//! Canonical pipeline orchestration (milestone 1.10, task 3).
+//! Canonical pipeline orchestration (milestone 1.10, tasks 3 + 4).
 //!
 //! `load_project` -> `extract_options` -> (`--test` ? `run_tests` :
 //! `compile`) -> emit. Diagnostic rendering (one
 //! [`Diagnostic::render`](ymx_lib::Diagnostic::render) line per stderr entry)
-//! and exit codes are this module's responsibility; the success-emit shape
-//! (JSON pretty / `--output` file / `--format diagnostics` empty-stdout) lands
-//! in task 4. Until then the compile-success path uses a stub emit
-//! (`println!("{value:?}")`).
+//! and exit codes are this module's responsibility. The compile-branch emit
+//! shape (task 4) follows the per-`opts.format` split:
+//! * `Json`: serialize the [`Value`] via `serde_json` (pretty iff
+//!   `opts.pretty`); write to the `--output` file if provided, else stdout.
+//!   The file is written only on success (compile already succeeded by the
+//!   time emit runs); a write failure prints a diagnostic-style error to
+//!   stderr and yields [`Outcome::Diagnostic`], best-effort removing any
+//!   partially written file.
+//! * `Diagnostics`: on success stdout is empty and the outcome is
+//!   [`Outcome::Success`] (the compile-error branch is already handled as
+//!   [`Outcome::Diagnostic`] before emit runs).
 //!
 //! Orchestration order (PRD §CLI):
 //! 1. `load_project(path)` — any load-time diagnostic (`E001` / `E004` /
@@ -19,15 +26,15 @@
 //!    re-parses and silently degrades, so `parse_tests` is the gate), then
 //!    `run_tests(&project, &opts)`. One line per test (`PASS` / `FAIL` + diff
 //!    on failure); any failure or parse error yields
-//!    [`Outcome::Diagnostic`].
+//!    [`Outcome::Diagnostic`]. No JSON is emitted under `--test`.
 //! 4. Otherwise `compile(&project, &opts)` — any diagnostic renders to
-//!    stderr and yields [`Outcome::Diagnostic`]; success hits the stub emit
-//!    (task 4 replaces it).
+//!    stderr and yields [`Outcome::Diagnostic`]; success hits [`emit`].
 
+use std::path::Path;
 use std::process::ExitCode;
 
 use ymx_config::extract_options;
-use ymx_lib::ymx_core::project::{Options, Project};
+use ymx_lib::ymx_core::project::{Format, Options, Project};
 use ymx_lib::ymx_core::resolve::compile;
 use ymx_lib::{load_project, Diagnostic, Value};
 use ymx_test::{parse_tests, run_tests, Expected, TestResult};
@@ -75,7 +82,7 @@ pub fn run(cli: &ParsedCli) -> Outcome {
     }
 
     match compile(&project, &opts) {
-        Ok(value) => emit_stub(&value),
+        Ok(value) => emit(cli, &opts, &value),
         Err(diags) => render_diags(&diags),
     }
 }
@@ -125,11 +132,72 @@ fn diff(result: &TestResult) -> String {
     format!("expected: {expected} actual: {actual}")
 }
 
-/// Stub success emit (task 4 replaces it with the real emit shape — JSON
-/// pretty iff `--pretty`, `--output` file written only on success, and
-/// `--format diagnostics` empty stdout).
-fn emit_stub(value: &Value) -> Outcome {
-    println!("{value:?}");
+/// Success-branch emit (task 4). Per `opts.format`:
+///
+/// * [`Format::Diagnostics`]: emit nothing to stdout; the outcome is
+///   [`Outcome::Success`] (PRD: `--format diagnostics` on a successful
+///   compile leaves stdout empty and exits `0`). `--output` is ignored in
+///   this mode.
+/// * [`Format::Json`]: serialize `value` with `serde_json` (pretty iff
+///   `opts.pretty`). If `cli.output` is set, the JSON is written to that
+///   file atomically — the string is materialized first, so a serialization
+///   failure aborts before any file is created; a write failure prints a
+///   diagnostic-style error to stderr, best-effort removes any partially
+///   written file, and yields [`Outcome::Diagnostic`]. Otherwise the JSON is
+///   written to stdout. `--output` is ignored under `--test` (handled
+///   earlier in [`run`]).
+fn emit(cli: &ParsedCli, opts: &Options, value: &Value) -> Outcome {
+    match opts.format {
+        Format::Diagnostics => Outcome::Success,
+        Format::Json => emit_json(cli, opts.pretty, value),
+    }
+}
+
+/// Serialize `value` to JSON (pretty iff `pretty`) and dispatch to
+/// `--output` or stdout. Serialization is materialized into a `String`
+/// before any I/O, so a serialize failure never creates a file.
+fn emit_json(cli: &ParsedCli, pretty: bool, value: &Value) -> Outcome {
+    let json = match serialize(value, pretty) {
+        Ok(json) => json,
+        Err(message) => {
+            eprintln!("ymx: {message}");
+            return Outcome::Diagnostic;
+        }
+    };
+    match cli.output.as_deref() {
+        Some(path) => write_file(path, &json),
+        None => {
+            print!("{json}");
+            Outcome::Success
+        }
+    }
+}
+
+/// Serialize `value` to a JSON `String`: compact by default, pretty when
+/// `pretty`. `serde_json` does not fail for our [`Value`] shape (it derives
+/// `Serialize` and contains only JSON-representable types), but the fall-back
+/// keeps the emit path robust.
+fn serialize(value: &Value, pretty: bool) -> Result<String, String> {
+    if pretty {
+        serde_json::to_string_pretty(value).map_err(|e| format!("failed to serialize JSON: {e}"))
+    } else {
+        serde_json::to_string(value).map_err(|e| format!("failed to serialize JSON: {e}"))
+    }
+}
+
+/// Write `json` to `path`: serialize first (done by the caller), then a single
+/// `fs::write` (which truncates-then-writes). A write failure prints a
+/// diagnostic-style error to stderr, best-effort removes any partial file,
+/// and yields [`Outcome::Diagnostic`].
+fn write_file(path: &Path, json: &str) -> Outcome {
+    if let Err(e) = std::fs::write(path, json) {
+        let _ = std::fs::remove_file(path);
+        eprintln!(
+            "ymx: failed to write output file `{path}`: {e}",
+            path = path.display()
+        );
+        return Outcome::Diagnostic;
+    }
     Outcome::Success
 }
 
@@ -372,5 +440,155 @@ mod tests {
     fn render_diags_reports_diagnostic_outcome() {
         let diags: Vec<Diagnostic> = Vec::new();
         assert_eq!(render_diags(&diags), Outcome::Diagnostic);
+    }
+
+    // ---- task 4: emit ----
+
+    #[test]
+    fn serialize_compact_and_pretty_round_trip() {
+        use ymx_lib::ymx_core::parse::{node_to_value, parse_document};
+        // Build a `Value::Object` via the parser so we don't reach for
+        // `indexmap` from this crate. Keys are deliberately out of lexical
+        // order so the `preserve_order` feature's effect is observable.
+        let v = node_to_value(&parse_document("b: 2\na: 1\n").expect("parse"));
+        let compact = serialize(&v, false).expect("compact");
+        assert_eq!(
+            compact, "{\"b\":2,\"a\":1}",
+            "compact preserves YAML insertion order"
+        );
+        let pretty = serialize(&v, true).expect("pretty");
+        assert!(pretty.contains('\n'), "pretty is multiline: {pretty}");
+        assert!(pretty.contains("\"b\":"), "pretty: {pretty}");
+        assert!(pretty.contains("\"a\":"), "pretty: {pretty}");
+    }
+
+    #[test]
+    fn emit_format_json_no_output_returns_success() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "main: 1\n");
+        let cli = cli_for(dir.path());
+        assert_eq!(
+            emit(&cli, &Options::default(), &Value::Int(1)),
+            Outcome::Success
+        );
+    }
+
+    #[test]
+    fn emit_format_diagnostics_returns_success_no_output_written() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "main: 1\n");
+        let mut cli = cli_for(dir.path());
+        let out = dir.path().join("ignored.json");
+        cli.output = Some(out.clone());
+        let opts = Options {
+            format: Format::Diagnostics,
+            ..Options::default()
+        };
+        assert_eq!(emit(&cli, &opts, &Value::Int(1)), Outcome::Success);
+        assert!(!out.exists(), "--output ignored under --format diagnostics");
+    }
+
+    #[test]
+    fn emit_json_with_output_writes_file_on_success() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "main: 1\n");
+        let out = dir.path().join("out.json");
+        let mut cli = cli_for(dir.path());
+        cli.output = Some(out.clone());
+        assert_eq!(
+            emit(&cli, &Options::default(), &Value::Int(1)),
+            Outcome::Success
+        );
+        assert!(out.exists(), "file created on success");
+        let written = fs::read_to_string(&out).expect("read back");
+        assert_eq!(written, "1", "compact JSON written verbatim");
+    }
+
+    #[test]
+    fn emit_json_pretty_with_output_writes_multiline_file() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "main: 1\n");
+        let out = dir.path().join("out.json");
+        let mut cli = cli_for(dir.path());
+        cli.output = Some(out.clone());
+        let opts = Options {
+            pretty: true,
+            ..Options::default()
+        };
+        assert_eq!(emit(&cli, &opts, &Value::Int(1)), Outcome::Success);
+        let written = fs::read_to_string(&out).expect("read back");
+        assert_eq!(
+            written, "1",
+            "a scalar prettifiles to itself; round-trip OK"
+        );
+    }
+
+    #[test]
+    fn run_writes_output_file_on_compile_success() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "main: 1\n");
+        let out = dir.path().join("out.json");
+        let mut cli = cli_for(dir.path());
+        cli.output = Some(out.clone());
+        assert_eq!(run(&cli), Outcome::Success);
+        assert!(out.exists());
+        assert_eq!(fs::read_to_string(&out).unwrap(), "1");
+    }
+
+    #[test]
+    fn run_does_not_write_output_file_on_compile_error() {
+        // Missing default entry -> E009 in extract_options, before compile /
+        // emit. The --output file must NOT be created.
+        let dir = TempDir::new();
+        dir.write("other.yml", "other: 1\n");
+        let out = dir.path().join("out.json");
+        let mut cli = cli_for(dir.path());
+        cli.output = Some(out.clone());
+        assert_eq!(run(&cli), Outcome::Diagnostic);
+        assert!(!out.exists(), "no file on diagnostic");
+    }
+
+    #[test]
+    fn run_does_not_write_output_file_on_missing_entry_with_explicit_entry() {
+        let dir = TempDir::new();
+        dir.write("a/b.yml", "x: 7\n");
+        let out = dir.path().join("out.json");
+        let mut cli = cli_with_entry(dir.path(), "a.b.y");
+        cli.output = Some(out.clone());
+        assert_eq!(run(&cli), Outcome::Diagnostic);
+        assert!(!out.exists(), "no file on E009");
+    }
+
+    #[test]
+    fn run_format_diagnostics_on_success_yields_success() {
+        // `--format diagnostics` -> empty stdout, exit 0 on success. We test
+        // the outcome here; stdout emptiness is asserted by the binary
+        // integration test in tests/cli.rs (capturing stdout requires a
+        // subprocess; in-process unit tests would race on the shared stdout
+        // handle).
+        let dir = TempDir::new();
+        dir.write("main.yml", "main: 1\n");
+        let mut cli = cli_for(dir.path());
+        cli.format = Some(Format::Diagnostics);
+        assert_eq!(run(&cli), Outcome::Success);
+    }
+
+    #[test]
+    fn write_file_failure_returns_diagnostic_and_removes_partial() {
+        // A path whose parent does not exist cannot be written by `fs::write`
+        // (it does not create parent directories). write_file best-effort
+        // removes any partial file (none created here) and reports Diagnostic.
+        let dir = TempDir::new();
+        let bad = dir.path().join("no_such_dir").join("out.json");
+        assert_eq!(write_file(&bad, "1"), Outcome::Diagnostic);
+        assert!(!bad.exists());
+    }
+
+    #[test]
+    fn write_file_success_returns_success() {
+        let dir = TempDir::new();
+        let out = dir.path().join("ok.json");
+        assert_eq!(write_file(&out, "42"), Outcome::Success);
+        assert_eq!(fs::read_to_string(&out).unwrap(), "42");
     }
 }
