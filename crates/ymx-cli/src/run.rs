@@ -169,7 +169,7 @@ fn run_recursive_tests(dir: &Path) -> Outcome {
         let project = match load_project(proj_dir) {
             Ok(p) => p,
             Err(diags) => {
-                eprintln!("ymx: warning: {}: {}", proj_dir.display(), &diags[0].message);
+                eprintln!("ymx: warning: {}: {}", proj_dir.display(), diags[0].message);
                 continue;
             }
         };
@@ -177,7 +177,7 @@ fn run_recursive_tests(dir: &Path) -> Outcome {
         let opts = match extract_options(&project, &CliOverrides::default_for_tests()) {
             Ok(o) => o,
             Err(diags) => {
-                eprintln!("ymx: warning: {}: {}", proj_dir.display(), &diags[0].message);
+                eprintln!("ymx: warning: {}: {}", proj_dir.display(), diags[0].message);
                 continue;
             }
         };
@@ -186,7 +186,7 @@ fn run_recursive_tests(dir: &Path) -> Outcome {
             eprintln!(
                 "ymx: warning: {}: parse error: {}",
                 proj_dir.display(),
-                &diags[0].message
+                diags[0].message
             );
             overall_success = false;
             continue;
@@ -206,7 +206,12 @@ fn run_recursive_tests(dir: &Path) -> Outcome {
         }
     }
 
-    println!("PASS: {}/{} across {} project(s)", total_passed, total_tests, roots.len());
+    println!(
+        "PASS: {}/{} across {} project(s)",
+        total_passed,
+        total_tests,
+        roots.len()
+    );
 
     if overall_success && total_passed == total_tests {
         Outcome::Success
@@ -780,7 +785,7 @@ mod tests {
         // but overall outcome should still be Success (0 projects, 0 tests)
         let dir = TempDir::new();
         dir.write("bad/bad.yml", "a: 1\n---\nb: 2\n"); // multi-doc is E001
-        // No valid projects found - warn and exit 0
+                                                       // No valid projects found - warn and exit 0
         assert_eq!(run(&cli_with_test_dir(dir.path())), Outcome::Success);
     }
 
