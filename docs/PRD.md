@@ -409,11 +409,11 @@ Referencing a file-scoped component from outside its document is a hard error (`
 
 > A namespace dot (`.`) appears only at the *lookup* layer for `from` targets and math `name(...)` calls (e.g. `from: subdir.comp`); it is not part of an effective identifier and cannot appear inside `$name` interpolation. Cross-namespace component references are reached via `from` (rule 6) or via the math `subdir.comp(...)` form (rule 7), never via bare `$subdir.comp` (which would interpolate `$subdir` then the literal text `.comp`).
 
-**Property-key modifiers (v2).** A *property key* (the left-hand side of a property, inside a component body) may carry one or two trailing modifiers that affect how the property is resolved — they are **stripped before** the property name is used for resolution, matching, or the rule-8 shortcut, so `x?` and `x$` both target the slot named `x`.
+**Property-key modifiers.** A *property key* (the left-hand side of a property, inside a component body) may carry one or two trailing modifiers that affect how the property is resolved — they are **stripped before** the property name is used for resolution, matching, or the rule-8 shortcut, so `x?` and `x$` both target the slot named `x`.
 
-- `?` (optional / default-merge — rule 17): `x?: v` declares a default `v` for `x` and activates object-merge mode for the enclosing component.
-- `$` (math shorthand — rule 18): `x$: src` ≡ `x: ${src}` — the value is a math source string, evaluated to produce the property value.
-- Combination order is fixed: `?$` only. `x?$: src` ≡ `x?: ${src}` (default whose value is a math-evaluated expression); `x$?:` is `E010` (wrong order).
+- `?` (optional / default-merge — rule 17, **v1**): `x?: v` declares a default `v` for `x` and activates object-merge mode for the enclosing component.
+- `$` (math shorthand — rule 18, **v2**): `x$: src` ≡ `x: ${src}` — the value is a math source string, evaluated to produce the property value.
+- Combination `?$` (**v2**): `x?$: src` ≡ `x?: ${src}` (default whose value is a math-evaluated expression); `x$?:` is `E010` (wrong order).
 - The modifiers apply to **all property keys** — ordinary string names, integer positional keys (`0?:`, `1$:` ⇒ default for / math-evaluate `$0`, `$1`), and the template/component-name position (the leading name of a top-level pair: `a$: src` ≡ `a: ${src}`). They do **not** apply to the reserved meta fields `_ymx`/`_test` nor to any field *inside* those meta blocks: those are not callable components (no template, no `from`, no `${...}`, no `$N`) and the modifiers are rejected on them (`E010`).
 
 ### 1. Top-level keys are components
@@ -686,7 +686,7 @@ Any property referenced by a component (via `$name`, `$0`, `${name}`, etc.) must
 
 Resolving a component runs in three steps, in this fixed order:
 
-1. **Property resolution (before template)** — every property value of the component is fully resolved. A property value is a *nested call-site* when it is an object containing the `from` key, or any value containing an inline `$comp(...)` call (rule 3) or a `${...}` interpolation (rule 7). Nested call-sites resolve **bottom-up**: the deepest nested call is evaluated first, its return value bubbles up to its parent, and so on, until every property of the component has a fully resolved value. Bare `$name` (no parens) resolves as: (a) a named argument `name` in scope → that argument's value; (b) else if a regular component `name` exists → call it with no args and use its return value (its own template chain applies first); (c) else → hard error (rule 10). `$name(...)` unconditionally calls the component `name` (rule 3) and bypasses the argument lookup. Inside `${...}` (math context) there is **no fallback**: a bare identifier refers to an argument or the math result of the previous step (`last`); to call a component inside math, use the `name(...)` form (rule 7). *(v2)* Property-key modifiers (`?`, `$`) are stripped first; a `$`-suffix value is wrapped in `${...}` and a `?:` default is recorded for later merge binding (rule 17).
+1. **Property resolution (before template)** — every property value of the component is fully resolved. A property value is a *nested call-site* when it is an object containing the `from` key, or any value containing an inline `$comp(...)` call (rule 3) or a `${...}` interpolation (rule 7). Nested call-sites resolve **bottom-up**: the deepest nested call is evaluated first, its return value bubbles up to its parent, and so on, until every property of the component has a fully resolved value. Bare `$name` (no parens) resolves as: (a) a named argument `name` in scope → that argument's value; (b) else if a regular component `name` exists → call it with no args and use its return value (its own template chain applies first); (c) else → hard error (rule 10). `$name(...)` unconditionally calls the component `name` (rule 3) and bypasses the argument lookup. Inside `${...}` (math context) there is **no fallback**: a bare identifier refers to an argument or the math result of the previous step (`last`); to call a component inside math, use the `name(...)` form (rule 7). *(v2 only for `$`; `?` is v1)* Property-key modifiers (`?`, `$`) are stripped first; a `$`-suffix value is wrapped in `${...}` and a `?:` default is recorded for later merge binding (rule 17).
 2. **Template chain (rule 5)** — applied to the post-step-1 property set. The innermost template runs first, its result feeds the next template, and so on. Each template link is itself a **normal component call** and follows this same three-step flow (its own property resolution, its own template chain, its own `from`/shortcut dispatch), **with one exception**: the *first* link of a chain whose `$template` is an array uses the rule 12/13/14 map/reduce semantics instead of a single call. Templates can only be reached through their **direct** child: `a` invokes `$a`; if `$a` is absent, `a` does **not** skip to `$$a` — the chain is broken at that point. Template names are not valid `from` targets.
 3. **`from` / shortcut dispatch (rules 6 and 8, after template)** — these are **mutually exclusive and sugar-equivalent**: the rule-8 shortcut is sugar for `from`, so exactly one of them fires. If the (post-template) value of `from` names a valid *regular* component, `from` dispatches: the target is called with the rest of the property set as arguments (the `from` key itself is **not** forwarded; the rule-8 shortcut is **suppressed**), and the return value replaces the component's output. If `from` does **not** name a valid regular component (templates excluded; non-String `from`; missing target), `from` is a **plain forwarded property** and the rule-8 shortcut fires normally against the post-template property set (a property whose name matches a component → that component is called with the remaining properties as arguments, the matched key's value passed as `$default`; the invalid `from` is forwarded alongside them as an ordinary argument). Either dispatch target is a normal component call following this same three-step flow.
 
@@ -911,8 +911,6 @@ Calling `c` produces `"1 + 2 = 3"`:
 
 ---
 
-> **v2 rules.** The following two rules are **not** implemented in v1; the v1 compiler only handles rules 1–16. They are specified here so the v1 surface stays forward-compatible.
-
 ### 17. Optional properties (`?`) — default-value object merge
 
 A property key of the form `<name>?` declares an **optional** property `<name>` with a default value placed where the value normally goes. When the enclosing component is *called* (template application — rule 5, `from` dispatch — rule 6, inline `$name(...)` — rule 3, or `$map`/`$reduce` — rule 16), the caller-supplied value for `<name>` overrides the default; if the caller supplies no `<name>`, the default `v` is used and the property is emitted with `v` as its value. This applies uniformly across every call site.
@@ -968,9 +966,9 @@ Calling `a` with no `x` → `{"x": 2, "y": 4, "z": "Value: 2"}`. Calling `a` wit
 
 > **Lazy defaults.** A `?:` default `v` is evaluated (interpolation, math, inline `$call(...)` resolved) **only** when the caller did **not** supply `<name>`. If the caller supplies the key, `v` is never evaluated — dead work in unused defaults is skipped, and errors in an unused default do not surface. The plain (non-`?:`) properties of the callee are evaluated as usual during step 1 of rule 11.
 
-> **Scope of `?:`.** `?:` applies to ordinary property names and to integer positional keys (`0?:` ⇒ default for `$0`, `1?:` ⇒ default for `$1`, …). It does **not** apply to the reserved meta fields `_ymx`/`_test` or to any field *inside* those meta blocks (they are not callable components); a `?:` on such a key is `E010` (see *Property-key modifiers (v2)*).
+> **Scope of `?:`.** `?:` applies to ordinary property names and to integer positional keys (`0?:` ⇒ default for `$0`, `1?:` ⇒ default for `$1`, …). It does **not** apply to the reserved meta fields `_ymx`/`_test` or to any field *inside* those meta blocks (they are not callable components); a `?:` on such a key is `E010` (see *Property-key modifiers*).
 
-### 18. Math shorthand (`$` suffix)
+### 18. Math shorthand (`$` suffix) *(v2)*
 
 A trailing `$` on a property key (or on the leading name of a top-level component/template) is shorthand for wrapping the value in a `${...}` math expression.
 
@@ -1007,4 +1005,4 @@ a:
 ```
 The first `x$?:` is an error. The correct form for a math-evaluated optional default is `x?$: src`.
 
-> This rule introduces no new diagnostic codes: non-string `$`-suffix values and wrong modifier order both surface as the existing `E010` (invalid syntax).
+> This rule (rule 18) is v2. Rule 17 (`?`) is v1. Non-string `$`-suffix values and wrong modifier order surface as `E010` (invalid syntax).
