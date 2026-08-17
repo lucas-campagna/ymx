@@ -196,3 +196,22 @@ jobs:
       #   with:
       #     name: rust-code-analysis-pmd
       #     path: rust-code-analysis-pmd.json
+
+      # -------------------------------------------------------------------
+      # Gate posture (task 4 of milestone 1.14) — informational-only.
+      # -------------------------------------------------------------------
+      # Every measurable step in this workflow is wrapped in
+      # `continue-on-error: true` (above) so that miss/instability in the
+      # timing report, the binary-size capture, or the rust-code-analysis
+      # export cannot fail a PR. This workflow publishes only descriptive
+      # artifacts and a Markdown summary; no budgets are enforced.
+      #
+      # Follow-up (once a stable baseline exists): introduce explicit size &
+      # time budgets here — promote the relevant metric step's
+      # `continue-on-error: true` to a hard failure when its measured value
+      # crosses the budget (rust-code-analysis-action output,
+      # `binary-size.json` byte totals, or per-crate timing totals). Baseline
+      # the budgets against the most-recent N green runs (median or p95),
+      # not aspirational targets; gate behind the existing `ci.yml`
+      # fmt/clippy/test gate so repo policy stays in one place.
+      # -------------------------------------------------------------------
