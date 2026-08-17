@@ -159,3 +159,40 @@ jobs:
         with:
           name: binary-size
           path: binary-size.json
+
+      # -------------------------------------------------------------------
+      # (Optional) Cyclomatic-complexity export (task 3 of milestone 1.14).
+      # -------------------------------------------------------------------
+      # Decision (subtask "Decide whether to surface `metrics.yml` as a
+      # separate workflow vs. fold into `ci.yml`"): metrics concerns live in
+      # this dedicated workflow, NOT folded into `ci.yml`. Rationale:
+      # `ci.yml` is the narrow fmt/clippy/test gate and must not gain
+      # metrics-only side effects; isolation across audits (`audit.yml`),
+      # coverage (`coverage.yml`), and metrics (this file) is the established
+      # repo precedent and keeps each workflow's trigger / caching / failure
+      # semantics independent.
+      #
+      # The `rust-code-analysis-action` invocation below is left commented
+      # pending validation against the project's `rust-toolchain.toml` pin
+      # (`rust-code-analysis` requires per-toolchain compatibility) and
+      # confirmation of the PMD-style JSON import path on the trending
+      # backend. Uncomment the two steps below once that validation is done;
+      # the resulting `rust-code-analysis-pmd.json` is the PMD-complexity
+      # artifact for trending on `main`.
+      # -------------------------------------------------------------------
+      # - name: rust-code-analysis complexity export
+      #   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      #   continue-on-error: true
+      #   uses: softdevteam/rust-code-analysis-action@v0.0.7
+      #   with:
+      #     input-path: crates/
+      #     output-file: rust-code-analysis-pmd.json
+      #     output-type: pmd
+      #
+      # - name: Upload rust-code-analysis artifact
+      #   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      #   continue-on-error: true
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: rust-code-analysis-pmd
+      #     path: rust-code-analysis-pmd.json
