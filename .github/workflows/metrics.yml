@@ -100,3 +100,62 @@ jobs:
               with open(summary, "a", encoding="utf-8") as fh:
                   fh.write(text + "\n")
           PY
+
+      # -------------------------------------------------------------------
+      # Binary-size tracking (task 2 of milestone 1.14).
+      # -------------------------------------------------------------------
+      # The YMX CLI Cargo *package* `ymx-cli` builds a `[[bin]] name = "ymx"`
+      # binary (see `crates/ymx-cli/Cargo.toml`), so the milestone prose's
+      # `target/debug/ymx-cli` size shorthand resolves to `target/debug/ymx`
+      # here. The earlier `cargo build --workspace --timings` step above
+      # already produced the debug binary at `target/debug/ymx`. This section
+      # additionally builds a release-stripped variant and writes both byte
+      # totals to `binary-size.json` (uploaded per build; no historical trend
+      # store until a remote / trend backend exists).
+      # -------------------------------------------------------------------
+      - name: cargo build --release -p ymx-cli
+        continue-on-error: true
+        run: cargo build --release -p ymx-cli
+
+      - name: strip release binary
+        continue-on-error: true
+        run: strip target/release/ymx
+
+      - name: Capture binary sizes -> binary-size.json
+        continue-on-error: true
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          out = {}
+          dbg = Path("target/debug/ymx")
+          if dbg.exists():
+              out["debug"] = {"path": str(dbg), "bytes": dbg.stat().st_size}
+          else:
+              out["debug"] = {
+                  "path": str(dbg),
+                  "bytes": None,
+                  "note": "target/debug/ymx not present; build step may have failed",
+              }
+          rel = Path("target/release/ymx")
+          if rel.exists():
+              out["release_stripped"] = {"path": str(rel), "bytes": rel.stat().st_size}
+          else:
+              out["release_stripped"] = {
+                  "path": str(rel),
+                  "bytes": None,
+                  "note": "target/release/ymx not present; release build or strip step may have failed",
+              }
+          text = json.dumps(out, indent=2, sort_keys=True) + "\n"
+          Path("binary-size.json").write_text(text)
+          print(text)
+          PY
+
+      - name: Upload binary-size artifact
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-size
+          path: binary-size.json
