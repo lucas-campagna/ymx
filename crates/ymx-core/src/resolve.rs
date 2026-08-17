@@ -890,8 +890,15 @@ impl<'a> Resolver<'a> {
         scope: &Scope<'_>,
         file: FileId,
     ) -> Result<ResolvedBody, Diagnostic> {
-        self.reject_modifier_keys(entries, scope)?;
+        self.reject_dollar_modifier_keys(entries, scope)?;
         let mut set = PropertySet::default();
+
+        // Optional key tracking: (stripped_key, entry) for lazy default evaluation.
+        // Entries with `?` suffix are not resolved immediately; they're recorded
+        // here and evaluated lazily only if the caller did not supply the key.
+        let mut optional_named: Vec<(String, &crate::parse::Entry)> = Vec::new();
+        let mut optional_slots: Vec<(usize, &crate::parse::Entry)> = Vec::new();
+
         for entry in entries {
             match &entry.key {
                 crate::parse::Key::Int(i) if *i >= 0 => {
@@ -914,6 +921,33 @@ impl<'a> Resolver<'a> {
                     set.slots[idx] = value;
                     set.order.push(PropKey::Slot(idx));
                 }
+                crate::parse::Key::String(s) if s.ends_with('?') => {
+                    // `x?` optional named property or `0?` optional slot.
+                    // Strip the `?` suffix to get the base key.
+                    let base = &s[..s.len() - 1];
+                    if let Ok(idx) = base.parse::<usize>() {
+                        // `0?`, `1?`, etc. — optional positional slot.
+                        if idx > MAX_SLOTS {
+                            return Err(ctx_err(
+                                scope,
+                                E010,
+                                format!("slot key `{s}` is too large (max {MAX_SLOTS})"),
+                            ));
+                        }
+                        // Record for lazy evaluation: only use default if caller
+                        // did not supply positional at this index.
+                        optional_slots.push((idx, entry));
+                        // Add to order but don't insert into slots yet.
+                        if set.slots.len() <= idx {
+                            set.slots.resize(idx + 1, Value::Null);
+                        }
+                        set.order.push(PropKey::Slot(idx));
+                    } else {
+                        // `x?` — optional named property.
+                        optional_named.push((base.to_string(), entry));
+                        set.order.push(PropKey::Named(base.to_string()));
+                    }
+                }
                 _ => {
                     let name = key_to_string(&entry.key);
                     set.order.push(PropKey::Named(name));
@@ -924,9 +958,44 @@ impl<'a> Resolver<'a> {
             positional: padded_positional(&scope.positional, &set.slots),
             ..scope.clone()
         };
+
+        // Evaluate lazy defaults for optional slots: only if caller did not
+        // supply that positional index. Rebuild padded scope after this so
+        // named properties can reference the evaluated slot defaults.
+        for (idx, entry) in optional_slots {
+            if let Some(value) = scope.positional.get(idx) {
+                // Caller supplied this positional; use their value.
+                set.slots[idx] = value.clone();
+            } else {
+                // Caller did not supply this positional; evaluate the default.
+                let default = self.resolve_node(&entry.value, &padded, file)?;
+                set.slots[idx] = default;
+            }
+        }
+
+        // Rebuild padded scope to include evaluated optional slot defaults.
+        let padded = Scope {
+            positional: padded_positional(&scope.positional, &set.slots),
+            ..scope.clone()
+        };
+
+        // Evaluate lazy defaults for optional named properties: only if caller
+        // did not supply that named argument.
+        let caller_supplied = |name: &str| scope.named.iter().any(|(n, _)| n == name);
+        for (base_name, entry) in optional_named {
+            if !caller_supplied(&base_name) {
+                let value = self.resolve_node(&entry.value, &padded, file)?;
+                set.named.insert(base_name, value);
+            }
+        }
+
         for entry in entries {
             match &entry.key {
                 crate::parse::Key::String(name) => {
+                    // Skip keys that were already handled as optional (ending in `?`).
+                    if name.ends_with('?') {
+                        continue;
+                    }
                     let value = self.resolve_node(&entry.value, &padded, file)?;
                     set.named.insert(name.clone(), value);
                 }
@@ -965,7 +1034,7 @@ impl<'a> Resolver<'a> {
                 .collect::<Result<Vec<Value>, _>>()
                 .map(Value::array),
             Node::Object(entries, _) => {
-                self.reject_modifier_keys(entries, scope)?;
+                self.reject_dollar_modifier_keys(entries, scope)?;
                 if entries.iter().any(|e| self.is_from_key(&e.key)) {
                     return self.resolve_mini(entries, scope, file);
                 }
@@ -986,23 +1055,67 @@ impl<'a> Resolver<'a> {
         matches!(key, crate::parse::Key::String(s) if s == &self.opts.from_keyword)
     }
 
-    /// v1 rejection of the v2 property-key modifiers (rules 17/18): a string
-    /// key carrying a trailing `?` or `$` is `E010` when reached during
-    /// step 1. The v2 strip / `${...}`-wrap / `?:`-default semantics are
-    /// deliberately not implemented.
-    fn reject_modifier_keys(
+    /// Rejects the v2-only `$` property-key modifier (rule 18). The `?`
+    /// modifier (rule 17, v1) is accepted here and handled in
+    /// [`resolve_property_set`] by stripping the `?` and recording a lazy
+    /// default.
+    fn reject_dollar_modifier_keys(
         &self,
         entries: &[crate::parse::Entry],
         scope: &Scope<'_>,
     ) -> Result<(), Diagnostic> {
         for entry in entries {
             if let crate::parse::Key::String(s) = &entry.key {
-                if s.ends_with('?') || s.ends_with('$') {
+                // `$` modifier (rule 18) is v2-only: any key ending with `$`.
+                if s.ends_with('$') {
                     return Err(ctx_err(
                         scope,
                         E010,
-                        format!("property-key modifier `{s}` is not supported in v1"),
+                        format!(
+                            "property-key modifier `${s}` is not supported in v1 \
+                             (rule 18 `$` shorthand is v2)"
+                        ),
                     ));
+                }
+                // `?` modifier (rule 17) checks.
+                if let Some(base) = s.strip_suffix('?') {
+                    // `?` on meta fields `_ymx`/`_test` is E010.
+                    if base == "_ymx" || base == "_test" {
+                        return Err(ctx_err(
+                            scope,
+                            E010,
+                            format!("property-key modifier `?` on meta field `{s}` is not allowed"),
+                        ));
+                    }
+                    // Wrong modifier order `x$?` (math first, optional second) is E010.
+                    // `x$?` ends with `?` but has `$` before the trailing `?`.
+                    if base.ends_with('$') {
+                        return Err(ctx_err(
+                            scope,
+                            E010,
+                            format!(
+                                "wrong property-key modifier order `{s}`: \
+                                 `$` (math) must come after `?` (optional), not before"
+                            ),
+                        ));
+                    }
+                    // `?` on invalid identifier keys is E010.
+                    // Valid identifiers: `[A-Za-z_][A-Za-z0-9_]*`.
+                    // Numeric strings like `0`, `1` are slot references (accepted).
+                    let is_valid_ident = !base.is_empty()
+                        && base
+                            .chars()
+                            .next()
+                            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                        && base.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+                    if !is_valid_ident && base.parse::<usize>().is_err() {
+                        // Not a valid identifier and not a numeric slot reference → E010.
+                        return Err(ctx_err(
+                            scope,
+                            E010,
+                            format!("property-key modifier `?` on invalid identifier `{s}`"),
+                        ));
+                    }
                 }
             }
         }
@@ -2424,12 +2537,12 @@ mod tests {
 
     #[test]
     fn property_key_modifiers_are_e010_in_v1() {
+        // `$` modifier (rule 18) is v2-only and remains E010 in v1.
         for (label, src) in [
-            ("top-level", "main:\n  x?: 1\n"),
-            ("dollar", "main:\n  x$: 1\n"),
-            ("nested", "main:\n  a:\n    b?: 1\n"),
+            ("dollar top-level", "main:\n  x$: 1\n"),
+            ("dollar nested", "main:\n  a:\n    b$: 1\n"),
             (
-                "mini",
+                "mini dollar",
                 "comp: 1\nmain:\n  mini:\n    from: comp\n    y$: 2\n",
             ),
         ] {
@@ -2437,20 +2550,67 @@ mod tests {
             let d = compile_err(&p, "main", &Args::None);
             assert_eq!(d.code, E010, "{label}");
         }
-        let p = project_with(&[("main.yml", "main:\n  x: 1\n  ok: 2\n")]);
+        // `?` on meta fields `_ymx`/`_test` is E010 (nested in a component body).
+        let p = project_with(&[("main.yml", "main:\n  _ymx?: 1\n")]);
+        let d = compile_err(&p, "main", &Args::None);
+        assert_eq!(d.code, E010, "`?` on `_ymx` key in component body is E010");
+        // Wrong modifier order `x$?` (math first, optional second) is E010.
+        let p = project_with(&[("main.yml", "main:\n  x$?: 1\n")]);
+        let d = compile_err(&p, "main", &Args::None);
+        assert_eq!(d.code, E010, "wrong modifier order `x$?` is E010");
+        // `?` on invalid identifier keys (not `[A-Za-z_][A-Za-z0-9_]*`) is E010.
+        // Note: `0?`, `1?` are slot references (accepted), not identifiers.
+        for (label, src) in [
+            ("dot.key?", "main:\n  foo.bar?: 1\n"),
+            ("dash-key?", "main:\n  foo-bar?: 1\n"),
+            ("colon:key?", "main:\n  foo:bar?: 1\n"),
+        ] {
+            let p = project_with(&[("main.yml", src)]);
+            let d = compile_err(&p, "main", &Args::None);
+            assert_eq!(d.code, E010, "{label}");
+        }
+        // `?` modifier (rule 17) is v1 and should be accepted.
+        let p = project_with(&[("main.yml", "main:\n  x?: 1\n  ok: 2\n")]);
         assert_eq!(
             compile_ok(&p, "main", &Args::None),
             Value::object(IndexMap::from([
                 ("x".to_string(), Value::int(1)),
                 ("ok".to_string(), Value::int(2)),
             ])),
-            "unmodified keys are unaffected"
+            "`?` optional modifier is v1 and accepted"
         );
+        // `?` on template-link body is also v1.
         let p = project_with(&[("main.yml", "a: 1\n$a:\n  x?: 2\n")]);
-        let d = compile_err(&p, "a", &Args::None);
         assert_eq!(
-            d.code, E010,
-            "a template-link body is a step-1 surface: its keys are rejected too"
+            compile_ok(&p, "a", &Args::None),
+            Value::object(IndexMap::from([("x".to_string(), Value::int(2))])),
+            "`?` in template-link body is v1"
+        );
+    }
+
+    #[test]
+    fn optional_slot_lazy_default() {
+        // `0?:` — optional slot with default. When caller does NOT supply
+        // positional at that index, the default is evaluated lazily.
+        let p = project_with(&[("main.yml", "b:\n  0?: 99\n  y: $0\n")]);
+        assert_eq!(
+            compile_ok(&p, "b", &Args::None),
+            Value::object(IndexMap::from([
+                ("0".to_string(), Value::int(99)),
+                ("y".to_string(), Value::int(99)),
+            ])),
+            "no positional arg: slot 0 uses the lazy default 99"
+        );
+
+        // When caller DOES supply positional, the default is skipped entirely.
+        let p = project_with(&[("main.yml", "a: $b(1)\nb:\n  0?: 99\n  y: $0\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::object(IndexMap::from([
+                ("0".to_string(), Value::int(1)),
+                ("y".to_string(), Value::int(1)),
+            ])),
+            "caller supplied positional: slot 0 is 1, default 99 is never evaluated"
         );
     }
 
