@@ -15,10 +15,11 @@
 //!
 //! `E009` (options stage) covers: malformed entry paths (fewer than two
 //! segments, empty segments, separator-bearing segments), a missing entry
-//! file, an ambiguous `.yml`/`.yaml` stem, and a component not defined in the
-//! entry file — including names that can never be components (builtins, meta
-//! keys, invalid identifiers). `resolve_ref` returns an explicit miss /
-//! file-scope-violation outcome instead of a code: the call site (1.6) maps
+//! file, an ambiguous `.yml`/`.yaml` stem, and non-component/template names
+//! (builtins, meta keys, invalid identifiers). Component existence is NOT
+//! checked here — [`compile`] raises `E002` if the resolved entry component is
+//! not defined. `resolve_ref` returns an explicit miss / file-scope-violation
+//! outcome instead of a code: the call site (1.6) maps
 //! [`LookupMiss::NotFound`] to `E002` and [`LookupMiss::FileScopeViolation`]
 //! to `E005`.
 
@@ -50,18 +51,18 @@ use crate::project::{Options, PlainMode, Project};
 ///
 /// Segment grammar: the penultimate segment is the file stem (extensionless);
 /// all segments before it form the folder path (dotted in the entry, joined
-/// with `/` on disk); the last segment is the component name. A component is
-/// considered "defined in the entry file" if it is a non-`_` definition whose
-/// hosting file is the entry document, or a file-scoped `_`-prefixed
-/// definition stored for that document (file-scope restricts *references*, not
-/// entry pinning — `--entry main._x` compiling `main.yml`'s `_x` is coherent).
+/// with `/` on disk); the last segment is the component name.
 ///
 /// `E009` failures: fewer than two segments; any empty or separator-bearing
 /// segment; no `.<folder>/<stem>.yml` **and** no `.<folder>/<stem>.yaml`
 /// (missing file — no `file` slot, the attempted path is in the message);
-/// both extensions present (ambiguous stem); or the component not defined in
-/// the entry file (`file` attached — the document exists). `E009` carries
-/// `file: None` only when no loaded document is implicated (invariant #5).
+/// both extensions present (ambiguous stem); or the name is not a valid
+/// component/template identifier (builtins, meta keys, invalid identifiers).
+/// `E009` carries `file: None` only when no loaded document is implicated
+/// (invariant #5).
+///
+/// Component existence is **not** checked — [`compile`] (not `resolve_entry`)
+/// raises `E002` if the resolved entry component is not defined.
 pub fn resolve_entry<'a>(
     project: &Project,
     entry: &'a str,
@@ -137,24 +138,8 @@ pub fn resolve_entry<'a>(
 
     let file_path = project.files[file_id.0 as usize].clone();
     match classify(component, Span { line: 1, col: 1 }) {
-        DefClass::Component(meta) if meta.file_scoped => {
-            if project.file_scoped.get(file_id, component).is_some() {
-                Ok((file_id, namespace, component))
-            } else {
-                Err(component_missing(entry, component, &file_path))
-            }
-        }
         DefClass::Component(_) => {
-            let defined_in_entry_file = project
-                .namespaces
-                .get(&namespace, component)
-                .map(|def| def.file == file_id)
-                .unwrap_or(false);
-            if defined_in_entry_file {
-                Ok((file_id, namespace, component))
-            } else {
-                Err(component_missing(entry, component, &file_path))
-            }
+            Ok((file_id, namespace, component))
         }
         _ => Err(Diagnostic {
             file: Some(file_path),
@@ -178,21 +163,6 @@ fn malformed(entry: &str, detail: &str) -> Diagnostic {
         component: None,
         code: E009,
         message: format!("invalid entry path `{entry}`: {detail}"),
-    }
-}
-
-/// The entry document exists but does not define the component.
-fn component_missing(entry: &str, component: &str, file_path: &Path) -> Diagnostic {
-    Diagnostic {
-        file: Some(file_path.to_path_buf()),
-        line: 1,
-        col: 1,
-        component: Some(component.to_string()),
-        code: E009,
-        message: format!(
-            "component `{component}` is not defined in `{}` (entry `{entry}`)",
-            file_path.display()
-        ),
     }
 }
 
@@ -325,8 +295,9 @@ pub fn compile_component(
 }
 
 /// Convenience: resolve the entry path `opts.entry` (file-path form
-/// `<folder.path>.<file>.<component>`, invariant #1) to the component defined
-/// in the entry document and compile it with no args.
+/// `<folder.path>.<file>.<component>`, invariant #1) to the component and
+/// compile it with no args. If the component is not defined in the entry
+/// file, `E002` is raised (consistent with any unknown component reference).
 pub fn compile(project: &Project, opts: &Options) -> Result<Value, Vec<Diagnostic>> {
     let (file_id, namespace, component) =
         resolve_entry(project, &opts.entry).map_err(|d| vec![d])?;
@@ -1567,20 +1538,16 @@ mod tests {
     }
 
     #[test]
-    fn component_not_defined_in_entry_file_is_e009() {
+    fn component_not_defined_in_entry_file_resolves() {
         let p = project();
         // `y` exists in namespace `a` but is defined by a/other.yml, not a/b.yml.
-        let err = resolve_entry(&p, "a.b.y").unwrap_err();
-        assert_eq!(err.code, E009);
-        assert_eq!(
-            err.file.as_deref(),
-            Some(Path::new("/proj/a/b.yml")),
-            "the entry document exists, so it is attached"
-        );
-        assert_eq!(err.component.as_deref(), Some("y"));
-        assert!(err.message.contains("a/b.yml"), "{}", err.message);
+        // After the split, resolve_entry succeeds (no component-existence check).
+        let (file_id, namespace, component) = resolve_entry(&p, "a.b.y").unwrap();
+        assert_eq!(file_id, FileId(1));
+        assert_eq!(namespace, "a");
+        assert_eq!(component, "y");
 
-        // The same name via its actual file resolves fine.
+        // The same name via its actual file also resolves fine.
         let (file_id, namespace, component) = resolve_entry(&p, "a.other.y").unwrap();
         assert_eq!(file_id, FileId(2));
         assert_eq!(namespace, "a");
@@ -1945,10 +1912,10 @@ mod tests {
     }
 
     #[test]
-    fn compile_missing_entry_component_is_e009() {
+    fn compile_missing_entry_component_is_e002() {
         let p = project_with(&[("main.yml", "other: 1\n")]);
         let ds = compile(&p, &Options::default()).unwrap_err();
-        assert_eq!(ds[0].code, E009);
+        assert_eq!(ds[0].code, E002);
         assert_eq!(ds[0].file.as_deref(), Some(Path::new("/proj/main.yml")));
         assert_eq!(ds[0].component.as_deref(), Some("main"));
     }
