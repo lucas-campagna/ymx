@@ -16,30 +16,31 @@ NAME
     ymx — YAML → JSON compiler for the YMX language (v1).
 
 SYNOPSIS
-    ymx <path> [flags]
+    ymx <file> [flags]
 
 DESCRIPTION
-    Compiles a YMX project rooted at <path> (a directory of .yml/.yaml files)
-    into JSON by resolving the entry component through the rules resolver, or
-    runs the project's inline `_test` cases under --test. Flag defaults come
-    from the engine, overridable by the entry file's `_ymx` front matter, and
-    overridable again by CLI flags (CLI > entry-file _ymx > engine default).
+    Compiles the YMX entry file <file> into JSON by resolving the entry component
+    through the rules resolver, or runs the file's inline `_test` cases under
+    --test. The project root is derived as <file>'s parent directory. Flag
+    defaults come from the engine, overridable by the entry file's `_ymx` front
+    matter, and overridable again by CLI flags (CLI > entry-file _ymx > engine
+    default).
 
 USAGE
-    ymx <path> [flags]
-        <path> is the project root (positional, required).
+    ymx <file> [flags]
+        <file> is the entry file to compile (positional, required). The project
+        root is derived as <file>'s parent directory.
 
     ymx --help | -h
         Print this manual page to stdout and exit 0.
 
 FLAGS
-    --entry <path>            Entry path of the form <folder.path>.<file>.<component>
-                              (default: main.main = root folder + main.yml + component
-                              main). The penultimate segment names a file stem; if both
-                              <stem>.yml and <stem>.yaml exist the entry is ambiguous
-                              (E009). One segment is also E009. If the resolved file is
-                              missing or does not define the component, the CLI emits
-                              E009 and exits non-zero.
+    --entry <component>       Component name within <file> to compile (default: main.main =
+                              component main in the entry file). The entry path internally
+                              is <file_stem>.<component> (always exactly 2 segments). If the
+                              file defines both <stem>.yml and <stem>.yaml the entry is
+                              ambiguous (E009). If the file is missing or does not define
+                              the component, the CLI emits E009 and exits non-zero.
 
     --from-keyword <kw>       Override the `from` keyword (default: from).
 

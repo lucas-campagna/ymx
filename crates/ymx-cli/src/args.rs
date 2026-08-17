@@ -22,16 +22,18 @@ use std::path::PathBuf;
 use ymx_config::CliOverrides;
 use ymx_lib::{ymx_core::project::PlainMode, Format};
 
-/// The parsed command line: the project-root positional and per-flag inputs
+/// The parsed command line: the file positional and per-flag inputs
 /// (`None` when the flag was absent — i.e. defer to `_ymx` then engine
 /// default), plus the CLI-only orchestration concerns (`output`, `test`)
 /// that do not flow into `ymx_config::CliOverrides`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedCli {
-    /// `ymx <path>` — the project root. Always present (parse errors
-    /// otherwise).
+    /// `ymx <file>` — the entry file. Always present (parse errors
+    /// otherwise). The project root is derived as `path.parent()`.
     pub path: PathBuf,
-    /// `--entry <path>` (default `main.main`).
+    /// `--entry <component>` (default `main`). The bare component name within
+    /// the entry file; the entry path internally is `<file_stem>.<component>`
+    /// (always exactly 2 segments).
     pub entry: Option<String>,
     /// `--from-keyword <kw>` (default `from`).
     pub from_keyword: Option<String>,
@@ -70,8 +72,15 @@ impl ParsedCli {
     // `ParsedCli::overrides`. `dead_code` allowed until task 3 wires it.
     #[allow(dead_code)]
     pub fn overrides(&self) -> CliOverrides {
+        let file_stem = self
+            .path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("main");
+        let component = self.entry.as_deref().unwrap_or("main");
+        let entry = format!("{}.{}", file_stem, component);
         CliOverrides {
-            entry: self.entry.clone(),
+            entry: Some(entry),
             from_keyword: self.from_keyword.clone(),
             default_keyword: self.default_keyword.clone(),
             max_depth: self.max_depth,
@@ -191,11 +200,10 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     if positionals.len() != 1 {
         return Err(ParseError {
             message: if positionals.is_empty() {
-                "missing project-root path — usage: `ymx <path> [flags]`".to_string()
+                "missing file — usage: `ymx <file> [flags]`".to_string()
             } else {
                 format!(
-                    "expected exactly one project-root path, got {} — usage: `ymx <path> \
-                     [flags]`",
+                    "expected exactly one file, got {} — usage: `ymx <file> [flags]`",
                     positionals.len()
                 )
             },
@@ -251,8 +259,8 @@ mod tests {
 
     #[test]
     fn bare_path_yields_none_overrides() {
-        let c = cli_of(&["proj/"]);
-        assert_eq!(c.path, PathBuf::from("proj/"));
+        let c = cli_of(&["proj/main.yml"]);
+        assert_eq!(c.path, PathBuf::from("proj/main.yml"));
         assert_eq!(c.entry, None);
         assert_eq!(c.from_keyword, None);
         assert_eq!(c.default_keyword, None);
@@ -265,9 +273,9 @@ mod tests {
     }
 
     #[test]
-    fn entry_parses_dotted_path() {
-        let c = cli_of(&["--entry", "a.b.c", "proj/"]);
-        assert_eq!(c.entry.as_deref(), Some("a.b.c"));
+    fn entry_parses_bare_component() {
+        let c = cli_of(&["--entry", "foo", "proj/main.yml"]);
+        assert_eq!(c.entry.as_deref(), Some("foo"));
     }
 
     #[test]
@@ -277,7 +285,7 @@ mod tests {
             "frm",
             "--default-keyword",
             "dflt",
-            "proj/",
+            "proj/main.yml",
         ]);
         assert_eq!(c.from_keyword.as_deref(), Some("frm"));
         assert_eq!(c.default_keyword.as_deref(), Some("dflt"));
@@ -285,86 +293,92 @@ mod tests {
 
     #[test]
     fn max_depth_parses_u32() {
-        let c = cli_of(&["--max-depth", "8", "proj/"]);
+        let c = cli_of(&["--max-depth", "8", "proj/main.yml"]);
         assert_eq!(c.max_depth, Some(8));
-        assert_eq!(cli_of(&["--max-depth", "0", "proj/"]).max_depth, Some(0));
+        assert_eq!(
+            cli_of(&["--max-depth", "0", "proj/main.yml"]).max_depth,
+            Some(0)
+        );
 
-        let err = err_of(&["--max-depth", "abc", "proj/"]);
+        let err = err_of(&["--max-depth", "abc", "proj/main.yml"]);
         assert!(err.message.contains("--max-depth"));
         assert!(err.message.contains("abc"));
 
-        let err = err_of(&["--max-depth", "-1", "proj/"]);
+        let err = err_of(&["--max-depth", "-1", "proj/main.yml"]);
         assert!(err.message.contains("--max-depth"));
 
-        let err = err_of(&["--max-depth", "99999999999999999999", "proj/"]);
+        let err = err_of(&["--max-depth", "99999999999999999999", "proj/main.yml"]);
         assert!(err.message.contains("--max-depth"));
     }
 
     #[test]
     fn pretty_flag_only_sets_true() {
-        let c = cli_of(&["--pretty", "proj/"]);
+        let c = cli_of(&["--pretty", "proj/main.yml"]);
         assert_eq!(c.pretty, Some(true));
 
-        assert_eq!(cli_of(&["proj/"]).pretty, None);
+        assert_eq!(cli_of(&["proj/main.yml"]).pretty, None);
     }
 
     #[test]
     fn format_parses_json_and_diagnostics() {
-        let c = cli_of(&["--format", "json", "proj/"]);
+        let c = cli_of(&["--format", "json", "proj/main.yml"]);
         assert_eq!(c.format, Some(Format::Json));
 
-        let c = cli_of(&["--format", "diagnostics", "proj/"]);
+        let c = cli_of(&["--format", "diagnostics", "proj/main.yml"]);
         assert_eq!(c.format, Some(Format::Diagnostics));
 
-        let err = err_of(&["--format", "xml", "proj/"]);
+        let err = err_of(&["--format", "xml", "proj/main.yml"]);
         assert!(err.message.contains("xml"));
     }
 
     #[test]
     fn output_parses_path() {
-        let c = cli_of(&["--output", "out.json", "proj/"]);
+        let c = cli_of(&["--output", "out.json", "proj/main.yml"]);
         assert_eq!(c.output.as_deref(), Some(std::path::Path::new("out.json")));
     }
 
     #[test]
     fn plain_and_plain_template_set_mode() {
-        let c = cli_of(&["--plain", "proj/"]);
+        let c = cli_of(&["--plain", "proj/main.yml"]);
         assert_eq!(c.plain, Some(PlainMode::All));
 
-        let c = cli_of(&["--plain-template", "proj/"]);
+        let c = cli_of(&["--plain-template", "proj/main.yml"]);
         assert_eq!(c.plain, Some(PlainMode::TemplatesOnly));
     }
 
     #[test]
     fn plain_and_plain_template_together_are_rejected() {
-        let err = err_of(&["--plain", "--plain-template", "proj/"]);
+        let err = err_of(&["--plain", "--plain-template", "proj/main.yml"]);
         assert!(err.message.contains("mutually exclusive"));
 
-        let err = err_of(&["--plain-template", "--plain", "proj/"]);
+        let err = err_of(&["--plain-template", "--plain", "proj/main.yml"]);
         assert!(err.message.contains("mutually exclusive"));
     }
 
     #[test]
     fn plain_may_repeat_without_changing_mode() {
-        let c = cli_of(&["--plain", "--plain", "proj/"]);
+        let c = cli_of(&["--plain", "--plain", "proj/main.yml"]);
         assert_eq!(c.plain, Some(PlainMode::All));
     }
 
     #[test]
     fn test_flag_flips() {
-        let c = cli_of(&["--test", "proj/"]);
+        let c = cli_of(&["--test", "proj/main.yml"]);
         assert!(c.test);
 
-        assert!(!cli_of(&["proj/"]).test);
+        assert!(!cli_of(&["proj/main.yml"]).test);
     }
 
     #[test]
     fn help_short_and_long_request_help() {
         assert_eq!(parse(&args(&["-h"])), Ok(ParseOutcome::Help));
         assert_eq!(parse(&args(&["--help"])), Ok(ParseOutcome::Help));
-        assert_eq!(parse(&args(&["--help", "proj/"])), Ok(ParseOutcome::Help));
         assert_eq!(
-            parse(&args(&["proj/", "--test", "--help"])),
+            parse(&args(&["--help", "proj/main.yml"])),
+            Ok(ParseOutcome::Help)
+        );
+        assert_eq!(
+            parse(&args(&["proj/main.yml", "--test", "--help"])),
             Ok(ParseOutcome::Help)
         );
     }
@@ -377,20 +391,20 @@ mod tests {
 
     #[test]
     fn too_many_positionals_errors() {
-        let err = err_of(&["proj/", "extra/"]);
+        let err = err_of(&["proj/main.yml", "extra.yml"]);
         assert!(err.message.contains("exactly one"));
     }
 
     #[test]
     fn unknown_long_flag_errors() {
-        let err = err_of(&["--bogus", "proj/"]);
+        let err = err_of(&["--bogus", "proj/main.yml"]);
         assert!(err.message.contains("unknown flag"));
         assert!(err.message.contains("--bogus"));
     }
 
     #[test]
     fn unknown_short_option_errors() {
-        let err = err_of(&["-x", "proj/"]);
+        let err = err_of(&["-x", "proj/main.yml"]);
         assert!(err.message.contains("unknown short option"));
     }
 
@@ -400,17 +414,23 @@ mod tests {
         assert!(err.message.contains("--entry"));
         assert!(err.message.contains("missing value"));
 
-        let err = err_of(&["proj/", "--max-depth"]);
+        let err = err_of(&["proj/main.yml", "--max-depth"]);
         assert!(err.message.contains("missing value"));
 
-        let err = err_of(&["proj/", "--output"]);
+        let err = err_of(&["proj/main.yml", "--output"]);
         assert!(err.message.contains("missing value"));
     }
 
     #[test]
     fn flags_interspersed_with_path() {
-        let c = cli_of(&["--pretty", "proj/", "--test", "--format", "diagnostics"]);
-        assert_eq!(c.path, PathBuf::from("proj/"));
+        let c = cli_of(&[
+            "--pretty",
+            "proj/main.yml",
+            "--test",
+            "--format",
+            "diagnostics",
+        ]);
+        assert_eq!(c.path, PathBuf::from("proj/main.yml"));
         assert_eq!(c.pretty, Some(true));
         assert!(c.test);
         assert_eq!(c.format, Some(Format::Diagnostics));
@@ -419,16 +439,24 @@ mod tests {
     // ---- task 2: ParsedCli::overrides() -> CliOverrides ----
 
     #[test]
-    fn overrides_all_absent_equals_default_for_tests() {
-        let c = cli_of(&["proj/"]);
-        assert_eq!(c.overrides(), CliOverrides::default_for_tests());
+    fn overrides_derives_entry_from_file_stem_and_default() {
+        // cli_of(["proj/main.yml"]) with no --entry: entry derived as "main.main"
+        let c = cli_of(&["proj/main.yml"]);
+        let ov = c.overrides();
+        assert_eq!(ov.entry.as_deref(), Some("main.main"));
+        assert_eq!(ov.from_keyword, None);
+        assert_eq!(ov.default_keyword, None);
+        assert_eq!(ov.max_depth, None);
+        assert_eq!(ov.pretty, None);
+        assert_eq!(ov.format, None);
+        assert_eq!(ov.plain, None);
     }
 
     #[test]
     fn overrides_maps_each_present_flag_field() {
         let c = cli_of(&[
             "--entry",
-            "a.b.c",
+            "foo",
             "--from-keyword",
             "frm",
             "--default-keyword",
@@ -439,10 +467,11 @@ mod tests {
             "--format",
             "diagnostics",
             "--plain",
-            "proj/",
+            "proj/main.yml",
         ]);
         let ov = c.overrides();
-        assert_eq!(ov.entry.as_deref(), Some("a.b.c"));
+        // entry = file_stem.component = "main.foo"
+        assert_eq!(ov.entry.as_deref(), Some("main.foo"));
         assert_eq!(ov.from_keyword.as_deref(), Some("frm"));
         assert_eq!(ov.default_keyword.as_deref(), Some("dflt"));
         assert_eq!(ov.max_depth, Some(8));
@@ -453,22 +482,25 @@ mod tests {
 
     #[test]
     fn overrides_plain_template_maps_to_templates_only() {
-        let c = cli_of(&["--plain-template", "proj/"]);
+        let c = cli_of(&["--plain-template", "proj/main.yml"]);
         assert_eq!(c.overrides().plain, Some(PlainMode::TemplatesOnly));
     }
 
     #[test]
     fn overrides_format_json_maps_to_json() {
-        let c = cli_of(&["--format", "json", "proj/"]);
+        let c = cli_of(&["--format", "json", "proj/main.yml"]);
         assert_eq!(c.overrides().format, Some(Format::Json));
     }
 
     #[test]
-    fn overrides_absent_fields_are_none_independently() {
-        let c = cli_of(&["--max-depth", "100", "proj/"]);
+    fn overrides_absent_flags_defer_to_none() {
+        // Only --max-depth is present; all others None (including entry which
+        // is always derived, not None in overrides).
+        let c = cli_of(&["--max-depth", "100", "proj/main.yml"]);
         let ov = c.overrides();
         assert_eq!(ov.max_depth, Some(100));
-        assert_eq!(ov.entry, None);
+        // entry is ALWAYS Some(...) from CLI — derived from file_stem.component
+        assert_eq!(ov.entry.as_deref(), Some("main.main"));
         assert_eq!(ov.from_keyword, None);
         assert_eq!(ov.default_keyword, None);
         assert_eq!(ov.pretty, None);
@@ -482,10 +514,20 @@ mod tests {
         // construction in `overrides()` is the real guard against a future
         // regression (adding such a field would fail to compile). Here we
         // confirm `--test` and `--output` stay on `ParsedCli` and do not
-        // populate any override field.
-        let c = cli_of(&["--test", "--output", "out.json", "proj/"]);
+        // populate any override field.  entry is always Some(...) so we
+        // compare field-by-field rather than equality with default_for_tests.
+        let c = cli_of(&["--test", "--output", "out.json", "proj/main.yml"]);
         assert!(c.test);
         assert_eq!(c.output.as_deref(), Some(std::path::Path::new("out.json")));
-        assert_eq!(c.overrides(), CliOverrides::default_for_tests());
+        let ov = c.overrides();
+        // entry is always derived (never None from CLI)
+        assert_eq!(ov.entry.as_deref(), Some("main.main"));
+        // output/test not carried
+        assert_eq!(ov.from_keyword, None);
+        assert_eq!(ov.default_keyword, None);
+        assert_eq!(ov.max_depth, None);
+        assert_eq!(ov.pretty, None);
+        assert_eq!(ov.format, None);
+        assert_eq!(ov.plain, None);
     }
 }

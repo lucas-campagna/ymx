@@ -71,7 +71,7 @@ fn compile_success_emits_compact_json_to_stdout() {
     let dir = TempDir::new();
     dir.write("main.yml", "x: 1\nmain:\n  a: 2\n  b: 3\n");
 
-    let out = ymx(&[dir.path().to_str().unwrap()]);
+    let out = ymx(&[dir.path().join("main.yml").to_str().unwrap()]);
     assert!(out.0.status.success(), "stderr: {}", stderr(&out.0));
     let stdout = stdout(&out.0);
     assert_eq!(
@@ -86,7 +86,7 @@ fn pretty_flag_emits_multiline_json_to_stdout() {
     let dir = TempDir::new();
     dir.write("main.yml", "main:\n  a: 2\n  b: 3\n");
 
-    let out = ymx(&["--pretty", dir.path().to_str().unwrap()]);
+    let out = ymx(&["--pretty", dir.path().join("main.yml").to_str().unwrap()]);
     assert!(out.0.status.success(), "stderr: {}", stderr(&out.0));
     let stdout = stdout(&out.0);
     assert!(stdout.contains('\n'), "pretty is multiline: {stdout}");
@@ -103,7 +103,7 @@ fn output_file_is_written_on_success() {
     let result = ymx(&[
         "--output",
         out_path.to_str().unwrap(),
-        dir.path().to_str().unwrap(),
+        dir.path().join("main.yml").to_str().unwrap(),
     ]);
     assert!(result.0.status.success(), "stderr: {}", stderr(&result.0));
     assert!(out_path.exists(), "output file created on success");
@@ -122,7 +122,7 @@ fn output_file_not_created_on_compile_error() {
     let result = ymx(&[
         "--output",
         out_path.to_str().unwrap(),
-        dir.path().to_str().unwrap(),
+        dir.path().join("other.yml").to_str().unwrap(),
     ]);
     assert!(!result.0.status.success(), "non-zero exit on E009");
     assert!(!out_path.exists(), "no output file on diagnostic");
@@ -140,7 +140,7 @@ fn output_file_not_created_on_load_error() {
     let result = ymx(&[
         "--output",
         out_path.to_str().unwrap(),
-        dir.path().to_str().unwrap(),
+        dir.path().join("bad.yml").to_str().unwrap(),
     ]);
     assert!(!result.0.status.success(), "non-zero exit on load error");
     assert!(!out_path.exists(), "no output file on load error");
@@ -152,7 +152,11 @@ fn format_diagnostics_on_success_emits_empty_stdout_exit_zero() {
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n");
 
-    let out = ymx(&["--format", "diagnostics", dir.path().to_str().unwrap()]);
+    let out = ymx(&[
+        "--format",
+        "diagnostics",
+        dir.path().join("main.yml").to_str().unwrap(),
+    ]);
     assert!(out.0.status.success(), "exit 0 on success");
     assert_eq!(
         stdout(&out.0),
@@ -167,7 +171,11 @@ fn format_diagnostics_on_compile_error_renders_diagnostic_to_stderr() {
     let dir = TempDir::new();
     dir.write("other.yml", "other: 1\n");
 
-    let out = ymx(&["--format", "diagnostics", dir.path().to_str().unwrap()]);
+    let out = ymx(&[
+        "--format",
+        "diagnostics",
+        dir.path().join("other.yml").to_str().unwrap(),
+    ]);
     assert!(!out.0.status.success(), "non-zero exit on E009");
     assert_eq!(stdout(&out.0), "", "no stdout on diagnostic");
     assert!(
@@ -183,7 +191,8 @@ fn entry_flag_selects_component() {
     dir.write("a/b.yml", "x: 7\n");
     dir.write("main.yml", "main: 0\n");
 
-    let out = ymx(&["--entry", "a.b.x", dir.path().to_str().unwrap()]);
+    // NEW: positional is the entry file (a/b.yml); --entry is bare component "x"
+    let out = ymx(&["--entry", "x", dir.path().join("a/b.yml").to_str().unwrap()]);
     assert!(out.0.status.success(), "stderr: {}", stderr(&out.0));
     assert_eq!(stdout(&out.0).trim_end(), "7");
 }
@@ -198,7 +207,7 @@ fn ambiguous_stem_yamls_is_e009() {
     dir.write("main.yml", "a: 1\n");
     dir.write("main.yaml", "b: 2\n");
 
-    let out = ymx(&[dir.path().to_str().unwrap()]);
+    let out = ymx(&[dir.path().join("main.yml").to_str().unwrap()]);
     assert!(!out.0.status.success(), "ambiguous stem errors");
     let stderr = stderr(&out.0);
     assert!(stderr.contains("E009"), "stderr renders E009: {stderr}");
@@ -213,7 +222,7 @@ fn test_flag_runs_inline_tests_and_exits_zero_on_pass() {
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n_test:\n  main: 1\n");
 
-    let out = ymx(&["--test", dir.path().to_str().unwrap()]);
+    let out = ymx(&["--test", dir.path().join("main.yml").to_str().unwrap()]);
     assert!(out.0.status.success(), "stderr: {}", stderr(&out.0));
     let stdout = stdout(&out.0);
     assert!(stdout.contains("PASS main"), "stdout: {stdout}");
@@ -225,7 +234,7 @@ fn test_flag_exits_nonzero_on_failure() {
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n_test:\n  main: 2\n");
 
-    let out = ymx(&["--test", dir.path().to_str().unwrap()]);
+    let out = ymx(&["--test", dir.path().join("main.yml").to_str().unwrap()]);
     assert!(!out.0.status.success(), "non-zero exit on failing test");
     let stdout = stdout(&out.0);
     assert!(stdout.contains("FAIL main"), "stdout: {stdout}");
@@ -238,7 +247,7 @@ fn test_flag_does_not_emit_json() {
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n_test:\n  main: 1\n");
 
-    let out = ymx(&["--test", dir.path().to_str().unwrap()]);
+    let out = ymx(&["--test", dir.path().join("main.yml").to_str().unwrap()]);
     assert!(out.0.status.success(), "stderr: {}", stderr(&out.0));
     let stdout = stdout(&out.0);
     // Compile success would normally print a JSON value; under --test we
@@ -260,7 +269,11 @@ fn plain_and_plain_template_together_errors_before_load() {
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n");
 
-    let out = ymx(&["--plain", "--plain-template", dir.path().to_str().unwrap()]);
+    let out = ymx(&[
+        "--plain",
+        "--plain-template",
+        dir.path().join("main.yml").to_str().unwrap(),
+    ]);
     assert!(
         !out.0.status.success(),
         "non-zero exit on mutual-exclusion error"
@@ -284,7 +297,7 @@ fn missing_path_is_usage_error() {
 
 #[test]
 fn unknown_flag_is_usage_error() {
-    let out = ymx(&["--bogus", "."]);
+    let out = ymx(&["--bogus", "/tmp/main.yml"]);
     assert!(!out.0.status.success(), "non-zero exit on unknown flag");
     assert!(
         stderr(&out.0).contains("unknown flag"),
@@ -381,7 +394,7 @@ fn assert_exit(args: &[&str], expected: i32) {
 fn exit_code_success_compile_json_is_zero() {
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n");
-    assert_exit(&[dir.path().to_str().unwrap()], 0);
+    assert_exit(&[dir.path().join("main.yml").to_str().unwrap()], 0);
 }
 
 #[test]
@@ -389,7 +402,11 @@ fn exit_code_success_format_diagnostics_is_zero() {
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n");
     assert_exit(
-        &["--format", "diagnostics", dir.path().to_str().unwrap()],
+        &[
+            "--format",
+            "diagnostics",
+            dir.path().join("main.yml").to_str().unwrap(),
+        ],
         0,
     );
 }
@@ -398,7 +415,10 @@ fn exit_code_success_format_diagnostics_is_zero() {
 fn exit_code_success_test_run_all_passed_is_zero() {
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n_test:\n  main: 1\n");
-    assert_exit(&["--test", dir.path().to_str().unwrap()], 0);
+    assert_exit(
+        &["--test", dir.path().join("main.yml").to_str().unwrap()],
+        0,
+    );
 }
 
 #[test]
@@ -408,14 +428,20 @@ fn exit_code_success_test_no_blocks_is_zero_noop_success() {
     // a diagnostic). This locks the matrix row "no-op --test success → 0".
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n");
-    assert_exit(&["--test", dir.path().to_str().unwrap()], 0);
+    assert_exit(
+        &["--test", dir.path().join("main.yml").to_str().unwrap()],
+        0,
+    );
 }
 
 #[test]
 fn exit_code_test_failure_is_one() {
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n_test:\n  main: 2\n");
-    assert_exit(&["--test", dir.path().to_str().unwrap()], 1);
+    assert_exit(
+        &["--test", dir.path().join("main.yml").to_str().unwrap()],
+        1,
+    );
 }
 
 #[test]
@@ -427,28 +453,31 @@ fn exit_code_test_malformed_block_is_one() {
         "main.yml",
         "main: 1\n_test:\n  main:\n    result: 1\n    error: \"E002\"\n",
     );
-    assert_exit(&["--test", dir.path().to_str().unwrap()], 1);
+    assert_exit(
+        &["--test", dir.path().join("main.yml").to_str().unwrap()],
+        1,
+    );
 }
 
 #[test]
 fn exit_code_load_error_is_one() {
     let dir = TempDir::new();
     dir.write("bad.yml", "a: 1\n---\nb: 2\n");
-    assert_exit(&[dir.path().to_str().unwrap()], 1);
+    assert_exit(&[dir.path().join("bad.yml").to_str().unwrap()], 1);
 }
 
 #[test]
 fn exit_code_extract_options_e009_is_one() {
     let dir = TempDir::new();
     dir.write("other.yml", "other: 1\n");
-    assert_exit(&[dir.path().to_str().unwrap()], 1);
+    assert_exit(&[dir.path().join("other.yml").to_str().unwrap()], 1);
 }
 
 #[test]
 fn exit_code_extract_options_e010_is_one() {
     let dir = TempDir::new();
     dir.write("main.yml", "_ymx:\n  foo: 1\nmain: 0\n");
-    assert_exit(&[dir.path().to_str().unwrap()], 1);
+    assert_exit(&[dir.path().join("main.yml").to_str().unwrap()], 1);
 }
 
 #[test]
@@ -457,7 +486,14 @@ fn exit_code_compile_error_is_one() {
     // `compile`. Confirms compile-step errors map to exit 1, not 2.
     let dir = TempDir::new();
     dir.write("main.yml", "main: \"$main()\"\n");
-    assert_exit(&["--max-depth", "1", dir.path().to_str().unwrap()], 1);
+    assert_exit(
+        &[
+            "--max-depth",
+            "1",
+            dir.path().join("main.yml").to_str().unwrap(),
+        ],
+        1,
+    );
 }
 
 #[test]
@@ -472,7 +508,10 @@ fn exit_code_extra_positional_usage_is_two() {
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n");
     assert_exit(
-        &[dir.path().to_str().unwrap(), dir.path().to_str().unwrap()],
+        &[
+            dir.path().join("main.yml").to_str().unwrap(),
+            dir.path().join("main.yml").to_str().unwrap(),
+        ],
         2,
     );
 }
@@ -481,19 +520,33 @@ fn exit_code_extra_positional_usage_is_two() {
 fn exit_code_bad_max_depth_usage_is_two() {
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n");
-    assert_exit(&["--max-depth", "abc", dir.path().to_str().unwrap()], 2);
+    assert_exit(
+        &[
+            "--max-depth",
+            "abc",
+            dir.path().join("main.yml").to_str().unwrap(),
+        ],
+        2,
+    );
 }
 
 #[test]
 fn exit_code_bad_format_usage_is_two() {
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n");
-    assert_exit(&["--format", "xml", dir.path().to_str().unwrap()], 2);
+    assert_exit(
+        &[
+            "--format",
+            "xml",
+            dir.path().join("main.yml").to_str().unwrap(),
+        ],
+        2,
+    );
 }
 
 #[test]
 fn exit_code_unknown_flag_usage_is_two() {
-    assert_exit(&["--bogus", "."], 2);
+    assert_exit(&["--bogus", "/tmp/main.yml"], 2);
 }
 
 #[test]
@@ -503,7 +556,11 @@ fn exit_code_plain_and_plain_template_usage_is_two_no_load() {
     // never an `E00x` diagnostic.
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n");
-    let out = ymx(&["--plain", "--plain-template", dir.path().to_str().unwrap()]);
+    let out = ymx(&[
+        "--plain",
+        "--plain-template",
+        dir.path().join("main.yml").to_str().unwrap(),
+    ]);
     assert_eq!(out.0.status.code(), Some(2));
     let stderr = stderr(&out.0);
     assert!(stderr.contains("mutually exclusive"), "stderr: {stderr}");
@@ -518,7 +575,10 @@ fn exit_code_missing_value_usage_is_two() {
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n");
     assert_exit(&["--entry"], 2);
-    assert_exit(&["proj/", "--output"], 2);
+    assert_exit(
+        &[dir.path().join("main.yml").to_str().unwrap(), "--output"],
+        2,
+    );
 }
 
 #[test]

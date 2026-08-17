@@ -30,7 +30,7 @@
 //! 4. Otherwise `compile(&project, &opts)` — any diagnostic renders to
 //!    stderr and yields [`Outcome::Diagnostic`]; success hits [`emit`].
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ymx_config::extract_options;
@@ -66,7 +66,12 @@ impl Outcome {
 
 /// Drive the canonical pipeline against `cli`.
 pub fn run(cli: &ParsedCli) -> Outcome {
-    let project = match load_project(&cli.path) {
+    let project_root = cli
+        .path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let project = match load_project(&project_root) {
         Ok(project) => project,
         Err(diags) => return render_diags(&diags),
     };
@@ -255,10 +260,9 @@ mod tests {
     }
 
     fn cli_for(root: &Path) -> ParsedCli {
-        // The orchestration overrides shape mirrors a bare invocation: no
-        // flags, default entry `main.main`.
+        // File-based entry: positional is the entry file; project root is its parent.
         ParsedCli {
-            path: root.to_path_buf(),
+            path: root.join("main.yml"),
             entry: None,
             from_keyword: None,
             default_keyword: None,
@@ -277,10 +281,20 @@ mod tests {
         cli
     }
 
-    fn cli_with_entry(root: &Path, entry: &str) -> ParsedCli {
-        let mut cli = cli_for(root);
-        cli.entry = Some(entry.to_string());
-        cli
+    // entry is now a bare component name (not a dotted path).
+    fn cli_with_entry(file: &Path, component: &str) -> ParsedCli {
+        ParsedCli {
+            path: file.to_path_buf(),
+            entry: Some(component.to_string()),
+            from_keyword: None,
+            default_keyword: None,
+            max_depth: None,
+            pretty: None,
+            format: None,
+            plain: None,
+            output: None,
+            test: false,
+        }
     }
 
     #[test]
@@ -327,7 +341,7 @@ mod tests {
     fn explicit_entry_selects_component() {
         let dir = TempDir::new();
         dir.write("a/b.yml", "x: 7\n");
-        let cli = cli_with_entry(dir.path(), "a.b.x");
+        let cli = cli_with_entry(&dir.path().join("a/b.yml"), "x");
         assert_eq!(run(&cli), Outcome::Success);
     }
 
@@ -335,7 +349,7 @@ mod tests {
     fn explicit_missing_component_is_e009_diagnostic() {
         let dir = TempDir::new();
         dir.write("a/b.yml", "x: 7\n");
-        let cli = cli_with_entry(dir.path(), "a.b.y");
+        let cli = cli_with_entry(&dir.path().join("a/b.yml"), "y");
         assert_eq!(run(&cli), Outcome::Diagnostic);
     }
 
@@ -399,9 +413,18 @@ mod tests {
     }
 
     #[test]
-    fn overrides_helper_yields_default_for_tests_when_absent() {
+    fn overrides_helper_yields_non_none_entry_always() {
+        // entry is ALWAYS derived from file_stem.component in CLI overrides,
+        // never left as None (unlike default_for_tests which is harness-only).
         let cli = cli_for(Path::new("/proj"));
-        assert_eq!(cli.overrides(), CliOverrides::default_for_tests());
+        let ov = cli.overrides();
+        assert_eq!(ov.entry.as_deref(), Some("main.main"));
+        assert_eq!(ov.from_keyword, None);
+        assert_eq!(ov.default_keyword, None);
+        assert_eq!(ov.max_depth, None);
+        assert_eq!(ov.pretty, None);
+        assert_eq!(ov.format, None);
+        assert_eq!(ov.plain, None);
     }
 
     #[test]
@@ -553,7 +576,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("a/b.yml", "x: 7\n");
         let out = dir.path().join("out.json");
-        let mut cli = cli_with_entry(dir.path(), "a.b.y");
+        let mut cli = cli_with_entry(&dir.path().join("a/b.yml"), "y");
         cli.output = Some(out.clone());
         assert_eq!(run(&cli), Outcome::Diagnostic);
         assert!(!out.exists(), "no file on E009");
