@@ -33,7 +33,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use ymx_config::extract_options;
+use ymx_config::{extract_options, CliOverrides};
 use ymx_lib::ymx_core::project::{Format, Options, Project};
 use ymx_lib::ymx_core::resolve::compile;
 use ymx_lib::{load_project, Diagnostic, Value};
@@ -66,6 +66,11 @@ impl Outcome {
 
 /// Drive the canonical pipeline against `cli`.
 pub fn run(cli: &ParsedCli) -> Outcome {
+    // Recursive directory mode (--test with a directory path)
+    if let Some(ref test_dir) = cli.test_dir {
+        return run_recursive_tests(test_dir);
+    }
+
     let project_root = cli
         .path
         .parent()
@@ -89,6 +94,124 @@ pub fn run(cli: &ParsedCli) -> Outcome {
     match compile(&project, &opts) {
         Ok(value) => emit(cli, &opts, &value),
         Err(diags) => render_diags(&diags),
+    }
+}
+
+/// Recursively discover project roots under `dir`. A subdirectory is a project
+/// root if it contains at least one `.yml` or `.yaml` file in its direct
+/// children. Skips `.git` and hidden directories (starting with `.`).
+fn find_project_roots(dir: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+
+    while let Some(current) = stack.pop() {
+        // Check if current dir has any .yml or .yaml files directly in it
+        let mut has_yaml = false;
+        if let Ok(entries) = std::fs::read_dir(&current) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(ext) = path.extension() {
+                        if ext == "yml" || ext == "yaml" {
+                            has_yaml = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if has_yaml {
+            roots.push(current.clone());
+        } else {
+            // Recurse into subdirectories (not into hidden or .git dirs)
+            if let Ok(entries) = std::fs::read_dir(&current) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if name == ".git" || name.starts_with('.') {
+                                continue;
+                            }
+                        }
+                        stack.push(path);
+                    }
+                }
+            }
+        }
+    }
+
+    roots.sort();
+    roots
+}
+
+/// Recursive directory test mode: discover all project roots under `dir` and
+/// run tests in each. Load failures are warned and skipped; opts/parse failures
+/// and test failures cause non-zero exit.
+fn run_recursive_tests(dir: &Path) -> Outcome {
+    let roots = find_project_roots(dir);
+
+    if roots.is_empty() {
+        eprintln!("ymx: no YMX projects found in {}", dir.display());
+        return Outcome::Success;
+    }
+
+    let mut total_passed = 0usize;
+    let mut total_tests = 0usize;
+    let mut overall_success = true;
+
+    for proj_dir in &roots {
+        let relpath = proj_dir
+            .strip_prefix(dir)
+            .unwrap_or(proj_dir.as_path())
+            .to_string_lossy();
+
+        let project = match load_project(proj_dir) {
+            Ok(p) => p,
+            Err(diags) => {
+                eprintln!("ymx: warning: {}: {}", proj_dir.display(), &diags[0].message);
+                continue;
+            }
+        };
+
+        let opts = match extract_options(&project, &CliOverrides::default_for_tests()) {
+            Ok(o) => o,
+            Err(diags) => {
+                eprintln!("ymx: warning: {}: {}", proj_dir.display(), &diags[0].message);
+                continue;
+            }
+        };
+
+        if let Err(diags) = parse_tests(&project) {
+            eprintln!(
+                "ymx: warning: {}: parse error: {}",
+                proj_dir.display(),
+                &diags[0].message
+            );
+            overall_success = false;
+            continue;
+        }
+
+        let results = run_tests(&project, &opts);
+        total_tests += results.len();
+
+        for result in &results {
+            if result.passed {
+                total_passed += 1;
+                println!("PASS {}: {}", relpath, result.test.target);
+            } else {
+                overall_success = false;
+                println!("FAIL {}: {} {}", relpath, result.test.target, diff(result));
+            }
+        }
+    }
+
+    println!("PASS: {}/{} across {} project(s)", total_passed, total_tests, roots.len());
+
+    if overall_success && total_passed == total_tests {
+        Outcome::Success
+    } else {
+        Outcome::Diagnostic
     }
 }
 
@@ -280,6 +403,23 @@ mod tests {
         let mut cli = cli_for(root);
         cli.test = true;
         cli
+    }
+
+    fn cli_with_test_dir(dir: &Path) -> ParsedCli {
+        // Recursive test mode: test=true and test_dir=Some(dir)
+        ParsedCli {
+            path: dir.to_path_buf(),
+            entry: None,
+            from_keyword: None,
+            default_keyword: None,
+            max_depth: None,
+            pretty: None,
+            format: None,
+            plain: None,
+            output: None,
+            test: true,
+            test_dir: Some(dir.to_path_buf()),
+        }
     }
 
     // entry is now a bare component name (not a dotted path).
@@ -615,5 +755,70 @@ mod tests {
         let out = dir.path().join("ok.json");
         assert_eq!(write_file(&out, "42"), Outcome::Success);
         assert_eq!(fs::read_to_string(&out).unwrap(), "42");
+    }
+
+    // ---- task 2: recursive test discovery ----
+
+    #[test]
+    fn recursive_tests_single_passing_project() {
+        let dir = TempDir::new();
+        dir.write("proj/main.yml", "main: 1\n_test:\n  main: 1\n");
+        assert_eq!(run(&cli_with_test_dir(dir.path())), Outcome::Success);
+    }
+
+    #[test]
+    fn recursive_tests_multiple_projects_all_pass() {
+        let dir = TempDir::new();
+        dir.write("proj1/main.yml", "main: 1\n_test:\n  main: 1\n");
+        dir.write("proj2/main.yml", "main: 2\n_test:\n  main: 2\n");
+        assert_eq!(run(&cli_with_test_dir(dir.path())), Outcome::Success);
+    }
+
+    #[test]
+    fn recursive_tests_load_failure_skips_with_warning() {
+        // A subdir with an invalid YAML file should be warned and skipped,
+        // but overall outcome should still be Success (0 projects, 0 tests)
+        let dir = TempDir::new();
+        dir.write("bad/bad.yml", "a: 1\n---\nb: 2\n"); // multi-doc is E001
+        // No valid projects found - warn and exit 0
+        assert_eq!(run(&cli_with_test_dir(dir.path())), Outcome::Success);
+    }
+
+    #[test]
+    fn recursive_tests_no_projects_found_exits_success() {
+        let dir = TempDir::new();
+        dir.write("just_text.txt", "not yaml\n");
+        // No YMX projects found
+        assert_eq!(run(&cli_with_test_dir(dir.path())), Outcome::Success);
+    }
+
+    #[test]
+    fn recursive_tests_test_failure_returns_diagnostic() {
+        let dir = TempDir::new();
+        dir.write("proj/main.yml", "main: 1\n_test:\n  main: 2\n"); // expects 2, gets 1
+        assert_eq!(run(&cli_with_test_dir(dir.path())), Outcome::Diagnostic);
+    }
+
+    #[test]
+    fn find_project_roots_detects_nested_projects() {
+        let dir = TempDir::new();
+        dir.write("proj1/main.yml", "main: 1\n");
+        dir.write("proj2/sub/main.yml", "main: 2\n");
+        dir.write("proj2/sub/nested/deep/main.yml", "main: 3\n");
+        let roots = find_project_roots(dir.path());
+        // proj1 and proj2/sub are project roots (contain .yml files)
+        // proj2/sub/nested is NOT a project root (its parent already has .yml files)
+        assert_eq!(roots.len(), 2);
+    }
+
+    #[test]
+    fn find_project_roots_skips_hidden_and_git_dirs() {
+        let dir = TempDir::new();
+        dir.write("proj/main.yml", "main: 1\n");
+        dir.write(".hidden/proj/main.yml", "main: 2\n");
+        dir.write(".git/proj/main.yml", "main: 3\n");
+        let roots = find_project_roots(dir.path());
+        // Only the non-hidden proj is found
+        assert_eq!(roots.len(), 1);
     }
 }
