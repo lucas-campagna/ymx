@@ -15,7 +15,7 @@ The project provides a tool/compiler that turns YAML source files into documents
 - **Property**: a key-value pair inside a component. Properties are also the arguments the component accepts when called.
 - **Argument**: a value passed to a component when it is called. Arguments are referenced in component bodies as `$name` (named) or `$0`, `$1`, `$2`, … (positional).
 - **Template component**: a component whose name starts with `$` (e.g. `$box`). Templates are applied automatically after the component that uses them is called (rule 5). Templates can chain indefinitely (`$a`, `$$a`, `$$$a`, …).
-- **Entry**: the top-level component chosen for compilation, addressed by an **entry path** of the form `<folder.path>.<file>.<component>` — e.g. `main.main` resolves to root folder + `main.yml` + component `main`; `a.b.c` resolves to folder `a` + `b.yml` + component `c` (both `.yml` and `.yaml` existing for the same stem is an ambiguous entry, `E009`). Defaults to `main.main`; overridable with `--entry`. The entry path is a file-path address, distinct from the namespace dotted path used by `from` / `$name` resolution (see *Multi-file projects*).
+- **Entry**: the top-level component chosen for compilation. On the CLI, the mandatory positional argument is a **file** path; `--entry` (default `main`) selects the component within that file. The CLI derives the entry path internally as `<file_stem>.<component>` (always exactly 2 segments: empty folder.path + file stem + component). The entry path is a file-path address, distinct from the namespace dotted path used by `from` / `$name` resolution (see *Multi-file projects*). Defaults to `main.main`; overridable with `--entry`. In library code, `Options.entry` is set directly to the full entry path.
 - **Namespace**: the scope a component lives in. The project root is the global namespace; each subdirectory is a sub-namespace addressed by a dotted path (e.g. `subdir.comp`).
 - **Meta key**: a reserved top-level key (`_ymx` or `_test`) that is not a component but carries project metadata — front-matter flag defaults or inline tests (see *Project metadata*).
 - **Front matter**: the `_ymx` meta block of a document, supplying compiler-flag defaults.
@@ -77,7 +77,7 @@ ymx/
 | `E006` | Ambiguous shortcut (multiple property names match components) |
 | `E007` | Reserved name used as a component/template (`map`/`reduce`/`merge`) |
 | `E008` | Max-depth exceeded |
-| `E009` | Entry not found (entry path malformed — fewer than two segments —, resolved file missing, component missing, or ambiguous `.yml`/`.yaml` stem) |
+| `E009` | Entry not found (entry path malformed — fewer than two segments —, resolved file missing, ambiguous `.yml`/`.yaml` stem, or entry name is not a valid component identifier) |
 | `E010` | Invalid syntax (call-site, string escape, math identifier prefix `$letter`, mixed-shape template chain, unknown or invalid `_ymx` field value (incl. bad `plain` value), or malformed `_test` block) |
 | `E011` | Math error (type mismatch, division by zero, non-numeric operand) or builtin argument type error (non-array 2nd arg to `$map`/`$reduce`; mixed-shape `$merge`) |
 | `E012` | Positional argument after a named argument in a call |
@@ -113,9 +113,9 @@ A document may carry two reserved **meta keys** at its top level — `_ymx` (fro
 | `pretty`          | bool        | `false`     | pretty-print JSON output |
 | `plain`           | string enum | `false`     | `false` \| `true` \| `template`; promotes sub-namespace names into the global namespace (`true` = components **and** templates; `template` = templates only). Invalid value → `E010`. See *Component visibility* |
 
-> `entry` is intentionally **not** a `_ymx` field: the entry determines which document's `_ymx` block is the project's front-matter source, so it is resolved before front matter is read. The entry is therefore CLI-only: `--entry` if provided, else the literal default `main.main`. The entry path is a **file-path address** (`<folder.path>.<file>.<component>`), distinct from the namespace dotted path used by `from` / `$name` resolution: `main.main` → root folder + `main.yml` + component `main`; `a.b.c` → folder `a` + `b.yml` + component `c` (both `.yml` and `.yaml` for the same stem is an ambiguous entry, `E009`). One segment is not a valid entry path (`E009`). The default `main.main` therefore requires `main.yml` to define `main`; if the entry component lives in another file, specify `--entry <file>.<component>`.
+> `entry` is intentionally **not** a `_ymx` field: the entry determines which document's `_ymx` block is the project's front-matter source, so it is resolved before front matter is read. The entry is therefore CLI-only: `--entry <component>` if provided, else `main`. The CLI receives a file path as the positional argument; the project root is the file's parent directory, and the entry path is derived as `<file_stem>.<component>` (always exactly 2 segments). The entry path is a **file-path address** (`<folder.path>.<file>.<component>`), distinct from the namespace dotted path used by `from` / `$name` resolution: `main.main` → root folder + `main.yml` + component `main`; `b.x` → file `b.yml` in the project root + component `x`. One segment is not a valid entry path (`E009`). The entry *file* must exist (else `E009`). The entry *component* is **not** required to exist at load/option-resolution time — it is only required when something actually compiles it (CLI compile mode, or a bare-A/B `_test` targeting the entry); a missing entry component at that point surfaces as `E002` (unknown component reference), like any other unknown component ref. This lets `_test`-only documents that target other components via type-2 maps omit the entry component entirely.
 
-**Precedence.** For each flag, the effective value is **CLI flag (if provided) > entry-file front matter > engine default**. The *entry file* — the document whose `_ymx` block supplies front matter — is the document located by the entry path (CLI `--entry` if set, else `main.main`): the resolved file must exist and define the entry component, else `E009`. `_ymx` blocks in other documents are **completely ignored** — never parsed or validated (an unknown field there is not an error; the block may even be malformed). An unknown `_ymx` field, or an invalid value for a known field (e.g. `plain: "maybe"`), in the **entry** file's `_ymx` is a hard error (`E010`).
+**Precedence.** For each flag, the effective value is **CLI flag (if provided) > entry-file front matter > engine default**. The *entry file* — the document whose `_ymx` block supplies front matter — is the document located by the entry path (CLI `--entry` if set, else `main.main`): the resolved file must exist, else `E009`. `_ymx` blocks in other documents are **completely ignored** — never parsed or validated (an unknown field there is not an error; the block may even be malformed). An unknown `_ymx` field, or an invalid value for a known field (e.g. `plain: "maybe"`), in the **entry** file's `_ymx` is a hard error (`E010`).
 
 ### `_test` — inline tests
 
@@ -150,10 +150,10 @@ A document may carry two reserved **meta keys** at its top level — `_ymx` (fro
 ## CLI
 
 ```
-ymx <path> [flags]
+ymx <file> [flags]
 ```
 
-- `--entry <path>`: entry path of the form `<folder.path>.<file>.<component>` to compile (default `main.main` = root folder + `main.yml` + component `main`). The penultimate segment names a file stem (without extension); if both `<stem>.yml` and `<stem>.yaml` exist, the entry is ambiguous (`E009`). The entry path must have ≥2 segments (one segment is `E009`). If the resolved file is missing or does not define the component, the CLI emits `E009` and exits non-zero.
+- `--entry <component>`: name of the component within `<file>` to compile (default `main`). The project root is the file's parent directory; the entry path is derived internally as `<file_stem>.<component>` (always exactly 2 segments). If the file is missing or the entry name is not a valid component identifier, the CLI emits `E009` at option-resolution and exits non-zero. If the file exists but the component is not defined in it, the CLI emits `E002` at compile time and exits non-zero.
 - `--from-keyword <kw>`: override the `from` keyword (default `from`).
 - `--default-keyword <kw>`: override the `$default` keyword name (default `default`); the engine always prefixes the name with `$`.
 - `--max-depth <n>`: limit on template/call recursion (default `256`).
@@ -164,9 +164,9 @@ ymx <path> [flags]
 - `--format <json|diagnostics>`: output style (v1: `json`; `diagnostics` lists errors only).
 - `--test`: run inline `_test` cases (via `ymx-test`) instead of compiling the entry. Emits one line per test (`PASS`/`FAIL` + target + diff on failure) and exits non-zero if any test fails or any `_test` block fails to parse (`E010`) — no JSON is emitted. A test passes when its expectation is met: `Expected::Value` requires the target to compile to the expected value; `Expected::Error` requires the target to produce a diagnostic with the expected code. Flag defaults still come from `_ymx` front matter.
 
-**Orchestration.** The CLI is the canonical full pipeline: `ymx_lib::load_project(path)` → `ymx_config::extract_options(&project, &cli)` → `ymx_core::compile(&project, &opts)` (or `ymx_test::run_tests(&project, &opts)` under `--test`) → serialize/emit. `--entry` is resolved before `extract_options` because it selects the front-matter source file (see *`_ymx` — front matter*).
+**Orchestration.** The CLI is the canonical full pipeline: `ymx_lib::load_project(path.parent())` → `ymx_config::extract_options(&project, &cli)` → `ymx_core::compile(&project, &opts)` (or `ymx_test::run_tests(&project, &opts)` under `--test`) → serialize/emit. The project root is derived from the file's parent directory; `--entry` is resolved before `extract_options` because it selects the front-matter source file (see *`_ymx` — front matter*).
 
-**Exit codes.** `0` on success; non-zero (default `1`) when any diagnostic is produced — including parse/namespace errors (`E001`, `E004`, …), a missing entry (`E009`), max-depth (`E008`), or a failing `_test` under `--test`. With `--format diagnostics` on a successful compile, stdout is empty and the exit code is `0`.
+**Exit codes.** `0` on success; non-zero (default `1`) when any diagnostic is produced — including parse/namespace errors (`E001`, `E004`, …), a missing entry file or invalid entry name (`E009`), a missing entry component (`E002`), max-depth (`E008`), or a failing `_test` under `--test`. With `--format diagnostics` on a successful compile, stdout is empty and the exit code is `0`.
 
 ## Library API
 
@@ -337,7 +337,7 @@ Tests are **first-class**: every scenario lives in `tests/cases/rule-NN/<scenari
 
 ```
 tests/cases/rule-NN/<scenario>/
-├── main.yml        # the entry document (defines `main` and the `_test` block; may define `_ymx`)
+├── main.yml        # the entry document (defines the `_test` block; may define `_ymx`; defines main only if a test targets it)
 ├── <other>.yml     # additional documents in the same project (multi-file scenarios)
 └── subdir/         # sub-namespace documents
 ```
