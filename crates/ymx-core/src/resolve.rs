@@ -893,11 +893,13 @@ impl<'a> Resolver<'a> {
         self.reject_dollar_modifier_keys(entries, scope)?;
         let mut set = PropertySet::default();
 
-        // Optional key tracking: (stripped_key, entry) for lazy default evaluation.
-        // Entries with `?` suffix are not resolved immediately; they're recorded
-        // here and evaluated lazily only if the caller did not supply the key.
-        let mut optional_named: Vec<(String, &crate::parse::Entry)> = Vec::new();
-        let mut optional_slots: Vec<(usize, &crate::parse::Entry)> = Vec::new();
+        // Optional key tracking: (stripped_key, entry, is_math_default) for lazy
+        // default evaluation. Entries with `?` suffix are not resolved immediately;
+        // they're recorded here and evaluated lazily only if the caller did not
+        // supply the key. The `is_math_default` flag indicates that the value is
+        // a math expression to be evaluated (for `?$`).
+        let mut optional_named: Vec<(String, &crate::parse::Entry, bool)> = Vec::new();
+        let mut optional_slots: Vec<(usize, &crate::parse::Entry, bool)> = Vec::new();
 
         for entry in entries {
             match &entry.key {
@@ -936,7 +938,7 @@ impl<'a> Resolver<'a> {
                         }
                         // Record for lazy evaluation: only use default if caller
                         // did not supply positional at this index.
-                        optional_slots.push((idx, entry));
+                        optional_slots.push((idx, entry, false));
                         // Add to order but don't insert into slots yet.
                         if set.slots.len() <= idx {
                             set.slots.resize(idx + 1, Value::Null);
@@ -944,19 +946,35 @@ impl<'a> Resolver<'a> {
                         set.order.push(PropKey::Slot(idx));
                     } else {
                         // `x?` — optional named property.
-                        optional_named.push((base.to_string(), entry));
+                        optional_named.push((base.to_string(), entry, false));
                         set.order.push(PropKey::Named(base.to_string()));
                     }
                 }
                 crate::parse::Key::String(s) if s.ends_with("?$") => {
-                    // `?$` combination (rule 17+18) is v2-only — E010 in v1.
-                    return Err(ctx_err(
-                        scope,
-                        E010,
-                        "property-key modifier `?$` is not supported in v1 \
-                         (rule 17+18 combination is v2)"
-                            .to_string(),
-                    ));
+                    // `x?$` optional named property with math-evaluated default, or
+                    // `0?$` optional positional slot with math-evaluated default.
+                    // `<name>?$: <src>` ≡ `<name>?: ${<src>}` — lazy evaluation:
+                    // only evaluated when caller does NOT supply <name>.
+                    let base = &s[..s.len() - 2]; // strip `?$`
+                    if let Ok(idx) = base.parse::<usize>() {
+                        // `0?$`, `1?$`, etc. — optional positional slot with math default.
+                        if idx > MAX_SLOTS {
+                            return Err(ctx_err(
+                                scope,
+                                E010,
+                                format!("slot key `{s}` is too large (max {MAX_SLOTS})"),
+                            ));
+                        }
+                        optional_slots.push((idx, entry, true));
+                        if set.slots.len() <= idx {
+                            set.slots.resize(idx + 1, Value::Null);
+                        }
+                        set.order.push(PropKey::Slot(idx));
+                    } else {
+                        // `x?$` — optional named property with math default.
+                        optional_named.push((base.to_string(), entry, true));
+                        set.order.push(PropKey::Named(base.to_string()));
+                    }
                 }
                 crate::parse::Key::String(s) if s.ends_with('$') && !s.ends_with("?$") => {
                     // `x$` or `0$` — rule 18 `$` math shorthand property-key modifier.
@@ -1038,13 +1056,31 @@ impl<'a> Resolver<'a> {
         // Evaluate lazy defaults for optional slots: only if caller did not
         // supply that positional index. Rebuild padded scope after this so
         // named properties can reference the evaluated slot defaults.
-        for (idx, entry) in optional_slots {
+        for (idx, entry, is_math) in optional_slots {
             if let Some(value) = scope.positional.get(idx) {
                 // Caller supplied this positional; use their value.
                 set.slots[idx] = value.clone();
             } else {
                 // Caller did not supply this positional; evaluate the default.
-                let default = self.resolve_node(&entry.value, &padded, file)?;
+                let default = if is_math {
+                    // `?$`: value is a math expression string; wrap in `${...}`.
+                    let Node::String(math_src, span) = &entry.value else {
+                        let value_span = entry.value.span();
+                        return Err(Diagnostic {
+                            file: scope.file.clone(),
+                            line: value_span.line,
+                            col: value_span.col,
+                            component: scope.component.clone(),
+                            code: E010,
+                            message: "value for `?$` modifier must be a string (math source)"
+                                .to_string(),
+                        });
+                    };
+                    let segments = interp::scan(&format!("${{{math_src}}}"), *span)?;
+                    interp::resolve(&segments, &padded, &V1Engine)?
+                } else {
+                    self.resolve_node(&entry.value, &padded, file)?
+                };
                 set.slots[idx] = default;
             }
         }
@@ -1058,9 +1094,27 @@ impl<'a> Resolver<'a> {
         // Evaluate lazy defaults for optional named properties: only if caller
         // did not supply that named argument.
         let caller_supplied = |name: &str| scope.named.iter().any(|(n, _)| n == name);
-        for (base_name, entry) in optional_named {
+        for (base_name, entry, is_math) in optional_named {
             if !caller_supplied(&base_name) {
-                let value = self.resolve_node(&entry.value, &padded, file)?;
+                let value = if is_math {
+                    // `?$`: value is a math expression string; wrap in `${...}`.
+                    let Node::String(math_src, span) = &entry.value else {
+                        let value_span = entry.value.span();
+                        return Err(Diagnostic {
+                            file: scope.file.clone(),
+                            line: value_span.line,
+                            col: value_span.col,
+                            component: scope.component.clone(),
+                            code: E010,
+                            message: "value for `?$` modifier must be a string (math source)"
+                                .to_string(),
+                        });
+                    };
+                    let segments = interp::scan(&format!("${{{math_src}}}"), *span)?;
+                    interp::resolve(&segments, &padded, &V1Engine)?
+                } else {
+                    self.resolve_node(&entry.value, &padded, file)?
+                };
                 set.named.insert(base_name, value);
             } else {
                 if let Some((_, v)) = scope.named.iter().find(|(n, _)| *n == base_name) {
@@ -1072,7 +1126,9 @@ impl<'a> Resolver<'a> {
         for entry in entries {
             match &entry.key {
                 crate::parse::Key::String(name) => {
-                    if name.ends_with('?') {
+                    // Skip `?` and `?$` entries — they're handled in the first match
+                    // arms above and evaluated lazily (or in the lazy phase for ?$).
+                    if name.ends_with('?') || name.ends_with("?$") {
                         continue;
                     }
                     let is_math_key = name.ends_with('$');
@@ -1130,20 +1186,6 @@ impl<'a> Resolver<'a> {
                 .map(Value::array),
             Node::Object(entries, _) => {
                 self.reject_dollar_modifier_keys(entries, scope)?;
-                // `?$` combination (rules 17+18) is v2-only — E010 in v1.
-                for entry in entries {
-                    if let crate::parse::Key::String(s) = &entry.key {
-                        if s.ends_with("?$") {
-                            return Err(ctx_err(
-                                scope,
-                                E010,
-                                "property-key modifier `?$` is not supported in v1 \
-                                 (rule 17+18 combination is v2)"
-                                    .to_string(),
-                            ));
-                        }
-                    }
-                }
                 if entries.iter().any(|e| self.is_from_key(&e.key)) {
                     return self.resolve_mini(entries, scope, file);
                 }
@@ -1174,6 +1216,20 @@ impl<'a> Resolver<'a> {
     ) -> Result<(), Diagnostic> {
         for entry in entries {
             if let crate::parse::Key::String(s) = &entry.key {
+                // `?$` combination (rules 17+18) checks.
+                if s.ends_with("?$") {
+                    let base = &s[..s.len() - 2]; // strip `?$`
+                                                  // `?$` on meta fields `_ymx`/`_test` is E010.
+                    if base == "_ymx" || base == "_test" {
+                        return Err(ctx_err(
+                            scope,
+                            E010,
+                            format!(
+                                "property-key modifier `?$` on meta field `{s}` is not allowed"
+                            ),
+                        ));
+                    }
+                }
                 // `?` modifier (rule 17) checks.
                 if let Some(base) = s.strip_suffix('?') {
                     // `?` on meta fields `_ymx`/`_test` is E010.
@@ -2634,19 +2690,6 @@ mod tests {
 
     #[test]
     fn property_key_modifiers_are_e010_in_v1() {
-        // `?$` combination (rules 17+18) is v2-only — E010 in v1.
-        for (label, src) in [
-            ("x?$ top-level", "main:\n  x?$: x + 1\n"),
-            ("x?$ nested", "main:\n  a:\n    b?$: b + 1\n"),
-            (
-                "mini ?$",
-                "comp: 1\nmain:\n  mini:\n    from: comp\n    y?$: y + 1\n",
-            ),
-        ] {
-            let p = project_with(&[("main.yml", src)]);
-            let d = compile_err(&p, "main", &Args::None);
-            assert_eq!(d.code, E010, "{label}");
-        }
         // `?` on meta fields `_ymx`/`_test` is E010 (nested in a component body).
         let p = project_with(&[("main.yml", "main:\n  _ymx?: 1\n")]);
         let d = compile_err(&p, "main", &Args::None);
@@ -2709,6 +2752,73 @@ mod tests {
             ])),
             "caller supplied positional: slot 0 is 1, default 99 is never evaluated"
         );
+    }
+
+    #[test]
+    fn optional_math_default_named_property() {
+        // `x?$` — optional named property with math-evaluated default.
+        // When caller does NOT supply `x`, evaluate the math default.
+        // Note: the math expression is evaluated against the padded scope, which
+        // includes slot defaults but NOT other named properties (they are resolved
+        // after optional defaults). So the math expression cannot reference named
+        // properties that appear after the `?$` entry.
+        let p = project_with(&[("main.yml", "b:\n  0?: 5\n  x?$: \"$0 + 1\"\n")]);
+        assert_eq!(
+            compile_ok(&p, "b", &Args::None),
+            Value::object(IndexMap::from([
+                ("0".to_string(), Value::int(5)),
+                ("x".to_string(), Value::int(6)),
+            ])),
+            "no caller arg: math default `$0 + 1` evaluated with slot 0=5 to 6"
+        );
+
+        // When caller DOES supply `x`, the math default is skipped entirely.
+        let p = project_with(&[("main.yml", "a: $b(x=99)\nb:\n  0?: 5\n  x?$: \"$0 + 1\"\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::object(IndexMap::from([
+                ("0".to_string(), Value::int(5)),
+                ("x".to_string(), Value::int(99)),
+            ])),
+            "caller supplied x=99: math default is never evaluated"
+        );
+    }
+
+    #[test]
+    fn optional_math_default_slot() {
+        // `0?$` — optional positional slot with math-evaluated default.
+        // When caller does NOT supply positional at that index, evaluate the math default.
+        let p = project_with(&[("main.yml", "b:\n  0?$: \"2 + 3\"\n  out: $0\n")]);
+        assert_eq!(
+            compile_ok(&p, "b", &Args::None),
+            Value::object(IndexMap::from([
+                ("0".to_string(), Value::int(5)),
+                ("out".to_string(), Value::int(5)),
+            ])),
+            "no positional arg: math default `2 + 3` evaluated to 5"
+        );
+
+        // When caller DOES supply positional, the math default is skipped entirely.
+        let p = project_with(&[("main.yml", "a: $b(99)\nb:\n  0?$: \"2 + 3\"\n  out: $0\n")]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::object(IndexMap::from([
+                ("0".to_string(), Value::int(99)),
+                ("out".to_string(), Value::int(99)),
+            ])),
+            "caller supplied positional 99: math default is never evaluated"
+        );
+    }
+
+    #[test]
+    fn optional_math_default_meta_field_is_e010() {
+        // `?$` on meta fields `_ymx`/`_test` is E010.
+        let p = project_with(&[("main.yml", "main:\n  _ymx?$: 1\n")]);
+        let d = compile_err(&p, "main", &Args::None);
+        assert_eq!(d.code, E010, "`?$` on `_ymx` key is E010");
+        let p = project_with(&[("main.yml", "main:\n  _test?$: 1\n")]);
+        let d = compile_err(&p, "main", &Args::None);
+        assert_eq!(d.code, E010, "`?$` on `_test` key is E010");
     }
 
     // ---- Milestone 1.6 task 5: template chain (rule 5, step 2) ----

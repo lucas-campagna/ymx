@@ -1,6 +1,6 @@
-# x?$: optional property with math default.
+# x?$: optional property with math-evaluated default.
 # When caller supplies x, default is skipped.
-# When caller omits x, math default is evaluated.
+# When caller omits x, math expression is evaluated lazily.
 comp_with_arg:
   from: comp
   x: 99

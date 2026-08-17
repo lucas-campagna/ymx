@@ -1,0 +1,17 @@
+# 0?$: optional positional slot with math-evaluated default.
+# When caller supplies positional at index 0, default is skipped.
+# When caller omits it, math expression is evaluated with $0=0 (null * 2 = E011).
+# Use a default that doesn't reference $0 to avoid E011.
+comp_with_pos:
+  from: comp
+  0: 99
+comp_no_pos:
+  from: comp
+comp:
+  0?$: "2 + 3"
+  out: $0
+_test:
+  comp_with_pos:
+    result: {0: 99, out: 99}
+  comp_no_pos:
+    result: {0: 5, out: 5}

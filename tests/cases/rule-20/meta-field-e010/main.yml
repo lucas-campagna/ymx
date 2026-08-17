@@ -1,0 +1,6 @@
+# _ymx?$ inside a component body should be E010 (not E001)
+comp:
+  _ymx?$: 1
+_test:
+  comp:
+    error: E010
