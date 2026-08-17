@@ -1,11 +1,13 @@
 //! `ymx` binary — milestone 1.10 orchestration glue.
 //!
-//! Task 1 wires the arg parser: parse argv, service `--help`, and surface
-//! usage errors. Compile/test orchestration (load → extract → compile /
-//! `run_tests` → emit) and exit-code handling land in tasks 2–5; the manual
-//! page text lands in task 6.
+//! The binary is thin: parse argv (task 1), service `--help` (manual text lands
+//! in task 6), surface usage errors (exit `2`), and dispatch into
+//! [`run::run`] (task 3) for the load → extract → compile / `run_tests`
+//! pipeline. The success-emit shape (JSON pretty / `--output` /
+//! `--format diagnostics`) lands in task 4.
 
 mod args;
+mod run;
 
 use std::process::ExitCode;
 
@@ -14,14 +16,8 @@ use args::{parse, ParseOutcome};
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     match parse(&argv) {
-        Ok(ParseOutcome::Help) => {
-            // Manual page text lands in task 6.
-            ExitCode::SUCCESS
-        }
-        Ok(ParseOutcome::Cli(_cli)) => {
-            // Orchestration wires in task 3; `CliOverrides` mapping is task 2.
-            ExitCode::SUCCESS
-        }
+        Ok(ParseOutcome::Help) => ExitCode::SUCCESS,
+        Ok(ParseOutcome::Cli(cli)) => run::run(&cli).to_exit_code(),
         Err(e) => {
             eprintln!("ymx: {message}", message = e.message);
             ExitCode::from(2)

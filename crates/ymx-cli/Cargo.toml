@@ -12,3 +12,4 @@ path = "src/main.rs"
 ymx-lib.workspace = true
 ymx-config.workspace = true
 ymx-test.workspace = true
+serde_json.workspace = true
