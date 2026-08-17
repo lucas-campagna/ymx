@@ -1,0 +1,13 @@
+with_pos:
+  from: comp
+  0: 5
+without_pos:
+  from: comp
+comp:
+  0?: 99
+  out: $0
+_test:
+  with_pos:
+    result: {0: 5, out: 5}
+  without_pos:
+    result: {0: 99, out: 99}

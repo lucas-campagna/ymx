@@ -1,0 +1,16 @@
+# ${1/0} would E011 if evaluated.
+# When caller supplies x, default is skipped — no error.
+# When caller omits x, default is evaluated — E011.
+lazy:
+  from: comp
+  x: 5
+lazy_no_x:
+  from: comp
+comp:
+  x?: ${1/0}
+  out: $x
+_test:
+  lazy:
+    result: {x: 5, out: 5}
+  lazy_no_x:
+    error: E011
