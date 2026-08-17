@@ -1,0 +1,102 @@
+name: Build metrics
+
+# ---------------------------------------------------------------------------
+# Build-time & binary-size metrics (milestone 1.14).
+# ---------------------------------------------------------------------------
+# Runs alongside CI on every push / pull_request. Produces downloadable
+# artifacts and a per-crate timing breakdown in the workflow run summary, but
+# holds NO gating verdicts: every measurable step is wrapped in
+# `continue-on-error: true` so a metrics miss cannot fail a PR. Gating
+# decisions are deferred until a stable size/time baseline exists (see the
+# gate-posture note appended to this file by task 4 of the milestone).
+# ---------------------------------------------------------------------------
+
+on: [push, pull_request]
+
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # -------------------------------------------------------------------
+      # Timing report (task 1 of milestone 1.14).
+      # -------------------------------------------------------------------
+      # `cargo build --workspace --timings` writes the timing report to
+      # `target/cargo-timings/cargo-timing-<timestamp>-<hash>.html` plus a
+      # `cargo-timing.html` symlink pointing at the freshest entry. The
+      # milestone subtask refers to it as `target/cargo-timings.html`, the
+      # colloquial handle for that report; we upload the directory so both the
+      # timestamped file and the `cargo-timing.html` pointer are downloaded.
+      # The per-crate breakdown below extracts the embedded `UNIT_DATA` JSON
+      # array from the freshest HTML and posts a Markdown table of total
+      # duration per crate to `$GITHUB_STEP_SUMMARY`.
+      # -------------------------------------------------------------------
+      - name: cargo build --workspace --timings
+        continue-on-error: true
+        run: cargo build --workspace --timings
+
+      - name: Upload cargo-timings artifact
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: timings
+          path: target/cargo-timings/
+
+      - name: Per-crate timing breakdown in $GITHUB_STEP_SUMMARY
+        continue-on-error: true
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+          from pathlib import Path
+
+          candidates = sorted(
+              Path("target/cargo-timings").glob("cargo-timing-*.html"),
+              reverse=True,
+          )
+          lines = ["## Per-crate build timings", ""]
+
+          if not candidates:
+              lines += ["_cargo-timing-*.html not found under target/cargo-timings._", ""]
+          else:
+              html = candidates[0].read_text(encoding="utf-8")
+              m = re.search(r"UNIT_DATA\s*=\s*(\[.*?\])\s*;", html, re.S)
+              if not m:
+                  lines += ["_UNIT_DATA not found in cargo-timings.html._", ""]
+              else:
+                  try:
+                      units = json.loads(m.group(1))
+                  except Exception as exc:
+                      lines += [f"_UNIT_DATA parse failed: {exc}._", ""]
+                      units = None
+
+                  totals = {}
+                  if isinstance(units, list):
+                      for u in units:
+                          if not isinstance(u, dict):
+                              continue
+                          name = u.get("name") or "?"
+                          dur = u.get("duration")
+                          if not isinstance(dur, (int, float)):
+                              continue
+                          totals[name] = totals.get(name, 0.0) + float(dur)
+
+                  if totals:
+                      lines += ["| Crate | Total duration (s) |", "|---|---|"]
+                      for name, dur in sorted(
+                          totals.items(), key=lambda kv: kv[1], reverse=True
+                      ):
+                          lines.append(f"| {name} | {dur:.3f} |")
+                  else:
+                      lines += ["_No per-unit durations in cargo-timings.html._", ""]
+
+          text = "\n".join(lines)
+          print(text)
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as fh:
+                  fh.write(text + "\n")
+          PY
