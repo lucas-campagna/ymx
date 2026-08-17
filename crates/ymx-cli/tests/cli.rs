@@ -300,3 +300,174 @@ fn help_flag_exits_zero() {
     // Task 6 will populate the real manual page text; until then we only
     // assert that --help is a successful no-op (success exit, empty stdout).
 }
+
+// ---------------------------------------------------------------------------
+// Task 5 — exit-code matrix. Locks the contract: 0 success, 1 runtime
+// diagnostic / test failure, 2 usage (arg-parse) error. Each row asserts the
+// raw OS exit code via `status.code()` (not just `.success()`) so the specific
+// non-zero value is pinned, not merely "non-zero".
+// ---------------------------------------------------------------------------
+
+/// Assert the raw exit code of a binary run; surfaces stdout/stderr for
+/// triage on failure.
+fn assert_exit(args: &[&str], expected: i32) {
+    let out = ymx(args);
+    let got = out.0.status.code();
+    if got != Some(expected) {
+        panic!(
+            "exit code: expected {expected}, got {got:?}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            stdout(&out.0),
+            stderr(&out.0)
+        );
+    }
+}
+
+#[test]
+fn exit_code_success_compile_json_is_zero() {
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n");
+    assert_exit(&[dir.path().to_str().unwrap()], 0);
+}
+
+#[test]
+fn exit_code_success_format_diagnostics_is_zero() {
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n");
+    assert_exit(
+        &["--format", "diagnostics", dir.path().to_str().unwrap()],
+        0,
+    );
+}
+
+#[test]
+fn exit_code_success_test_run_all_passed_is_zero() {
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n_test:\n  main: 1\n");
+    assert_exit(&["--test", dir.path().to_str().unwrap()], 0);
+}
+
+#[test]
+fn exit_code_success_test_no_blocks_is_zero_noop_success() {
+    // No `_test` blocks exist: parse_tests returns Ok(empty), run_tests
+    // returns an empty Vec. `passed == total == 0` is a no-op success (NOT
+    // a diagnostic). This locks the matrix row "no-op --test success → 0".
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n");
+    assert_exit(&["--test", dir.path().to_str().unwrap()], 0);
+}
+
+#[test]
+fn exit_code_test_failure_is_one() {
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n_test:\n  main: 2\n");
+    assert_exit(&["--test", dir.path().to_str().unwrap()], 1);
+}
+
+#[test]
+fn exit_code_test_malformed_block_is_one() {
+    // A B mapping with both `result` and `error` is malformed (`E010`) at
+    // `parse_tests`; the CLI renders the diagnostic to stderr and exits 1.
+    let dir = TempDir::new();
+    dir.write(
+        "main.yml",
+        "main: 1\n_test:\n  main:\n    result: 1\n    error: \"E002\"\n",
+    );
+    assert_exit(&["--test", dir.path().to_str().unwrap()], 1);
+}
+
+#[test]
+fn exit_code_load_error_is_one() {
+    let dir = TempDir::new();
+    dir.write("bad.yml", "a: 1\n---\nb: 2\n");
+    assert_exit(&[dir.path().to_str().unwrap()], 1);
+}
+
+#[test]
+fn exit_code_extract_options_e009_is_one() {
+    let dir = TempDir::new();
+    dir.write("other.yml", "other: 1\n");
+    assert_exit(&[dir.path().to_str().unwrap()], 1);
+}
+
+#[test]
+fn exit_code_extract_options_e010_is_one() {
+    let dir = TempDir::new();
+    dir.write("main.yml", "_ymx:\n  foo: 1\nmain: 0\n");
+    assert_exit(&[dir.path().to_str().unwrap()], 1);
+}
+
+#[test]
+fn exit_code_compile_error_is_one() {
+    // `--max-depth 1` against a self-recursive component surfaces E008 at
+    // `compile`. Confirms compile-step errors map to exit 1, not 2.
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: \"$main()\"\n");
+    assert_exit(&["--max-depth", "1", dir.path().to_str().unwrap()], 1);
+}
+
+#[test]
+fn exit_code_missing_path_usage_is_two() {
+    // Usage errors (arg-parse stage) use exit 2 to distinguish them from a
+    // runtime diagnostic's exit 1 (see `main.rs`).
+    assert_exit(&[], 2);
+}
+
+#[test]
+fn exit_code_extra_positional_usage_is_two() {
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n");
+    assert_exit(
+        &[dir.path().to_str().unwrap(), dir.path().to_str().unwrap()],
+        2,
+    );
+}
+
+#[test]
+fn exit_code_bad_max_depth_usage_is_two() {
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n");
+    assert_exit(&["--max-depth", "abc", dir.path().to_str().unwrap()], 2);
+}
+
+#[test]
+fn exit_code_bad_format_usage_is_two() {
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n");
+    assert_exit(&["--format", "xml", dir.path().to_str().unwrap()], 2);
+}
+
+#[test]
+fn exit_code_unknown_flag_usage_is_two() {
+    assert_exit(&["--bogus", "."], 2);
+}
+
+#[test]
+fn exit_code_plain_and_plain_template_usage_is_two_no_load() {
+    // Mutual exclusion fires in arg-parse, before any `load_project`. Lock
+    // the contract: exit 2 (not 1), and stderr carries the usage message,
+    // never an `E00x` diagnostic.
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n");
+    let out = ymx(&["--plain", "--plain-template", dir.path().to_str().unwrap()]);
+    assert_eq!(out.0.status.code(), Some(2));
+    let stderr = stderr(&out.0);
+    assert!(stderr.contains("mutually exclusive"), "stderr: {stderr}");
+    assert!(
+        !stderr.contains('E'),
+        "no E00x diagnostic under usage error: {stderr}"
+    );
+}
+
+#[test]
+fn exit_code_missing_value_usage_is_two() {
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n");
+    assert_exit(&["--entry"], 2);
+    assert_exit(&["proj/", "--output"], 2);
+}
+
+#[test]
+fn exit_code_help_is_zero() {
+    assert_exit(&["--help"], 0);
+    assert_exit(&["-h"], 0);
+}
