@@ -16,7 +16,7 @@ NAME
     ymx — YAML → JSON compiler for the YMX language (v1).
 
 SYNOPSIS
-    ymx <file> [flags]
+    ymx [path] [flags]
 
 DESCRIPTION
     Compiles the YMX entry file <file> into JSON by resolving the entry component
@@ -27,9 +27,15 @@ DESCRIPTION
     default).
 
 USAGE
-    ymx <file> [flags]
-        <file> is the entry file to compile (positional, required). The project
-        root is derived as <file>'s parent directory.
+    ymx [path] [flags]
+        <path> is the entry file or directory to operate on.
+        When --test is NOT given, <path> is required and must be a file.
+        When --test IS given, <path> is optional (defaults to `.`) and may be
+        a file or directory. If <path> is a directory, tests run recursively
+        across all YMX sub-projects under that directory (a subdirectory is
+        considered a project root if it contains at least one .yml or .yaml
+        file). The project root is derived as <path>'s parent directory (or
+        <path> itself when --test with a directory).
 
     ymx --help | -h
         Print this manual page to stdout and exit 0.
@@ -90,6 +96,9 @@ FLAGS
                               is emitted under --test. Flag defaults still come from
                               the entry file's _ymx front matter. A project with no
                               _test blocks is a no-op success (exit 0).
+                              If <path> is omitted, it defaults to `.`. If <path>
+                              is a directory, tests run recursively across all YMX
+                              sub-projects under that directory.
 
     --help, -h                Print this manual page to stdout and exit 0.
 
