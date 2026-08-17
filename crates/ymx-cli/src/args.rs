@@ -1,4 +1,4 @@
-//! Argument parser for the `ymx` CLI (milestone 1.10, task 1).
+//! Argument parser for the `ymx` CLI (milestones 1.10 task 1 + task 2).
 //!
 //! Hand-rolled — `clap` is not a workspace dependency today, and a small
 //! parser keeps the dependency tree minimal. Recognises the flag surface in
@@ -13,10 +13,13 @@
 //! is a usage error (the parser returns [`Err`](Result::Err)
 //! <[`ParseError`]>) surfaced before any `load_project` call. Every flag maps
 //! to `None` when absent, so the [`ParsedCli`] is a 1:1 source for
-//! `ymx_config::CliOverrides`.
+//! `ymx_config::CliOverrides` via [`ParsedCli::overrides`]. The
+//! orchestration-only concerns (`path`, `output`, `test`) stay on
+//! [`ParsedCli`] and never reach `CliOverrides`.
 
 use std::path::PathBuf;
 
+use ymx_config::CliOverrides;
 use ymx_lib::{ymx_core::project::PlainMode, Format};
 
 /// The parsed command line: the project-root positional and per-flag inputs
@@ -51,6 +54,32 @@ pub struct ParsedCli {
     /// `--test` orchestration concern — runs `_test` blocks instead of
     /// compiling the entry.
     pub test: bool,
+}
+
+impl ParsedCli {
+    /// Build a [`CliOverrides`] from the parsed per-flag inputs — the
+    /// CLI-overrides shape consumed by `ymx_config::extract_options`.
+    ///
+    /// Each flag maps to its `Option` field verbatim: `None` when the flag
+    /// was absent (deferring to the entry-file `_ymx`, then the engine
+    /// default per the PRD's precedence ladder), `Some(value)` when present.
+    /// The CLI-only orchestration concerns (`path`, `output`, `test`) are
+    /// deliberately **not** part of `CliOverrides` — `extract_options` does
+    /// not consume them.
+    // Called only by the orchestration pipeline (task 3); tests reach it via
+    // `ParsedCli::overrides`. `dead_code` allowed until task 3 wires it.
+    #[allow(dead_code)]
+    pub fn overrides(&self) -> CliOverrides {
+        CliOverrides {
+            entry: self.entry.clone(),
+            from_keyword: self.from_keyword.clone(),
+            default_keyword: self.default_keyword.clone(),
+            max_depth: self.max_depth,
+            pretty: self.pretty,
+            format: self.format.clone(),
+            plain: self.plain.clone(),
+        }
+    }
 }
 
 /// A usage error: the message to print to stderr. The caller prints
@@ -385,5 +414,78 @@ mod tests {
         assert_eq!(c.pretty, Some(true));
         assert!(c.test);
         assert_eq!(c.format, Some(Format::Diagnostics));
+    }
+
+    // ---- task 2: ParsedCli::overrides() -> CliOverrides ----
+
+    #[test]
+    fn overrides_all_absent_equals_default_for_tests() {
+        let c = cli_of(&["proj/"]);
+        assert_eq!(c.overrides(), CliOverrides::default_for_tests());
+    }
+
+    #[test]
+    fn overrides_maps_each_present_flag_field() {
+        let c = cli_of(&[
+            "--entry",
+            "a.b.c",
+            "--from-keyword",
+            "frm",
+            "--default-keyword",
+            "dflt",
+            "--max-depth",
+            "8",
+            "--pretty",
+            "--format",
+            "diagnostics",
+            "--plain",
+            "proj/",
+        ]);
+        let ov = c.overrides();
+        assert_eq!(ov.entry.as_deref(), Some("a.b.c"));
+        assert_eq!(ov.from_keyword.as_deref(), Some("frm"));
+        assert_eq!(ov.default_keyword.as_deref(), Some("dflt"));
+        assert_eq!(ov.max_depth, Some(8));
+        assert_eq!(ov.pretty, Some(true));
+        assert_eq!(ov.format, Some(Format::Diagnostics));
+        assert_eq!(ov.plain, Some(PlainMode::All));
+    }
+
+    #[test]
+    fn overrides_plain_template_maps_to_templates_only() {
+        let c = cli_of(&["--plain-template", "proj/"]);
+        assert_eq!(c.overrides().plain, Some(PlainMode::TemplatesOnly));
+    }
+
+    #[test]
+    fn overrides_format_json_maps_to_json() {
+        let c = cli_of(&["--format", "json", "proj/"]);
+        assert_eq!(c.overrides().format, Some(Format::Json));
+    }
+
+    #[test]
+    fn overrides_absent_fields_are_none_independently() {
+        let c = cli_of(&["--max-depth", "100", "proj/"]);
+        let ov = c.overrides();
+        assert_eq!(ov.max_depth, Some(100));
+        assert_eq!(ov.entry, None);
+        assert_eq!(ov.from_keyword, None);
+        assert_eq!(ov.default_keyword, None);
+        assert_eq!(ov.pretty, None);
+        assert_eq!(ov.format, None);
+        assert_eq!(ov.plain, None);
+    }
+
+    #[test]
+    fn overrides_does_not_carry_output_or_test() {
+        // `CliOverrides` has no `output`/`test` fields — the struct-literal
+        // construction in `overrides()` is the real guard against a future
+        // regression (adding such a field would fail to compile). Here we
+        // confirm `--test` and `--output` stay on `ParsedCli` and do not
+        // populate any override field.
+        let c = cli_of(&["--test", "--output", "out.json", "proj/"]);
+        assert!(c.test);
+        assert_eq!(c.output.as_deref(), Some(std::path::Path::new("out.json")));
+        assert_eq!(c.overrides(), CliOverrides::default_for_tests());
     }
 }
