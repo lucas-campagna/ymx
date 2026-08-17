@@ -30,7 +30,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.8 | `done` | Builtins: $merge / $map / $reduce (rules 15–16) | ymx-core | [1.8-builtins.md](1.8-builtins.md) | 1.6 |
 | 1.9 | `done` | Test harness (ymx-test) | ymx-test | [1.9-test-harness.md](1.9-test-harness.md) | 1.6 |
 | 1.10 | `done` | CLI (ymx-cli) | ymx-cli | [1.10-cli.md](1.10-cli.md) | 1.8, 1.9 |
-| 1.11 | `planned` | Scenario suite & docs | tests/ | [1.11-scenarios-docs.md](1.11-scenarios-docs.md) | 1.10 |
+| 1.11 | `done` | Scenario suite & docs | tests/ | [1.11-scenarios-docs.md](1.11-scenarios-docs.md) | 1.10 |
 | 1.12 | `done` | CI gate & dependency security | (repo) | [1.12-ci-gate.md](1.12-ci-gate.md) | 1.1 |
 | 1.13 | `done` | Code coverage reporting (cargo-llvm-cov) | (repo) | [1.13-coverage.md](1.13-coverage.md) | 1.9 |
 | 1.14 | `done` | Build-time & binary-size metrics | (repo) | [1.14-build-metrics.md](1.14-build-metrics.md) | 1.10 |
