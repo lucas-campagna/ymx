@@ -1,3 +1,6 @@
 main: placeholder
 box: $0
 comp: "$$box(1)"
+_test:
+  comp:
+    error: E010

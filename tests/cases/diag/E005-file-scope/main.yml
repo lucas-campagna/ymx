@@ -1,2 +1,5 @@
 main: placeholder
 comp: "$_secret()"
+_test:
+  comp:
+    error: E005
