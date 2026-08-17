@@ -56,6 +56,11 @@ pub struct ParsedCli {
     /// `--test` orchestration concern — runs `_test` blocks instead of
     /// compiling the entry.
     pub test: bool,
+    /// Set when `--test` is given and the path resolved to a directory at
+    /// parse time (via [`Path::is_dir`](std::path::Path::is_dir)). `None`
+    /// when `--test` is absent or when the path was a file (or does not exist).
+    /// Used by `run.rs` to decide between single-project and recursive modes.
+    pub test_dir: Option<PathBuf>,
 }
 
 impl ParsedCli {
@@ -197,20 +202,35 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         });
     }
 
-    if positionals.len() != 1 {
+    // When --test is given, 0 positionals is acceptable (defaults to ".")
+    // When --test is NOT given, 0 positionals is an error (unchanged)
+    // 2+ positionals is always an error
+    if positionals.len() > 1 {
         return Err(ParseError {
-            message: if positionals.is_empty() {
-                "missing file — usage: `ymx <file> [flags]`".to_string()
-            } else {
-                format!(
-                    "expected exactly one file, got {} — usage: `ymx <file> [flags]`",
-                    positionals.len()
-                )
-            },
+            message: format!(
+                "expected exactly one file, got {} — usage: `ymx <file> [flags]`",
+                positionals.len()
+            ),
         });
     }
 
-    let path = positionals.pop().unwrap();
+    let path = if positionals.is_empty() {
+        if !test {
+            return Err(ParseError {
+                message: "missing file — usage: `ymx <file> [flags]`".to_string(),
+            });
+        }
+        PathBuf::from(".")
+    } else {
+        positionals.pop().unwrap()
+    };
+
+    // Determine test_dir: set when --test is given and the path is a directory
+    let test_dir = if test && path.is_dir() {
+        Some(path.clone())
+    } else {
+        None
+    };
     Ok(ParseOutcome::Cli(ParsedCli {
         path,
         entry,
@@ -222,6 +242,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         plain,
         output,
         test,
+        test_dir,
     }))
 }
 
@@ -529,5 +550,58 @@ mod tests {
         assert_eq!(ov.pretty, None);
         assert_eq!(ov.format, None);
         assert_eq!(ov.plain, None);
+    }
+
+    // ---- task 1: recursive test discovery ---
+
+    #[test]
+    fn test_flag_without_path_defaults_to_dot() {
+        // `ymx --test` (no positional) should accept and default path to "."
+        let c = cli_of(&["--test"]);
+        assert_eq!(c.path, PathBuf::from("."));
+        assert!(c.test);
+        assert!(c.test_dir.is_some()); // "." is a directory
+        assert_eq!(c.test_dir.unwrap(), PathBuf::from("."));
+    }
+
+    #[test]
+    fn test_flag_with_nonexistent_dir_path_leaves_test_dir_none() {
+        // When --test is given with a path that doesn't exist, is_dir() returns
+        // false, so test_dir should be None (treat as file path, let load fail later)
+        let c = cli_of(&["--test", "some_nonexistent_dir"]);
+        assert!(c.test);
+        assert!(c.test_dir.is_none()); // doesn't exist → not a directory
+    }
+
+    #[test]
+    fn test_flag_with_file_leaves_test_dir_none() {
+        // When --test is given with a file path, test_dir is None
+        let c = cli_of(&["--test", "proj/main.yml"]);
+        assert!(c.test);
+        assert!(c.test_dir.is_none()); // file path, not directory
+    }
+
+    #[test]
+    fn test_flag_with_dot_leaves_test_dir_some() {
+        // `ymx --test .` → path is ".", which is a directory
+        let c = cli_of(&["--test", "."]);
+        assert!(c.test);
+        assert_eq!(c.path, PathBuf::from("."));
+        assert!(c.test_dir.is_some());
+        assert_eq!(c.test_dir.unwrap(), PathBuf::from("."));
+    }
+
+    #[test]
+    fn test_flag_with_extra_positional_still_errors() {
+        // --test with 2 positionals should still error with "expected exactly one"
+        let err = err_of(&["--test", "proj/main.yml", "extra.yml"]);
+        assert!(err.message.contains("expected exactly one"));
+    }
+
+    #[test]
+    fn non_test_missing_path_still_errors() {
+        // Without --test, missing path is still an error
+        let err = err_of(&[]);
+        assert!(err.message.contains("missing"));
     }
 }

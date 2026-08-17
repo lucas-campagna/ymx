@@ -272,6 +272,7 @@ mod tests {
             plain: None,
             output: None,
             test: false,
+            test_dir: None,
         }
     }
 
@@ -294,6 +295,7 @@ mod tests {
             plain: None,
             output: None,
             test: false,
+            test_dir: None,
         }
     }
 
