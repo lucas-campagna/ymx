@@ -1,0 +1,13 @@
+main:
+  from: comp
+  x: 3
+comp:
+  x?: 1
+  y?: 2
+_test:
+  comp:
+    args: {x: 3, y: 2}
+    result: {x: 3, y: 2}
+  main:
+    args: {}
+    result: {x: 3, y: 2}
