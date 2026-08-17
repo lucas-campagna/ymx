@@ -1,0 +1,7 @@
+main: placeholder
+arr: [1, 2, 3]
+obj: {a: 1}
+bad: $merge(arr, obj)
+_test:
+  bad:
+    error: E011

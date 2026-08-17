@@ -1,0 +1,14 @@
+main: placeholder
+five: 5
+mid: "$a"
+top: "$z"
+mini_top:
+  mini:
+    from: top
+    z:
+      from: mid
+      a:
+        from: five
+_test:
+  mini_top:
+    result: {mini: 5}

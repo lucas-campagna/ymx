@@ -1,0 +1,9 @@
+main: placeholder
+adder: $a + $b
+items:
+  - {a: 1, b: 2}
+  - {a: 2, b: 3}
+c: $reduce($adder, $items)
+_test:
+  c:
+    result: "2 + 3"

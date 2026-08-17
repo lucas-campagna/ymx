@@ -1,0 +1,10 @@
+main: placeholder
+$box:
+  from: div
+  children: "Hello, $name!"
+box:
+  name: "Sir. $name"
+_test:
+  box:
+    args: {name: Rocky}
+    result: {from: div, children: "Hello, Sir. Rocky!"}

@@ -1,0 +1,4 @@
+main: $x + $y
+_test:
+  args: {x: 1, y: 2, z: 3}
+  result: "1 + 2"

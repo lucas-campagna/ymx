@@ -1,0 +1,8 @@
+main: placeholder
+user:
+  name: $user_name
+  phone: $user_phone
+_test:
+  user:
+    args: {user_name: Mathew, user_phone: 123456789}
+    result: {name: Mathew, phone: 123456789}

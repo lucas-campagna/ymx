@@ -1,0 +1,6 @@
+main: placeholder
+greeter:
+  out: "hi $name"
+_test:
+  greeter:
+    error: E003

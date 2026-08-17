@@ -1,0 +1,16 @@
+main: $greeting
+
+# A simple greeting component
+greeting:
+  salutation: "Hello"
+  name: "World"
+
+# Template wraps output in a div
+$greeting:
+  from: div
+  content: "$salutation, $name!"
+
+_test:
+  - greeting:
+      args: {who: "World"}
+      result: {from: div, content: "Hello, World!"}

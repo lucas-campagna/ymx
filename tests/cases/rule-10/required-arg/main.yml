@@ -1,0 +1,6 @@
+main: placeholder
+missing:
+  out: $name
+_test:
+  missing:
+    error: E003

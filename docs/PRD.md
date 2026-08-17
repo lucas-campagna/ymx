@@ -69,7 +69,7 @@ ymx/
 
 | Code  | Diagnostic |
 |-------|------------|
-| `E001` | YAML parse error or unsupported YAML feature (multi-document stream, complex mapping key, merge key `<<`) |
+| `E001` | YAML parse error or unsupported YAML feature (multi-document stream, complex mapping key, merge key `<<`); also the load-stage catch-all for I/O failures (missing root, unreadable file) and non-string top-level keys. |
 | `E002` | Unknown component reference |
 | `E003` | Missing required argument |
 | `E004` | Duplicate component name in the same namespace |
@@ -82,7 +82,7 @@ ymx/
 | `E011` | Math error (type mismatch, division by zero, non-numeric operand) or builtin argument type error (non-array 2nd arg to `$map`/`$reduce`; mixed-shape `$merge`) |
 | `E012` | Positional argument after a named argument in a call |
 | `E013` | Array/object literal as a direct call argument (unsupported in v1) |
-| `E015` | Meta-key reserved name used as a component or template (leading-`$` variant of `_ymx`/`_test`, e.g. `$_ymx`, `$$test`, `$$_ymx`) |
+| `E015` | Meta-key reserved name used as a component or template (leading-`$` variant of `_ymx`/`_test`, e.g. `$_ymx`, `$_test`, `$$_ymx`) |
 
 ## Multi-file projects
 
@@ -98,7 +98,7 @@ A project is a directory. Namespaces are directory-scoped:
 
 ## Project metadata
 
-A document may carry two reserved **meta keys** at its top level — `_ymx` (front matter) and `_test` (tests). They are not components (see *Reserved names*); `ymx-core` strips them from the namespace and stores their raw parsed values on the `Project`, and the `ymx-config` / `ymx-test` crates interpret them.
+A document may carry two reserved **meta keys** at its top level — `_ymx` (front matter) and `_test` (tests). They are not components (see *Reserved names*); `ymx-core` strips them from the namespace and stores their raw parsed values on the `Project`, and the `ymx-config` / `ymx-test` crates interpret them. A document with two top-level `_ymx` (or `_test`) keys keeps the first and ignores the rest; meta keys are consumed, not registered, so E004 (duplicate name) does not apply.
 
 ### `_ymx` — front matter
 
@@ -385,7 +385,7 @@ Referencing a file-scoped component from outside its document is a hard error (`
 **Reserved names.** Two kinds of effective identifiers are reserved and not user-definable as components/templates:
 
 1. **Builtin names** — `map`, `reduce`, `merge` — used by `$map`, `$reduce`, `$merge` (rules 15–16). Defining any component or template whose effective identifier is one of these is a hard error (`E007`), regardless of the leading `$` count. The builtins are always invoked via their `$`-prefixed forms.
-2. **Meta keys** — `_ymx` (front matter) and `_test` (tests) — described in *Project metadata*. When present at the top level of a document they are intercepted by the engine as metadata and are **never** registered as components or templates. They are not file-scoped components despite their leading `_`; the `_`-prefix visibility rule simply does not apply to them. The bare top-level keys `_ymx` and `_test` are **consumed** (no error); a user component/template cannot be named `_ymx` or `_test` — any such top-level key is treated as the meta block of that name. A component or template whose **effective identifier** equals `_ymx` or `_test` but which carries one or more leading `$` (e.g. `$_ymx`, `$$test`, `$$_ymx`) is **rejected as a reserved name** (`E015`): only the bare meta keys are consumed, and the leading-`$` variants are not legal user-defined components/templates. Meta extraction is performed by `ymx-config` (`_ymx`) and `ymx-test` (`_test`); `ymx-core` only recognizes the two names, excludes them from the namespace, and stores their raw parsed values on the `Project`.
+2. **Meta keys** — `_ymx` (front matter) and `_test` (tests) — described in *Project metadata*. When present at the top level of a document they are intercepted by the engine as metadata and are **never** registered as components or templates. They are not file-scoped components despite their leading `_`; the `_`-prefix visibility rule simply does not apply to them. The bare top-level keys `_ymx` and `_test` are **consumed** (no error); a user component/template cannot be named `_ymx` or `_test` — any such top-level key is treated as the meta block of that name. A component or template whose **effective identifier** equals `_ymx` or `_test` but which carries one or more leading `$` (e.g. `$_ymx`, `$_test`, `$$_ymx`) is **rejected as a reserved name** (`E015`): only the bare meta keys are consumed, and the leading-`$` variants are not legal user-defined components/templates. Meta extraction is performed by `ymx-config` (`_ymx`) and `ymx-test` (`_test`); `ymx-core` only recognizes the two names, excludes them from the namespace, and stores their raw parsed values on the `Project`.
 
 > A namespace dot (`.`) appears only at the *lookup* layer for `from` targets and math `name(...)` calls (e.g. `from: subdir.comp`); it is not part of an effective identifier and cannot appear inside `$name` interpolation. Cross-namespace component references are reached via `from` (rule 6) or via the math `subdir.comp(...)` form (rule 7), never via bare `$subdir.comp` (which would interpolate `$subdir` then the literal text `.comp`).
 
@@ -602,7 +602,7 @@ Here `a` calls `b` which sums `12` with `34` yielding `46`, then calls `c` with 
 
 > String literals in math (v1): `${...}` does **not** accept quoted string literals in v1; string operands come only from in-scope argument references (which may themselves be Strings, subject to *Math operand resolution* below). A future version may add string literals inside math.
 
-> Math operand resolution (String re-scan). When an operand of a math operator — a bare identifier, `last`, or a `$N` positional — resolves to a **String**, that String is re-scanned as a math expression and evaluated **in the current scope** (the same scope as the enclosing `${...}`, including `last` and all in-scope arguments): `"1 + 2"` → `3`, `"123"` → `123`, `"x + 1"` (with `x` in scope) → `x + 1`. If the String does **not** parse as a math expression (e.g. free text like `"hello"`), the identifier is left as a plain String operand of the surrounding operator (numeric operators then raise `E011`; `+` concatenates). Non-String operands are used directly. This re-scan is what makes `last` work (rule 16's `${last}` with `$last = "1 + 2"` yields `3`); it applies uniformly to *every* String-valued operand in math, not only to `last`.
+> Math operand resolution (String re-scan). When an operand of a math operator — a bare identifier, `last`, or a `$N` positional — resolves to a **String**, that String is re-scanned as a math expression and evaluated **in the current scope** (the same scope as the enclosing `${...}`, including `last` and all in-scope arguments): `"1 + 2"` → `3`, `"123"` → `123`, `"x + 1"` (with `x` in scope) → `x + 1`. If the String does **not** parse as a math expression (e.g. free text like `"hello world"`), the identifier is left as a plain String operand of the surrounding operator (numeric operators then raise `E011`; `+` concatenates). Non-String operands are used directly. This re-scan is what makes `last` work (rule 16's `${last}` with `$last = "1 + 2"` yields `3`); it applies uniformly to *every* String-valued operand in math, not only to `last`.
 >
 > Gotcha: because re-scan evaluates in the current scope, a String argument whose content is a bare-identifier-looking token resolves to that identifier. E.g. `${ x }` with `x = "y"` re-scans as `y`, which looks up the argument `y` (→ `E003` if absent). Keep String arguments used in math either numeric or full math expressions; avoid re-using argument names as string contents.
 

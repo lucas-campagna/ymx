@@ -1,0 +1,4 @@
+main: ${$x}
+_test:
+  main:
+    error: E010

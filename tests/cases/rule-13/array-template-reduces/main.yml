@@ -1,0 +1,12 @@
+main: placeholder
+a:
+  x: 1
+  y: 2
+$a:
+  - x: ${x + 1}
+    y: ${y + 2}
+  - ${x + y}
+  - $x + $y < $last
+_test:
+  a:
+    result: "1 + 2 < 6"

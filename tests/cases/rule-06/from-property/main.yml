@@ -1,0 +1,9 @@
+main: placeholder
+CompA:
+  from: CompB
+  x: 12
+  y: 34
+CompB: $x + $y
+_test:
+  CompA:
+    result: "12 + 34"

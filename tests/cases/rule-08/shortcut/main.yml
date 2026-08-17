@@ -1,0 +1,9 @@
+main: placeholder
+a:
+  b: 1
+  y: 3
+  z: 5
+b: [$default, $y, $z]
+_test:
+  a:
+    result: [1, 3, 5]

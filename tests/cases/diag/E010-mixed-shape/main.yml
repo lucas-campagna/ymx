@@ -1,0 +1,3 @@
+main: placeholder
+box: $0
+comp: "$$box(1)"

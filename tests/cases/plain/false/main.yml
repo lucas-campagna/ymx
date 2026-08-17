@@ -1,0 +1,6 @@
+_ymx:
+  plain: "false"
+main: $helper()
+_test:
+  main:
+    error: E002

@@ -1,0 +1,4 @@
+main: $nope(1)
+_test:
+  main:
+    error: E002

@@ -1,0 +1,7 @@
+main: placeholder
+a: [1, 2, 3]
+$a:
+  - $0
+_test:
+  a:
+    error: E010

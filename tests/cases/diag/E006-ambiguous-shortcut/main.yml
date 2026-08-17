@@ -1,0 +1,9 @@
+main: placeholder
+x: 10
+y: 20
+compA:
+  x: 1
+  y: 2
+_test:
+  compA:
+    error: E006

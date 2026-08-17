@@ -1,0 +1,6 @@
+main: placeholder
+comp:
+  x?: 1
+_test:
+  comp:
+    error: E010

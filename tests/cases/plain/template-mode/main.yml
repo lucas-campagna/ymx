@@ -1,0 +1,8 @@
+_ymx:
+  plain: template
+main: placeholder
+helper:
+  x: 10
+_test:
+  helper:
+    result: "template-promoted: 10"

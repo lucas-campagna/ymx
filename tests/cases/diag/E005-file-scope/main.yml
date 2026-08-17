@@ -1,0 +1,2 @@
+main: placeholder
+comp: "$_secret()"

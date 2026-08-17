@@ -1,0 +1,11 @@
+main: placeholder
+a:
+  x: 1
+  y: 2
+$a:
+  x: ${x + 10}
+$$a:
+  out: "$x-$y"
+_test:
+  a:
+    result: {out: "11-2"}

@@ -1,0 +1,7 @@
+main: placeholder
+a: placeholder
+b: ${$0 + $1}
+_test:
+  b:
+    args: [12, 34]
+    result: 46

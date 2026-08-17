@@ -1,0 +1,14 @@
+main: placeholder
+$a:
+  prop1: ${x + 1}
+  prop2: ${y * x}
+a:
+  - x: 1
+    y: 2
+  - x: 3
+    y: 4
+_test:
+  a:
+    result:
+      - {prop1: 2, prop2: 2}
+      - {prop1: 4, prop2: 12}

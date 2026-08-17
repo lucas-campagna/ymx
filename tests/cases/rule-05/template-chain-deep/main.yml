@@ -1,0 +1,8 @@
+main: placeholder
+$$$a: "final: $0"
+$$a: ${$0 + 1}
+$a: ${$0 * 2}
+a: 10
+_test:
+  a:
+    result: "final: 21"

@@ -1,0 +1,8 @@
+_ymx:
+  plain: "true"
+main: placeholder
+helper:
+  x: 10
+_test:
+  helper:
+    result: "promoted: 10"

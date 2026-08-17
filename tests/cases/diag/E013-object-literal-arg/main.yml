@@ -1,0 +1,6 @@
+main: placeholder
+comp: "$target({a: 1})"
+target: $0
+_test:
+  comp:
+    error: E013
