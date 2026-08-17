@@ -1,0 +1,6 @@
+_ymx:
+  plain: template
+helper: 10
+_test:
+  helper:
+    result: 10
