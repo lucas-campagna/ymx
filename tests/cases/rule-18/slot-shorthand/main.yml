@@ -1,0 +1,8 @@
+# 0$: $0 * 2 — math source for slot $0, doubled
+comp:
+  0$: $0 * 2
+  out: $0
+_test:
+  comp:
+    args: [3]
+    result: {0: 6, out: 6}

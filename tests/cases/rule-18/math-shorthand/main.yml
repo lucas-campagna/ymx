@@ -1,0 +1,12 @@
+# x$: x + 1 is equivalent to x: ${x + 1}
+comp:
+  x$: x + 1
+comp_no_arg:
+  x$: x + 1
+_test:
+  comp:
+    args: {x: 3}
+    result: {x: 4}
+  comp_no_arg:
+    args: {}
+    error: E003

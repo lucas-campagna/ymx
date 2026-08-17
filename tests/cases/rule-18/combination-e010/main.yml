@@ -1,0 +1,7 @@
+# Combination x?$ (optional with math default) is v2-only — E010 in v1
+comp:
+  x?$: x + 1
+_test:
+  comp:
+    args: {}
+    error: E010

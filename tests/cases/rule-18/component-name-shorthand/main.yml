@@ -1,0 +1,8 @@
+# a$: x + y is equivalent to a: ${x + y}
+# The component's output is the math result (scalar, feeds to template as $0)
+comp:
+  a$: x + y
+_test:
+  comp:
+    args: {x: 3, y: 5}
+    result: 8
