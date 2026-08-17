@@ -295,10 +295,65 @@ fn unknown_flag_is_usage_error() {
 
 #[test]
 fn help_flag_exits_zero() {
-    let out = ymx(&["--help"]);
-    assert!(out.0.status.success(), "exit 0 on --help");
-    // Task 6 will populate the real manual page text; until then we only
-    // assert that --help is a successful no-op (success exit, empty stdout).
+    // Task 6: `--help` / `-h` print the manual page to stdout and exit 0.
+    // Assert the exit code is exactly 0 (not just `.success()`) and that the
+    // manual page lists every long flag.
+    const EXPECTED_FLAGS: &[&str] = &[
+        "--entry",
+        "--from-keyword",
+        "--default-keyword",
+        "--max-depth",
+        "--pretty",
+        "--format",
+        "--output",
+        "--plain",
+        "--plain-template",
+        "--test",
+        "--help",
+        "-h",
+    ];
+
+    for arg in ["--help", "-h"] {
+        let out = ymx(&[arg]);
+        assert_eq!(out.0.status.code(), Some(0), "exit 0 on {arg}");
+        let stdout = stdout(&out.0);
+        assert!(!stdout.is_empty(), "{arg} must print the manual page");
+        assert!(
+            stdout.contains("USAGE") && stdout.contains("FLAGS") && stdout.contains("EXIT CODES"),
+            "{arg}: manual page must have USAGE / FLAGS / EXIT CODES sections"
+        );
+        for flag in EXPECTED_FLAGS {
+            assert!(
+                stdout.contains(flag),
+                "{arg}: manual page missing flag `{flag}`\n--- stdout ---\n{stdout}"
+            );
+        }
+        // The specific contract bits the milestone calls out.
+        assert!(
+            stdout.contains("mutually exclusive"),
+            "{arg}: manual must call out --plain/--plain-template mutual exclusion"
+        );
+        assert!(
+            stdout.to_lowercase().contains("only on success"),
+            "{arg}: manual must state the --output success-only rule:\n{stdout}"
+        );
+        // Usage errors and the default for each flag are documented.
+        for default in [
+            "main.main",
+            "default: from",
+            "default: default",
+            "default: 256",
+            "default: json",
+            "default: stdout",
+        ] {
+            assert!(
+                stdout.contains(default),
+                "{arg}: manual missing default `{default}`"
+            );
+        }
+        // No diagnostics on --help — stderr is empty.
+        assert_eq!(stderr(&out.0), "", "{arg}: stderr must be empty");
+    }
 }
 
 // ---------------------------------------------------------------------------
