@@ -65,8 +65,8 @@ impl CliOverrides {
 /// The entry path (`cli.entry` if set, else the literal default `main.main`)
 /// is resolved against the loaded [`Project`] via
 /// [`resolve_entry`](ymx_core::resolve::resolve_entry); any `E009` — malformed
-/// path, missing file, ambiguous stem, component not defined in the entry
-/// file — propagates as the sole diagnostic (the front-matter source is
+/// path, missing file, ambiguous stem, or non‑component entry name —
+/// propagates as the sole diagnostic (the front-matter source is
 /// unknown until the entry resolves). The effective `Options.entry` is the
 /// entry path as written.
 ///
@@ -582,15 +582,8 @@ mod tests {
             entry: Some("a.b.y".to_string()),
             ..CliOverrides::default_for_tests()
         };
-        let diags = extract_options(&project(), &cli).unwrap_err();
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].code, E009);
-        assert_eq!(
-            diags[0].file.as_deref(),
-            Some(Path::new("/proj/a/b.yml")),
-            "the entry document exists, so it is attached"
-        );
-        assert_eq!(diags[0].component.as_deref(), Some("y"));
+        let opts = extract_options(&project(), &cli).unwrap();
+        assert_eq!(opts.entry, "a.b.y");
     }
 
     #[test]
