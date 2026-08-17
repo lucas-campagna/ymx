@@ -22,12 +22,13 @@
 //! [`LookupMiss::NotFound`] to `E002` and [`LookupMiss::FileScopeViolation`]
 //! to `E005`.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use indexmap::IndexMap;
 
+use crate::builtin::{Builtin, BuiltinCtx, BuiltinImpl, MapBuiltin, MergeBuiltin, ReduceBuiltin};
 use crate::callsite;
 use crate::diag::{Diagnostic, FileId, Span, E002, E005, E006, E008, E009, E010};
 use crate::interp;
@@ -1145,6 +1146,9 @@ impl<'a> Resolver<'a> {
     /// caller's scope (nested call-sites recurse), then call the target
     /// component. `$name(...)` unconditionally calls the component and
     /// bypasses the argument lookup (rule 2).
+    ///
+    /// Builtins (`$merge`, `$map`, `$reduce`) are special forms that declare
+    /// their own argument-evaluation strategy and are dispatched here directly.
     fn resolve_call(
         &self,
         call: &callsite::ParsedCall,
@@ -1152,6 +1156,83 @@ impl<'a> Resolver<'a> {
         scope: &Scope<'_>,
         file: FileId,
     ) -> Result<Value, Diagnostic> {
+        // Check if this is a builtin special form.
+        if let Some(builtin) = Builtin::from_name(&call.name) {
+            // Builtins do NOT evaluate args eagerly — each builtin decides
+            // which args to evaluate. Build the builtin context with hooks
+            // into this resolver for nested calls and fallback lookups.
+            let resolver_cell = Rc::new(RefCell::new(self));
+            let resolver_cell2 = resolver_cell.clone();
+
+            let file_path = self.project.files[file.0 as usize].clone();
+            let project = self.project;
+            let opts = self.opts;
+            let plain = self.opts.plain.clone();
+            let plain2 = plain.clone();
+            let call_span = span;
+            let call_name = call.name.clone();
+
+            let call_file_path = self.project.files[file.0 as usize].clone();
+            let call_hook: CallHook<'_> = Rc::new(move |name: &str, args: &[Value]| {
+                let resolver = resolver_cell.borrow();
+                match resolve_ref(resolver.project, name, file, plain.clone()) {
+                    Ok(def) => resolver.call(def, &Args::Positional(args.to_vec()), None),
+                    Err(LookupMiss::NotFound) => Err(Diagnostic {
+                        file: Some(call_file_path.clone()),
+                        line: span.line,
+                        col: span.col,
+                        component: Some(call_name.clone()),
+                        code: E002,
+                        message: format!("unknown component reference `{name}`"),
+                    }),
+                    Err(LookupMiss::FileScopeViolation { owner }) => Err(Diagnostic {
+                        file: Some(call_file_path.clone()),
+                        line: span.line,
+                        col: span.col,
+                        component: Some(call_name.clone()),
+                        code: E005,
+                        message: format!(
+                            "file-scope violation: `{name}` is defined only in `{}`",
+                            resolver
+                                .project
+                                .files
+                                .get(owner.0 as usize)
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_default()
+                        ),
+                    }),
+                }
+            });
+
+            let fallback_hook: FallbackHook<'_> = Rc::new(move |name: &str| {
+                let resolver = resolver_cell2.borrow();
+                // Mirrors Resolver::lookup_component: NotFound and FileScopeViolation
+                // both return Ok(None) so the caller reports the plain E003.
+                match resolve_ref(resolver.project, name, file, plain2.clone()) {
+                    Ok(def) => Ok(Some(resolver.call(def, &Args::None, None)?)),
+                    Err(LookupMiss::NotFound | LookupMiss::FileScopeViolation { .. }) => Ok(None),
+                }
+            });
+
+            let ctx = BuiltinCtx {
+                file: Some(file_path),
+                component: Some(call.name.clone()),
+                span: call_span,
+                project,
+                opts,
+                depth: self.depth.get(),
+                call: call_hook,
+                fallback: fallback_hook,
+            };
+
+            return match builtin {
+                Builtin::Merge => MergeBuiltin.eval(&ctx, &call.args),
+                Builtin::Map => MapBuiltin.eval(&ctx, &call.args),
+                Builtin::Reduce => ReduceBuiltin.eval(&ctx, &call.args),
+            };
+        }
+
+        // Not a builtin — evaluate all args eagerly and dispatch normally.
         let (named, positional) = self.resolve_call_args(&call.args, span, scope, file)?;
         let args = match (named.is_empty(), positional.is_empty()) {
             (true, true) => Args::None,
@@ -1250,19 +1331,19 @@ const MAX_SLOTS: usize = 65_535;
 /// A resolved object component body (rule 11 step 1): the named properties,
 /// the positional slots, and the source order for output.
 #[derive(Default)]
-struct PropertySet {
+pub struct PropertySet {
     /// Named properties (string keys and stringified non-slot keys).
-    named: IndexMap<String, Value>,
+    pub named: IndexMap<String, Value>,
     /// Slot values (`$N` defaults, overwritten by the call's positional
     /// arguments).
-    slots: Vec<Value>,
+    pub slots: Vec<Value>,
     /// Source order of the body's keys, for output and later chain views.
-    order: Vec<PropKey>,
+    pub order: Vec<PropKey>,
 }
 
 /// One key of a resolved property set, in source order.
 #[derive(Debug, Clone, PartialEq)]
-enum PropKey {
+pub enum PropKey {
     /// A named property key.
     Named(String),
     /// A positional slot (integer key `0`, `1`, …).
@@ -1281,7 +1362,7 @@ type CallArgs = (Vec<(String, Value)>, Vec<Value>);
 impl PropertySet {
     /// The output object: keys in source order, slots stringified as their
     /// decimal index, duplicates dropped (first occurrence wins).
-    fn to_object(&self) -> Value {
+    pub fn to_object(&self) -> Value {
         let mut m = IndexMap::with_capacity(self.order.len());
         for key in &self.order {
             let (name, value) = match key {
@@ -1296,7 +1377,7 @@ impl PropertySet {
 
 /// The call's positional arguments padded with the slot defaults for every
 /// index the call did not provide (rule 4: slots are defaults).
-fn padded_positional(call: &[Value], slots: &[Value]) -> Vec<Value> {
+pub fn padded_positional(call: &[Value], slots: &[Value]) -> Vec<Value> {
     let mut v = call.to_vec();
     if v.len() < slots.len() {
         v.extend_from_slice(&slots[v.len()..]);
@@ -1319,7 +1400,7 @@ fn ctx_err(scope: &Scope<'_>, code: &'static str, message: String) -> Diagnostic
 
 /// Build [`Args`] from (named, positional) parts, choosing the minimal
 /// variant.
-fn args_from(named: Vec<(String, Value)>, positional: Vec<Value>) -> Args {
+pub fn args_from(named: Vec<(String, Value)>, positional: Vec<Value>) -> Args {
     match (named.is_empty(), positional.is_empty()) {
         (true, true) => Args::None,
         (false, true) => Args::Named(named),
@@ -1361,7 +1442,7 @@ fn overwrite_named_args(initial: &Args, result: &IndexMap<String, Value>) -> Arg
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diag::{Span, E003, E012, E013};
+    use crate::diag::{Span, E003, E011, E012, E013};
     use crate::namespace::Definition;
     use crate::parse::Node;
 
@@ -3304,5 +3385,166 @@ mod tests {
         let d = compile_err_with(&p, "a", &Args::None, &opts);
         assert_eq!(d.code, E008, "the boundary op is a math component call");
         assert_eq!(d.component.as_deref(), Some("c"));
+    }
+
+    // ---- Milestone 1.8: rules 15-16 builtins ($merge, $map, $reduce) ----
+
+    #[test]
+    fn rule15_merge_array_concat() {
+        // Arrays passed via component references (inline arrays not allowed as direct call args)
+        let p = project_with(&[(
+            "main.yml",
+            "\
+a1: [1, 2]\na2: [3]\na: $merge($a1, $a2)\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::array(vec![Value::int(1), Value::int(2), Value::int(3)]),
+            "$merge Array⊕Array → concatenation"
+        );
+    }
+
+    #[test]
+    fn rule15_merge_object_shallow_merge() {
+        // Test with $merge call - more fields
+        let p = project_with(&[(
+            "main.yml",
+            "\
+obj1:\n  a: 1\n  b: 2\nobj2:\n  a: 3\n  c: 4\nx: $merge($obj1, $obj2)\n",
+        )]);
+        let result = compile_ok(&p, "x", &Args::None);
+        println!("x: {:?}", result);
+        let Value::Object(m) = result else {
+            panic!("not object")
+        };
+        assert_eq!(m.get("a"), Some(&Value::int(3))); // later overwrites earlier
+        assert_eq!(m.get("b"), Some(&Value::int(2)));
+        assert_eq!(m.get("c"), Some(&Value::int(4)));
+    }
+
+    #[test]
+    fn rule15_merge_e011_mixed_shape() {
+        // Array + Object mix is E011
+        let p = project_with(&[(
+            "main.yml",
+            "\
+arr: [1]\nobj:\n  a: 1\nx: $merge($arr, $obj)\n",
+        )]);
+        let err = compile_err(&p, "x", &Args::None);
+        assert_eq!(err.code, E011, "$merge Array⊕Object → E011");
+    }
+
+    #[test]
+    fn rule16_map_over_array_scalar_items() {
+        // PRD example: each item bound to $0; template uses $0
+        let p = project_with(&[(
+            "main.yml",
+            "\
+nums: [1, 2, 3]\nadd_one: \"${$0 + 1}\"\na: $map($add_one, $nums)\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::array(vec![Value::int(2), Value::int(3), Value::int(4)]),
+            "$map with scalar items → $0 binding"
+        );
+    }
+
+    #[test]
+    fn rule16_map_over_object_items() {
+        let p = project_with(&[(
+            "main.yml",
+            "\
+items: [{x: 1}, {x: 3}]\ndoubler: \"${x * 2}\"\na: $map($doubler, $items)\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::array(vec![Value::int(2), Value::int(6)]),
+            "$map with object items → named args"
+        );
+    }
+
+    #[test]
+    fn rule16_map_empty_array() {
+        let p = project_with(&[(
+            "main.yml",
+            "\
+empty: []\nadd_one: \"${$0 + 1}\"\na: $map($add_one, $empty)\n",
+        )]);
+        assert_eq!(compile_ok(&p, "a", &Args::None), Value::Array(Vec::new()));
+    }
+
+    #[test]
+    fn rule16_map_e011_non_array_second_arg() {
+        let p = project_with(&[(
+            "main.yml",
+            "\
+add_one: \"${$0 + 1}\"\na: $map($add_one, 5)\n",
+        )]);
+        let err = compile_err(&p, "a", &Args::None);
+        assert_eq!(err.code, E011, "$map non-array 2nd arg → E011");
+    }
+
+    #[test]
+    fn rule16_map_e011_array_item() {
+        // Array item in $map is E011
+        let p = project_with(&[(
+            "main.yml",
+            "\
+items: [[1, 2]]\nt: \"$0\"\na: $map($t, $items)\n",
+        )]);
+        let err = compile_err(&p, "a", &Args::None);
+        assert_eq!(err.code, E011, "$map array item → E011");
+    }
+
+    #[test]
+    fn rule16_reduce_prd_example() {
+        // $reduce: step 1 runs without last, subsequent steps have last
+        // For 2-element array, step 1 runs with item 1, step 2 runs with item 2 and last=result1
+        // Template doesn't use last so both steps succeed
+        let p = project_with(&[(
+            "main.yml",
+            "\
+nums: [1, 2]\ninc: \"${$0 + 1}\"\nresult: $reduce($inc, $nums)\n",
+        )]);
+        // Step 1: 1+1=2, Step 2: 2+1=3 (last=2)
+        assert_eq!(compile_ok(&p, "result", &Args::None), Value::int(3));
+    }
+
+    #[test]
+    fn rule16_reduce_empty_array_is_null() {
+        let p = project_with(&[(
+            "main.yml",
+            "\
+empty: []\nadd: \"$0\"\na: $reduce($add, $empty)\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "a", &Args::None),
+            Value::Null,
+            "$reduce([]) → Null"
+        );
+    }
+
+    #[test]
+    fn rule16_reduce_single_element_last_not_in_scope() {
+        // One-element array: runs one step, `last` NOT in scope
+        let p = project_with(&[(
+            "main.yml",
+            "\
+nums: [5]\nt: \"${last}\"\na: $reduce($t, $nums)\n",
+        )]);
+        let err = compile_err(&p, "a", &Args::None);
+        assert_eq!(err.code, E003, "$reduce one elem referencing last → E003");
+    }
+
+    #[test]
+    fn rule16_reduce_multiple_elements_without_last_ref() {
+        // Multiple elements work fine without referencing last
+        let p = project_with(&[(
+            "main.yml",
+            "\
+nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, $nums)\n",
+        )]);
+        // Step 1: 1*2=2, Step 2: 2*2=4, Step 3: 3*2=6 (returns last step)
+        assert_eq!(compile_ok(&p, "result", &Args::None), Value::int(6));
     }
 }
