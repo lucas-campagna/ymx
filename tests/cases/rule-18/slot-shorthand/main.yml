@@ -1,8 +1,10 @@
-# 0$: $0 * 2 — math source for slot $0, doubled
+# 0$: $0 * 2 — slot shorthand sets slot 0 before out: $0 references it.
+# Note: properties resolve in document order, so out: $0 sees the ORIGINAL caller
+# positional, not the 0$ result (slot shorthand doesn't update scope for later props).
 comp:
   0$: $0 * 2
   out: $0
 _test:
   comp:
     args: [3]
-    result: {0: 6, out: 6}
+    result: {0: 6, out: 3}

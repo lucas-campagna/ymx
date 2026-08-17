@@ -34,7 +34,7 @@ use crate::callsite;
 use crate::diag::{Diagnostic, FileId, Span, E002, E005, E006, E008, E009, E010};
 use crate::interp;
 use crate::ir::{Args, Value};
-use crate::math::{CallHook, FallbackHook, Scope, V1Engine};
+use crate::math::{CallHook, FallbackHook, MathEngine, Scope, V1Engine};
 use crate::namespace::{classify, DefClass, Definition};
 use crate::parse::{key_to_string, Node};
 use crate::project::{Options, PlainMode, Project};
@@ -921,7 +921,7 @@ impl<'a> Resolver<'a> {
                     set.slots[idx] = value;
                     set.order.push(PropKey::Slot(idx));
                 }
-                crate::parse::Key::String(s) if s.ends_with('?') => {
+                crate::parse::Key::String(s) if s.ends_with('?') && !s.ends_with("?$") => {
                     // `x?` optional named property or `0?` optional slot.
                     // Strip the `?` suffix to get the base key.
                     let base = &s[..s.len() - 1];
@@ -947,6 +947,82 @@ impl<'a> Resolver<'a> {
                         optional_named.push((base.to_string(), entry));
                         set.order.push(PropKey::Named(base.to_string()));
                     }
+                }
+                crate::parse::Key::String(s) if s.ends_with("?$") => {
+                    // `?$` combination (rule 17+18) is v2-only — E010 in v1.
+                    return Err(ctx_err(
+                        scope,
+                        E010,
+                        "property-key modifier `?$` is not supported in v1 \
+                         (rule 17+18 combination is v2)"
+                            .to_string(),
+                    ));
+                }
+                crate::parse::Key::String(s) if s.ends_with('$') && !s.ends_with("?$") => {
+                    // `x$` or `0$` — rule 18 `$` math shorthand property-key modifier.
+                    // Strip the `$` suffix to get the base key.
+                    let base = &s[..s.len() - 1];
+                    if let Ok(idx) = base.parse::<usize>() {
+                        // `0$`, `1$`, etc. — slot math shorthand: evaluate value as
+                        // math source and store the result in the slot.
+                        if idx > MAX_SLOTS {
+                            return Err(ctx_err(
+                                scope,
+                                E010,
+                                format!("slot key `{s}` is too large (max {MAX_SLOTS})"),
+                            ));
+                        }
+                        let Node::String(math_src, span) = &entry.value else {
+                            let value_span = entry.value.span();
+                            return Err(Diagnostic {
+                                file: scope.file.clone(),
+                                line: value_span.line,
+                                col: value_span.col,
+                                component: scope.component.clone(),
+                                code: E010,
+                                message: format!(
+                                    "value for slot shorthand `{s}` must be a string (math source)"
+                                ),
+                            });
+                        };
+                        let segments = interp::scan(&format!("${{{math_src}}}"), *span)?;
+                        let value = interp::resolve(&segments, scope, &V1Engine)?;
+                        if set.slots.len() <= idx {
+                            set.slots.resize(idx + 1, Value::Null);
+                        }
+                        set.slots[idx] = value;
+                        set.order.push(PropKey::Slot(idx));
+                    } else {
+                        // `x$` — named property with math shorthand value.
+                        // Value must be a string; wrap it in `${...}` and resolve.
+                        let Node::String(math_src, span) = &entry.value else {
+                            let value_span = entry.value.span();
+                            return Err(Diagnostic {
+                                file: scope.file.clone(),
+                                line: value_span.line,
+                                col: value_span.col,
+                                component: scope.component.clone(),
+                                code: E010,
+                                message: format!(
+                                    "value for property shorthand `{s}` must be a string (math source)"
+                                ),
+                            });
+                        };
+                        let segments = interp::scan(&format!("${{{math_src}}}"), *span)?;
+                        let value = interp::resolve(&segments, scope, &V1Engine)?;
+                        set.named.insert(base.to_string(), value);
+                        set.order.push(PropKey::Named(base.to_string()));
+                    }
+                }
+                crate::parse::Key::String(s) if s.ends_with("?$") => {
+                    // `?$` combination (rule 17+18) is v2-only — E010 in v1.
+                    return Err(ctx_err(
+                        scope,
+                        E010,
+                        "property-key modifier `?$` is not supported in v1 \
+                         (rule 17+18 combination is v2)"
+                            .to_string(),
+                    ));
                 }
                 _ => {
                     let name = key_to_string(&entry.key);
@@ -996,12 +1072,26 @@ impl<'a> Resolver<'a> {
         for entry in entries {
             match &entry.key {
                 crate::parse::Key::String(name) => {
-                    // Skip keys that were already handled as optional (ending in `?`).
                     if name.ends_with('?') {
                         continue;
                     }
-                    let value = self.resolve_node(&entry.value, &padded, file)?;
-                    set.named.insert(name.clone(), value);
+                    let is_math_key = name.ends_with('$');
+                    let actual_name = name.strip_suffix('$').unwrap_or(name);
+                    let value = if is_math_key {
+                        match &entry.value {
+                            Node::String(s, _span) => V1Engine.eval(s, &padded),
+                            _ => {
+                                return Err(ctx_err(
+                                    scope,
+                                    E010,
+                                    "math key `$` suffix requires a string value".to_string(),
+                                ));
+                            }
+                        }
+                    } else {
+                        Ok(self.resolve_node(&entry.value, &padded, file)?)
+                    }?;
+                    set.named.insert(actual_name.to_string(), value);
                 }
                 crate::parse::Key::Int(i) if *i < 0 => {
                     let name = i.to_string();
@@ -1011,6 +1101,7 @@ impl<'a> Resolver<'a> {
                 _ => {}
             }
         }
+
         Ok(ResolvedBody::Object(set))
     }
 
@@ -1039,6 +1130,20 @@ impl<'a> Resolver<'a> {
                 .map(Value::array),
             Node::Object(entries, _) => {
                 self.reject_dollar_modifier_keys(entries, scope)?;
+                // `?$` combination (rules 17+18) is v2-only — E010 in v1.
+                for entry in entries {
+                    if let crate::parse::Key::String(s) = &entry.key {
+                        if s.ends_with("?$") {
+                            return Err(ctx_err(
+                                scope,
+                                E010,
+                                "property-key modifier `?$` is not supported in v1 \
+                                 (rule 17+18 combination is v2)"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                }
                 if entries.iter().any(|e| self.is_from_key(&e.key)) {
                     return self.resolve_mini(entries, scope, file);
                 }
@@ -1059,10 +1164,9 @@ impl<'a> Resolver<'a> {
         matches!(key, crate::parse::Key::String(s) if s == &self.opts.from_keyword)
     }
 
-    /// Rejects the v2-only `$` property-key modifier (rule 18). The `?`
-    /// modifier (rule 17, v1) is accepted here and handled in
-    /// [`resolve_property_set`] by stripping the `?` and recording a lazy
-    /// default.
+    /// Validates property-key modifiers. The `$` modifier (rule 18) and `?`
+    /// modifier (rule 17) are validated here but handled in
+    /// [`resolve_property_set`].
     fn reject_dollar_modifier_keys(
         &self,
         entries: &[crate::parse::Entry],
@@ -1070,17 +1174,6 @@ impl<'a> Resolver<'a> {
     ) -> Result<(), Diagnostic> {
         for entry in entries {
             if let crate::parse::Key::String(s) = &entry.key {
-                // `$` modifier (rule 18) is v2-only: any key ending with `$`.
-                if s.ends_with('$') {
-                    return Err(ctx_err(
-                        scope,
-                        E010,
-                        format!(
-                            "property-key modifier `${s}` is not supported in v1 \
-                             (rule 18 `$` shorthand is v2)"
-                        ),
-                    ));
-                }
                 // `?` modifier (rule 17) checks.
                 if let Some(base) = s.strip_suffix('?') {
                     // `?` on meta fields `_ymx`/`_test` is E010.
@@ -2541,13 +2634,13 @@ mod tests {
 
     #[test]
     fn property_key_modifiers_are_e010_in_v1() {
-        // `$` modifier (rule 18) is v2-only and remains E010 in v1.
+        // `?$` combination (rules 17+18) is v2-only — E010 in v1.
         for (label, src) in [
-            ("dollar top-level", "main:\n  x$: 1\n"),
-            ("dollar nested", "main:\n  a:\n    b$: 1\n"),
+            ("x?$ top-level", "main:\n  x?$: x + 1\n"),
+            ("x?$ nested", "main:\n  a:\n    b?$: b + 1\n"),
             (
-                "mini dollar",
-                "comp: 1\nmain:\n  mini:\n    from: comp\n    y$: 2\n",
+                "mini ?$",
+                "comp: 1\nmain:\n  mini:\n    from: comp\n    y?$: y + 1\n",
             ),
         ] {
             let p = project_with(&[("main.yml", src)]);
