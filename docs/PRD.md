@@ -909,29 +909,33 @@ The callable may be namespace-qualified:
 result: $map(utils.trim, $names)
 ```
 
-#### `$reduce(callable, array)`
+#### `$reduce(callable, array, init?)`
 
-**Syntax:** `$reduce(<component>, <array>)`
+**Syntax:** `$reduce(<component>, <array>, <init>?)`
 
-**Semantics:** applies `<component>` iteratively over `<array>`, accumulating a result. The final result is the return value of the last iteration. An empty array yields `Value::Null`. A one-element array runs exactly one step (no `$last` in scope there).
+**Semantics:** applies `<component>` iteratively over `<array>`, accumulating a result. The final result is the return value of the last iteration. An empty array yields `Value::Null`.
 
-**Argument-evaluation strategy:** identical to `$map` — first arg unevaluated (callable), second arg eager.
+**Argument-evaluation strategy:** identical to `$map` — first arg unevaluated (callable), second arg eager. `<init>` (third argument) is **eagerly evaluated** if present.
 
 **Item binding:** identical to `$map` — object item → named args, scalar item → `$0`.
 
-**`$last` semantics:** the result of the previous iteration is available as `$last` in the next. `$last` is **undefined on the first iteration** — referencing it there is `E003`. Inside `${...}` math context, `last` (bare identifier) refers to `$last` and is subject to the *Math operand resolution* re-scan rule: a string previous result is re-evaluated as a math expression; a number is used directly; an object/array in a numeric context is `E011`.
+**`$last` semantics:** the result of the previous iteration is available as `$last` in the next. If `<init>` is supplied, `$last` is bound to `<init>` on the **first** iteration. If `<init>` is absent, `$last` is **undefined on the first iteration** — referencing it there is `E003`. Inside `${...}` math context, `last` (bare identifier) refers to `$last` and is subject to the *Math operand resolution* re-scan rule: a string previous result is re-evaluated as a math expression; a number is used directly; an object/array in a numeric context is `E011`.
+
+**Consequences:**
+- Single-element array + `init`: first step runs with `$last = init`
+- Single-element array + no `init`: first step runs with no `$last` (E003 if callable references `$last`)
+- Multiple items + `init`: step 1 has `$last = init`, step 2 has `$last = result_of_step1`, etc.
+- Multiple items + no `init`: step 1 has no `$last`, step 2+ have `$last = prev_result`
+- Empty array → always `Null` (no step runs)
 
 ```yml
-sum_step: $a + $b
-items:
-  - {a: 10, b: 0}   # first: $last undefined; result "10"
-  - {a: 20, b: 10}  # second: $last = "10"; result "30"
-  - {a: 30, b: 30}  # third: $last = "30"; result "30 + 30"
-result: $reduce($sum_step, $items)
-# result → "30 + 30"
+inc: ${last + $0}
+nums: [1, 2, 3]
+result: $reduce($inc, $nums, 0)
+# result → 6  (step 1: last=0, $0=1 → 1;  step 2: last=1, $0=2 → 3;  step 3: last=3, $0=3 → 6)
 ```
 
-Using math re-scan with string results:
+Using math re-scan with string results (no `init`):
 
 ```yml
 a: $a + $b

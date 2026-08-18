@@ -116,13 +116,28 @@ main: $map($double, $items)
 
 ### $reduce — accumulate with $last
 
+`$reduce(fn, arr, init?)` applies `fn` cumulatively over `arr`. Each step runs `fn` with the current array item's fields as named args, plus `$last` = the result of the previous step (or `init` for the first step). The final result is the return value of the last step.
+
+- `init` (optional third arg): the initial value for `$last` on the first step. If absent, `$last` is unavailable on the first step.
+- Empty array → `null`.
+- Scalar array items bind `$0`.
+
 ```yml
-add: $a + $b
+inc: ${last + $0}
+nums: [1, 2, 3]
+main: $reduce($inc, $nums, 0)
+# → 6  (step 1: last=0, $0=1 → 1;  step 2: last=1, $0=2 → 3;  step 3: last=3, $0=3 → 6)
+```
+
+Without `init`, the first step has no `$last`:
+
+```yml
+sum_pair: $a + $b
 pairs:
-  - {a: 1, b: 2}   # first: no $last, result = 3
-  - {a: 10, b: 0}  # second: $last = 3, result = 13
-main: $reduce($add, $pairs)
-# → 13
+  - {a: 1, b: 2}   # first: no $last → 3
+  - {a: 10, b: 0}  # second: $last=3 → 10
+main: $reduce($sum_pair, $pairs)
+# → 10
 ```
 
 ## 7. $merge — combine values
