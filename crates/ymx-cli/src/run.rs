@@ -301,7 +301,7 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
             let entry_component = overrides
                 .entry
                 .as_ref()
-                .and_then(|e| e.split('.').last())
+                .and_then(|e| e.split('.').next_back())
                 .unwrap_or("main");
             match compile_component(&project, entry_component, &args, &opts) {
                 Ok(v) => return emit(&cli, &opts, &v),
