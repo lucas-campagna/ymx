@@ -217,7 +217,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     // Determine test_dir: set when --test is given and the path is a directory.
     // When stdin_is_script is true the actual project path is a temp file created
     // at run time, so test_dir must be None even if the sentinel path is ".".
-    let test_dir = if test && !stdin_is_script && path.is_dir() {
+    let test_dir = if !stdin_is_script && path.is_dir() {
         Some(path.clone())
     } else {
         None
