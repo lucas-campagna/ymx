@@ -96,7 +96,10 @@ fn resolve_wildcard_file_stem(stem: &str, dir: &Path) -> Result<PathBuf, Diagnos
             code: E009,
             message: format!(
                 "ambiguous file stem `{}`: both `{}.yml` and `{}.yaml` exist in `{}`",
-                stem, stem, stem, dir.display()
+                stem,
+                stem,
+                stem,
+                dir.display()
             ),
         });
     }
@@ -139,7 +142,10 @@ fn resolve_file_stem(stem: &str, dir: &Path) -> Result<PathBuf, Diagnostic> {
             code: E009,
             message: format!(
                 "ambiguous file stem `{}`: both `{}.yml` and `{}.yaml` exist in `{}`",
-                stem, stem, stem, dir.display()
+                stem,
+                stem,
+                stem,
+                dir.display()
             ),
         });
     }
@@ -189,7 +195,9 @@ fn resolve_use_graph(entry_file: &Path) -> Result<Vec<PathBuf>, Vec<Diagnostic>>
         diags: &mut Vec<Diagnostic>,
     ) {
         // Canonicalize path
-        let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
+        let canonical = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.to_path_buf());
 
         // Cycle detection
         if stack.contains(&canonical) {
@@ -604,8 +612,8 @@ pub fn load_project(root: &Path) -> Result<Project, Vec<Diagnostic>> {
     // This determines which components are imported into the global namespace
     #[derive(Debug)]
     enum EntryImport {
-        WildcardAll,                                               // _use: * or no _use — import all from all files
-        WildcardFile,                                              // _use: {"*": "stem"} — import all from specific file
+        WildcardAll,  // _use: * or no _use — import all from all files
+        WildcardFile, // _use: {"*": "stem"} — import all from specific file
         NamedImports(Vec<(String, PathBuf, String)>), // (alias, target_path, component) — specific imports
     }
 
@@ -700,13 +708,7 @@ pub fn load_project(root: &Path) -> Result<Project, Vec<Diagnostic>> {
 
     // Register definitions based on entry's _use directive
     for path in &file_paths {
-        let file_id = FileId(
-            project
-                .files
-                .iter()
-                .position(|p| p == path)
-                .unwrap() as u32,
-        );
+        let file_id = FileId(project.files.iter().position(|p| p == path).unwrap() as u32);
 
         let data = match file_data_map.get(path) {
             Some(d) => d,
@@ -847,13 +849,21 @@ mod tests {
         dir.write("a.yml", "a: 2\n");
         dir.write("subdir/b.yml", "b: 3\n");
 
-        let project = load_project(&dir.path().join("main.yml"))
-            .expect("loads cleanly");
+        let project = load_project(&dir.path().join("main.yml")).expect("loads cleanly");
 
         // All files in the same directory tree should be loaded
-        assert!(project.namespaces.get("", "a").is_some(), "a should be global");
-        assert!(project.namespaces.get("", "main").is_some(), "main should be global");
-        assert!(project.namespaces.get("", "b").is_some(), "b should be global (from subdir)");
+        assert!(
+            project.namespaces.get("", "a").is_some(),
+            "a should be global"
+        );
+        assert!(
+            project.namespaces.get("", "main").is_some(),
+            "main should be global"
+        );
+        assert!(
+            project.namespaces.get("", "b").is_some(),
+            "b should be global (from subdir)"
+        );
     }
 
     #[test]
@@ -862,8 +872,7 @@ mod tests {
         dir.write("main.yml", "_use:\n  \"*\": foo\nfoo: 1\na: 2\n");
         dir.write("foo.yml", "x: 10\ny: 20\n");
 
-        let project = load_project(&dir.path().join("main.yml"))
-            .expect("loads cleanly");
+        let project = load_project(&dir.path().join("main.yml")).expect("loads cleanly");
 
         assert!(project.namespaces.get("", "x").is_some(), "x imported");
         assert!(project.namespaces.get("", "y").is_some(), "y imported");
@@ -876,10 +885,12 @@ mod tests {
         dir.write("main.yml", "_use:\n  sum: foo.bar\nfoo: 1\n");
         dir.write("foo.yml", "bar: 42\n");
 
-        let project = load_project(&dir.path().join("main.yml"))
-            .expect("loads cleanly");
+        let project = load_project(&dir.path().join("main.yml")).expect("loads cleanly");
 
-        assert!(project.namespaces.get("", "sum").is_some(), "sum registered");
+        assert!(
+            project.namespaces.get("", "sum").is_some(),
+            "sum registered"
+        );
         let sum_def = project.namespaces.get("", "sum").unwrap();
         assert_eq!(sum_def.file, file_id_of(&project, "foo.yml"));
     }
@@ -890,9 +901,12 @@ mod tests {
         dir.write("main.yml", "_use:\n  x: foo.bar\nfoo: 1\n");
         dir.write("foo.yml", "baz: 42\n"); // no `bar` component
 
-        let err = load_project(&dir.path().join("main.yml"))
-            .expect_err("missing component is E002");
-        assert!(err.iter().any(|d| d.code == E002), "E002 for missing component");
+        let err =
+            load_project(&dir.path().join("main.yml")).expect_err("missing component is E002");
+        assert!(
+            err.iter().any(|d| d.code == E002),
+            "E002 for missing component"
+        );
     }
 
     #[test]
@@ -901,8 +915,8 @@ mod tests {
         dir.write("main.yml", "_use:\n  x: foo._bar\nfoo: 1\n");
         dir.write("foo.yml", "_bar: 42\n"); // file-scoped
 
-        let err = load_project(&dir.path().join("main.yml"))
-            .expect_err("file-scoped import is E005");
+        let err =
+            load_project(&dir.path().join("main.yml")).expect_err("file-scoped import is E005");
         assert!(err.iter().any(|d| d.code == E005), "E005 for file-scoped");
     }
 
@@ -912,8 +926,7 @@ mod tests {
         dir.write("a.yml", "_use:\n  \"*\": b\nmain: 1\n");
         dir.write("b.yml", "_use:\n  \"*\": a\nx: 2\n");
 
-        let err = load_project(&dir.path().join("a.yml"))
-            .expect_err("cycle is E001");
+        let err = load_project(&dir.path().join("a.yml")).expect_err("cycle is E001");
         assert!(err.iter().any(|d| d.code == E001), "E001 for cycle");
     }
 
@@ -924,10 +937,12 @@ mod tests {
         dir.write("a.yml", "_use:\n  \"*\": b\n");
         dir.write("b.yml", "x: 42\n");
 
-        let project = load_project(&dir.path().join("main.yml"))
-            .expect("loads cleanly");
+        let project = load_project(&dir.path().join("main.yml")).expect("loads cleanly");
 
-        assert!(project.namespaces.get("", "x").is_some(), "x from transitive b");
+        assert!(
+            project.namespaces.get("", "x").is_some(),
+            "x from transitive b"
+        );
     }
 
     #[test]
@@ -937,8 +952,7 @@ mod tests {
         dir.write("foo.yml", "x: 1\n");
         dir.write("foo.yaml", "y: 2\n");
 
-        let err = load_project(&dir.path().join("main.yml"))
-            .expect_err("ambiguous stem is E009");
+        let err = load_project(&dir.path().join("main.yml")).expect_err("ambiguous stem is E009");
         assert!(err.iter().any(|d| d.code == E009), "E009 for ambiguity");
     }
 
@@ -947,8 +961,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "_use:\n  \"*\": nonexistent\nmain: 1\n");
 
-        let err = load_project(&dir.path().join("main.yml"))
-            .expect_err("missing file is E009");
+        let err = load_project(&dir.path().join("main.yml")).expect_err("missing file is E009");
         assert!(err.iter().any(|d| d.code == E009), "E009 for missing file");
     }
 
@@ -959,8 +972,7 @@ mod tests {
         dir.write("main.yml", "main: 1\n");
         dir.write("other.yml", "other: 2\n");
 
-        let project = load_project(&dir.path().join("main.yml"))
-            .expect("loads cleanly");
+        let project = load_project(&dir.path().join("main.yml")).expect("loads cleanly");
 
         assert!(project.namespaces.get("", "main").is_some());
         assert!(project.namespaces.get("", "other").is_some());
@@ -984,8 +996,7 @@ mod tests {
         dir.write("main.yml", "_use:\n  \"*\": subdir.lib\nmain: 1\n");
         dir.write("subdir/lib.yml", "x: 10\n");
 
-        let project = load_project(&dir.path().join("main.yml"))
-            .expect("loads cleanly");
+        let project = load_project(&dir.path().join("main.yml")).expect("loads cleanly");
 
         // x should be in the global namespace, not subdir namespace
         assert!(
@@ -1008,8 +1019,7 @@ mod tests {
         dir.write("subdir/b.yml", "b: 3\n");
         dir.write("subdir/nested/c.yml", "c: 4\n");
 
-        let project = load_project(&dir.path().join("main.yml"))
-            .expect("loads cleanly");
+        let project = load_project(&dir.path().join("main.yml")).expect("loads cleanly");
 
         let expected: Vec<PathBuf> = ["a.yml", "main.yml", "subdir/b.yml", "subdir/nested/c.yml"]
             .iter()
@@ -1054,8 +1064,8 @@ mod tests {
         dir.write("main.yml", "_use:\n  x: a.x\nx: 1\n");
         dir.write("a.yml", "x: 42\n");
 
-        let err = load_project(&dir.path().join("main.yml"))
-            .expect_err("duplicate in global namespace");
+        let err =
+            load_project(&dir.path().join("main.yml")).expect_err("duplicate in global namespace");
         assert_eq!(err.len(), 1);
         let diag = &err[0];
         assert_eq!(diag.code, E004);
@@ -1075,10 +1085,7 @@ mod tests {
             project.file_scoped.get(main_id, "_x").unwrap().full_name,
             "_x"
         );
-        assert_eq!(
-            project.namespaces.get("", "main").unwrap().file,
-            main_id
-        );
+        assert_eq!(project.namespaces.get("", "main").unwrap().file, main_id);
     }
 
     #[test]
@@ -1137,7 +1144,10 @@ mod tests {
         let project = load_project(&dir.path().join("main.yml")).expect("loads cleanly");
 
         assert!(project.namespaces.get("", "main").is_some());
-        assert!(project.namespaces.get("", "data").is_some(), "data from subdir");
+        assert!(
+            project.namespaces.get("", "data").is_some(),
+            "data from subdir"
+        );
     }
 
     #[test]

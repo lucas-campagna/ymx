@@ -1033,10 +1033,7 @@ mod tests {
 
     #[test]
     fn duplicate_bare_use_in_same_document_first_wins() {
-        let mut ex = extract(
-            0,
-            "_use:\n  x: a.b\n_use:\n  y: c.d\nmain: 1\n",
-        );
+        let mut ex = extract(0, "_use:\n  x: a.b\n_use:\n  y: c.d\nmain: 1\n");
         assert!(ex.meta_use.is_some());
         let mv = ex.meta_use.take().unwrap();
         assert_eq!(mv.file, FileId(0));
