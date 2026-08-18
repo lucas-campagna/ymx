@@ -204,12 +204,8 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
             path = PathBuf::from("."); // sentinel; run.rs replaces with temp file
         }
     } else {
-        // One positional given: stdin (if non-tty) provides call arguments.
-        if std::io::stdin().is_terminal() {
-            return Err(ParseError {
-                message: "stdin is a terminal, cannot read args".to_string(),
-            });
-        }
+        // One positional given: run.rs reads stdin as args only if non-tty.
+        // If stdin is a tty (no data piped), run.rs compiles without args.
         stdin_is_script = false;
         path = positionals.pop().unwrap();
     }

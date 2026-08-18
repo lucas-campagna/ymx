@@ -33,6 +33,7 @@
 //! 4. Otherwise `compile(&project, &opts)` — any diagnostic renders to
 //!    stderr and yields [`RunOutcome::Diagnostic`]; success hits [`emit`].
 
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -253,10 +254,9 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
         return run_test_branch(&project, &opts);
     }
 
-    // Args-from-stdin mode: positional was given and stdin is non-tty.
-    // Read stdin as call arguments (JSON first, YAML fallback), then call
-    // compile_component instead of compile.
-    if !cli.stdin_is_script {
+    // Args-from-stdin mode: if stdin has data (non-tty), read and use it as args.
+    // If stdin is a tty, just compile without args.
+    if !cli.stdin_is_script && !std::io::stdin().is_terminal() {
         let stdin_content = match std::io::read_to_string(std::io::stdin()) {
             Ok(s) if !s.is_empty() => Some(s),
             Ok(_) => None, // empty stdin → no args
