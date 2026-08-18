@@ -26,12 +26,17 @@
 //!    re-parses and silently degrades, so `parse_tests` is the gate), then
 //!    `run_tests(&project, &opts)`. One line per test (`PASS` / `FAIL` + diff
 //!    on failure); any failure or parse error yields
-//!    [`RunOutcome::Diagnostic`]. No JSON is emitted under `--test`.
+//!    [`RunOutcome::Diagnostic`]. No JSON is emitted under `--test`. In
+//!    recursive mode, a `_test._build_error` key in `main.yml` asserts that
+//!    `load_project` or `extract_options` fails with the given code — a match
+//!    is a PASS, a mismatch is a FAIL, and no key means a failure is a warning.
 //! 4. Otherwise `compile(&project, &opts)` — any diagnostic renders to
 //!    stderr and yields [`RunOutcome::Diagnostic`]; success hits [`emit`].
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+
+use yaml_rust2::{Yaml, YamlLoader};
 
 use ymx_config::{extract_options, CliOverrides};
 use ymx_lib::ymx_core::project::{Format, Options, Project};
@@ -153,9 +158,40 @@ fn find_project_roots(dir: &Path) -> Vec<PathBuf> {
     roots
 }
 
+/// Returns the expected build-error code from `proj_dir/main.yml`'s top-level
+/// `_test._build_error` key, or `None` if not present.
+fn build_error_code(proj_dir: &Path) -> Option<String> {
+    let main_yml = proj_dir.join("main.yml");
+    let main_yaml = proj_dir.join("main.yaml");
+    let contents = if main_yml.exists() {
+        std::fs::read_to_string(&main_yml)
+    } else if main_yaml.exists() {
+        std::fs::read_to_string(&main_yaml)
+    } else {
+        return None;
+    };
+    let Ok(contents) = contents else {
+        return None;
+    };
+    let Ok(docs) = YamlLoader::load_from_str(&contents) else {
+        return None;
+    };
+    let Some(Yaml::Hash(top)) = docs.first().cloned() else {
+        return None;
+    };
+    let Some(Yaml::Hash(test_block)) = top.get(&Yaml::String("_test".into())) else {
+        return None;
+    };
+    let Some(Yaml::String(code)) = test_block.get(&Yaml::String("_build_error".into())) else {
+        return None;
+    };
+    Some(code.clone())
+}
+
 /// Recursive directory test mode: discover all project roots under `dir` and
-/// run tests in each. Load failures are warned and skipped; opts/parse failures
-/// and test failures cause non-zero exit.
+/// run tests in each. Load/extract failures with a matching `_test._build_error`
+/// code are PASS; mismatches are FAIL; failures without a key are warned and
+/// skipped. Parse failures and test failures cause non-zero exit.
 fn run_recursive_tests(dir: &Path) -> RunOutcome {
     let roots = find_project_roots(dir);
 
@@ -174,10 +210,29 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
             .unwrap_or(proj_dir.as_path())
             .to_string_lossy();
 
+        let build_error = build_error_code(proj_dir);
+
         let project = match load_project(proj_dir) {
             Ok(p) => p,
             Err(diags) => {
-                eprintln!("ymx: warning: {}: {}", proj_dir.display(), diags[0].message);
+                if let Some(ref expected_code) = build_error {
+                    if diags.iter().any(|d| d.code == *expected_code) {
+                        println!("PASS {}: _build_error", relpath);
+                        total_passed += 1;
+                    } else {
+                        let actual_code = diags
+                            .first()
+                            .map(|d| d.code.to_string())
+                            .unwrap_or_default();
+                        println!(
+                            "FAIL {}: _build_error mismatch (expected {}, got {})",
+                            relpath, expected_code, actual_code
+                        );
+                        overall_success = false;
+                    }
+                } else {
+                    eprintln!("ymx: warning: {}: {}", proj_dir.display(), diags[0].message);
+                }
                 continue;
             }
         };
@@ -185,7 +240,24 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
         let opts = match extract_options(&project, &CliOverrides::default_for_tests()) {
             Ok(o) => o,
             Err(diags) => {
-                eprintln!("ymx: warning: {}: {}", proj_dir.display(), diags[0].message);
+                if let Some(ref expected_code) = build_error {
+                    if diags.iter().any(|d| d.code == *expected_code) {
+                        println!("PASS {}: _build_error", relpath);
+                        total_passed += 1;
+                    } else {
+                        let actual_code = diags
+                            .first()
+                            .map(|d| d.code.to_string())
+                            .unwrap_or_default();
+                        println!(
+                            "FAIL {}: _build_error mismatch (expected {}, got {})",
+                            relpath, expected_code, actual_code
+                        );
+                        overall_success = false;
+                    }
+                } else {
+                    eprintln!("ymx: warning: {}: {}", proj_dir.display(), diags[0].message);
+                }
                 continue;
             }
         };
