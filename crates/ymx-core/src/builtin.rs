@@ -217,11 +217,11 @@ impl BuiltinImpl for ReduceBuiltin {
         ctx: &BuiltinCtx<'_>,
         args: &[super::callsite::ParsedArg],
     ) -> Result<Value, Diagnostic> {
-        if args.len() != 2 {
+        if args.len() < 2 || args.len() > 3 {
             return Err(ctx_err(
                 ctx,
                 E011,
-                format!("$reduce expects exactly 2 arguments, got {}", args.len()),
+                format!("$reduce expects 2 or 3 arguments, got {}", args.len()),
             ));
         }
 
@@ -232,6 +232,13 @@ impl BuiltinImpl for ReduceBuiltin {
                 return Err(ctx_err(ctx, E011,
                     format!("first argument of $reduce must be an unevaluated callable component reference, got {:?}", other)));
             }
+        };
+
+        // Third arg (optional): eagerly evaluated initial value.
+        let init = if args.len() == 3 {
+            Some(resolve_parsed_value(&args[2].value, ctx)?)
+        } else {
+            None
         };
 
         // Second arg: eagerly evaluated, must be Array.
@@ -271,7 +278,7 @@ impl BuiltinImpl for ReduceBuiltin {
             // that would be depth-limited; the outer component call already
             // consumed a depth slot. But we do check for the single-step case
             // where `last` is unavailable.
-            let scope = build_scope_for_call(ctx, &item_args, None);
+            let scope = build_scope_for_call(ctx, &item_args, init.as_ref());
             let result = eval_def(ctx, &def, &item_args, &scope)?;
 
             // Verify `last` is not referenced in the result by trying to look it up.
@@ -296,9 +303,11 @@ impl BuiltinImpl for ReduceBuiltin {
                 _ => unreachable!(),
             };
 
-            // Build scope with `last` bound to prev result.
+            // Build scope with `last` bound to init (if provided) on first step,
+            // then to prev result on subsequent steps.
             let result = {
-                let scope = build_scope_for_call(ctx, &item_args, prev.as_ref());
+                let last = prev.as_ref().or(init.as_ref());
+                let scope = build_scope_for_call(ctx, &item_args, last);
                 eval_def(ctx, &def, &item_args, &scope)?
             };
             prev = Some(result);
