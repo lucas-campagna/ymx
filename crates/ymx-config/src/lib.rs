@@ -26,11 +26,6 @@ use ymx_core::resolve::resolve_entry;
 pub struct CliOverrides {
     /// `--entry <path>` override (default `main.main`).
     pub entry: Option<String>,
-    /// `--from-keyword <kw>` override (default `from`).
-    pub from_keyword: Option<String>,
-    /// `--default-keyword <kw>` override (default `default`; the engine
-    /// prefixes `$` internally).
-    pub default_keyword: Option<String>,
     /// `--max-depth <n>` override (default `256`).
     pub max_depth: Option<u32>,
     /// `--pretty` override (default `false`).
@@ -49,8 +44,6 @@ impl CliOverrides {
     pub fn default_for_tests() -> Self {
         CliOverrides {
             entry: None,
-            from_keyword: None,
-            default_keyword: None,
             max_depth: None,
             pretty: None,
             format: None,
@@ -81,6 +74,8 @@ impl CliOverrides {
 /// bool, `plain` `"false"`|`"true"`|`"template"`) are per the PRD `_ymx`
 /// table. `plain` is a strict string enum: a YAML bare bool or number is
 /// invalid. `entry` is intentionally **not** a `_ymx` field (unknown -> `E010`).
+/// `from_keyword` and `default_keyword` are configurable only via `_ymx`
+/// front matter (not via CLI flags).
 ///
 /// Non-entry `_ymx` blocks are never touched: only the entry file's raw value
 /// is consulted, so a malformed block elsewhere is not an error.
@@ -202,16 +197,8 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
         }
     }
 
-    opts.from_keyword = cli
-        .from_keyword
-        .clone()
-        .or(from_keyword)
-        .unwrap_or_else(|| "from".to_string());
-    opts.default_keyword = cli
-        .default_keyword
-        .clone()
-        .or(default_keyword)
-        .unwrap_or_else(|| "default".to_string());
+    opts.from_keyword = from_keyword.unwrap_or_else(|| "from".to_string());
+    opts.default_keyword = default_keyword.unwrap_or_else(|| "default".to_string());
     opts.max_depth = cli.max_depth.or(max_depth).unwrap_or(256);
     opts.pretty = cli.pretty.or(pretty).unwrap_or(false);
     opts.format = cli.format.clone().or(format).unwrap_or(Format::Json);
@@ -361,21 +348,15 @@ mod tests {
         let p = with_ymx(
             project(),
             0,
-            "max_depth: 10\nfrom_keyword: frm\ndefault_keyword: dflt\nformat: diagnostics\npretty: true\nplain: \"true\"\n",
+            "max_depth: 10\nformat: diagnostics\npretty: true\nplain: \"true\"\n",
         );
         let cli = CliOverrides {
             max_depth: Some(5),
-            default_keyword: Some("kw".to_string()),
             pretty: Some(false),
             ..CliOverrides::default_for_tests()
         };
         let opts = extract_options(&p, &cli).expect("valid");
         assert_eq!(opts.max_depth, 5, "CLI beats entry-file 10");
-        assert_eq!(
-            opts.from_keyword, "frm",
-            "no CLI override -> entry-file value"
-        );
-        assert_eq!(opts.default_keyword, "kw", "CLI beats entry-file dflt");
         assert_eq!(
             opts.format,
             Format::Diagnostics,

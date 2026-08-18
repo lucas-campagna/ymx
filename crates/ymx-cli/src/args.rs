@@ -4,8 +4,8 @@
 //! parser keeps the dependency tree minimal. Recognises the flag surface in
 //! PRD §CLI:
 //!   `ymx <path> [flags]`
-//!   --entry <path>      --from-keyword <kw>     --default-keyword <kw>
-//!   --max-depth <n>     --pretty                --format <json|diagnostics>
+//!   --entry <path>      --max-depth <n>        --pretty
+//!   --format <json|diagnostics>
 //!   --output <file>     --plain                 --plain-template
 //!   --test              --help | -h
 //!
@@ -35,10 +35,6 @@ pub struct ParsedCli {
     /// the entry file; the entry path internally is `<file_stem>.<component>`
     /// (always exactly 2 segments).
     pub entry: Option<String>,
-    /// `--from-keyword <kw>` (default `from`).
-    pub from_keyword: Option<String>,
-    /// `--default-keyword <kw>` (default `default`).
-    pub default_keyword: Option<String>,
     /// `--max-depth <n>` (default `256`). Parsed as `u32`; non-integers
     /// error.
     pub max_depth: Option<u32>,
@@ -86,8 +82,6 @@ impl ParsedCli {
         let entry = format!("{}.{}", file_stem, component);
         CliOverrides {
             entry: Some(entry),
-            from_keyword: self.from_keyword.clone(),
-            default_keyword: self.default_keyword.clone(),
             max_depth: self.max_depth,
             pretty: self.pretty,
             format: self.format.clone(),
@@ -125,8 +119,6 @@ pub enum ParseOutcome {
 pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     let mut positionals: Vec<PathBuf> = Vec::new();
     let mut entry: Option<String> = None;
-    let mut from_keyword: Option<String> = None;
-    let mut default_keyword: Option<String> = None;
     let mut max_depth: Option<u32> = None;
     let mut pretty: Option<bool> = None;
     let mut format: Option<Format> = None;
@@ -152,10 +144,6 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
                 plain = Some(PlainMode::TemplatesOnly);
             }
             "--entry" => entry = Some(take_value(args, &mut i, "--entry")?),
-            "--from-keyword" => from_keyword = Some(take_value(args, &mut i, "--from-keyword")?),
-            "--default-keyword" => {
-                default_keyword = Some(take_value(args, &mut i, "--default-keyword")?)
-            }
             "--max-depth" => {
                 let raw = take_value(args, &mut i, "--max-depth")?;
                 let n: u32 = raw.parse().map_err(|_| ParseError {
@@ -237,8 +225,6 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     Ok(ParseOutcome::Cli(ParsedCli {
         path,
         entry,
-        from_keyword,
-        default_keyword,
         max_depth,
         pretty,
         format,
@@ -286,8 +272,6 @@ mod tests {
         let c = cli_of(&["proj/main.yml"]);
         assert_eq!(c.path, PathBuf::from("proj/main.yml"));
         assert_eq!(c.entry, None);
-        assert_eq!(c.from_keyword, None);
-        assert_eq!(c.default_keyword, None);
         assert_eq!(c.max_depth, None);
         assert_eq!(c.pretty, None);
         assert_eq!(c.format, None);
@@ -303,16 +287,12 @@ mod tests {
     }
 
     #[test]
-    fn keyword_flags_parse_strings() {
-        let c = cli_of(&[
-            "--from-keyword",
-            "frm",
-            "--default-keyword",
-            "dflt",
-            "proj/main.yml",
-        ]);
-        assert_eq!(c.from_keyword.as_deref(), Some("frm"));
-        assert_eq!(c.default_keyword.as_deref(), Some("dflt"));
+    fn keyword_flags_are_not_cli_flags() {
+        let err = err_of(&["--from-keyword", "frm", "proj/main.yml"]);
+        assert!(err.message.contains("unknown flag"));
+
+        let err = err_of(&["--default-keyword", "dflt", "proj/main.yml"]);
+        assert!(err.message.contains("unknown flag"));
     }
 
     #[test]
@@ -471,8 +451,6 @@ mod tests {
         let c = cli_of(&["proj/main.yml"]);
         let ov = c.overrides();
         assert_eq!(ov.entry.as_deref(), Some("main.main"));
-        assert_eq!(ov.from_keyword, None);
-        assert_eq!(ov.default_keyword, None);
         assert_eq!(ov.max_depth, None);
         assert_eq!(ov.pretty, None);
         assert_eq!(ov.format, None);
@@ -484,10 +462,6 @@ mod tests {
         let c = cli_of(&[
             "--entry",
             "foo",
-            "--from-keyword",
-            "frm",
-            "--default-keyword",
-            "dflt",
             "--max-depth",
             "8",
             "--pretty",
@@ -499,8 +473,6 @@ mod tests {
         let ov = c.overrides();
         // entry = file_stem.component = "main.foo"
         assert_eq!(ov.entry.as_deref(), Some("main.foo"));
-        assert_eq!(ov.from_keyword.as_deref(), Some("frm"));
-        assert_eq!(ov.default_keyword.as_deref(), Some("dflt"));
         assert_eq!(ov.max_depth, Some(8));
         assert_eq!(ov.pretty, Some(true));
         assert_eq!(ov.format, Some(Format::Diagnostics));
@@ -528,8 +500,6 @@ mod tests {
         assert_eq!(ov.max_depth, Some(100));
         // entry is ALWAYS Some(...) from CLI — derived from file_stem.component
         assert_eq!(ov.entry.as_deref(), Some("main.main"));
-        assert_eq!(ov.from_keyword, None);
-        assert_eq!(ov.default_keyword, None);
         assert_eq!(ov.pretty, None);
         assert_eq!(ov.format, None);
         assert_eq!(ov.plain, None);
@@ -550,8 +520,6 @@ mod tests {
         // entry is always derived (never None from CLI)
         assert_eq!(ov.entry.as_deref(), Some("main.main"));
         // output/test not carried
-        assert_eq!(ov.from_keyword, None);
-        assert_eq!(ov.default_keyword, None);
         assert_eq!(ov.max_depth, None);
         assert_eq!(ov.pretty, None);
         assert_eq!(ov.format, None);

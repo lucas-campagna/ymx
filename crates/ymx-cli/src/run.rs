@@ -485,8 +485,6 @@ mod tests {
         ParsedCli {
             path: root.join("main.yml"),
             entry: None,
-            from_keyword: None,
-            default_keyword: None,
             max_depth: None,
             pretty: None,
             format: None,
@@ -508,8 +506,6 @@ mod tests {
         ParsedCli {
             path: dir.to_path_buf(),
             entry: None,
-            from_keyword: None,
-            default_keyword: None,
             max_depth: None,
             pretty: None,
             format: None,
@@ -525,8 +521,6 @@ mod tests {
         ParsedCli {
             path: file.to_path_buf(),
             entry: Some(component.to_string()),
-            from_keyword: None,
-            default_keyword: None,
             max_depth: None,
             pretty: None,
             format: None,
@@ -659,8 +653,6 @@ mod tests {
         let cli = cli_for(Path::new("/proj"));
         let ov = cli.overrides();
         assert_eq!(ov.entry.as_deref(), Some("main.main"));
-        assert_eq!(ov.from_keyword, None);
-        assert_eq!(ov.default_keyword, None);
         assert_eq!(ov.max_depth, None);
         assert_eq!(ov.pretty, None);
         assert_eq!(ov.format, None);

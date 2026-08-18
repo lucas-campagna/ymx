@@ -14,3 +14,8 @@ ymx-config.workspace = true
 ymx-test.workspace = true
 serde_json.workspace = true
 yaml-rust2.workspace = true
+
+# Man page: view with `man ./man/ymx.1` or copy to your manpages directory.
+# The man page source is at man/ymx.1 in this crate's source directory.
+[package.metadata]
+man = "man/ymx.1"

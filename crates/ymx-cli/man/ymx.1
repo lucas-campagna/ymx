@@ -1,0 +1,666 @@
+.TH YMX 1 "2026-08-18" "0.1.0" "ymx manual"
+.SH NAME
+ymx \\- YAML \\(r JSON compiler for the YMX language (v1)
+.SH SYNOPSIS
+.B ymx
+[path] [flags]
+.SH DESCRIPTION
+.B ymx
+is a YAML parser and compiler for the YMX language (v1). It reads a YAML project
+(a directory of .yml/.yaml files) and compiles the requested entry component to
+JSON output.
+
+A project is a directory containing YAML documents. Each top-level key-value
+pair in a document defines a
+.I component .
+Components are callable with arguments, support templates (components whose
+names start with $), and can reference each other via the \fBfrom\fR property
+or inline $\fIcomp\fR(...) calls.
+
+The compiler applies rules 1\\(en16 of the YMX language. The output is a
+JSON-encoded value (an object, array, string, number, bool, or null).
+
+.SH OPTIONS
+
+These are the CLI flags supported by \fBymx\fR. For many flags, the entry
+document\u\s-2\u\s0\s+2\u's \fB_ymx\fR front-matter block can supply a default
+value; the precedence is \fICLI flag > entry-file _ymx > engine default\fR.
+
+.SS "Positionals and entry"
+
+.TP
+.B path
+The entry file or project directory. Required unless \fB--test\fR is given,
+in which case it defaults to \fB.\fR (the current directory). When a directory
+is given, it is treated as the project root. When a file is given, its parent
+directory is the project root and the entry component is derived from the file
+stem.
+.TP
+.B --entry <component>
+The name of the component within the entry file to compile (default:
+\fBmain\fR). The entry path is derived internally as
+\fI<file_stem>\fR.\fI<component>\fR (always exactly two segments: empty
+folder.path + file stem + component). For example, \fBymx main.yml --entry
+foo\fR compiles component \fBfoo\fR from \fBmain.yml\fR, with entry path
+\fBmain.foo\fR.
+
+.SS "Compiler flags"
+
+.TP
+.B --max-depth <n>
+Limit on template/call recursion (default: 256). Each recursive operation
+(inline $\fIcomp\fR(...) call, math \fIcomp\fR(...) call, bare $name
+component fallback, template step, \fBfrom\fR dispatch) is checked against
+this cap. Exceeding it raises \fBE008\fR.
+.TP
+.B --format <json|diagnostics|compact>
+Output format. \fBjson\fR (default) emits the compiled JSON value.
+\fBcompact\fR emits compact JSON (no whitespace). \fBdiagnostics\fR emits
+no JSON on success; on any diagnostic it lists each error to stderr.
+.TP
+.B --pretty
+Pretty-print JSON output. Implies \fB--format json\fR and forces
+indentation. Mutually exclusive with \fB--format compact\fR.
+.TP
+.B --plain
+Promote sub-namespace components \fBand\fR templates into the global
+namespace. Equivalent to \fB_ymx.plain: true\fR. A promoted name that
+collides with an existing global definition raises \fBE004\fR.
+Mutually exclusive with \fB--plain-template\fR.
+.TP
+.B --plain-template
+Promote sub-namespace \fBtemplates only\fR into the global namespace.
+Equivalent to \fB_ymx.plain: template\fR. Mutually exclusive with
+\fB--plain\fR.
+
+.SS "Front-matter keyword overrides"
+
+These flags override the keyword names used in \fB_ymx\fR front matter. They
+are not separate CLI flags \\(en they supply values for the same
+\fBfrom_keyword\fR and \fBdefault_keyword\fR fields that \fB_ymx\fR
+configures. They exist so users can write YAML that uses alternative
+keywords without polluting the entry document\u\s-2\u\s0\s+2\u's own _ymx block:
+
+.TP
+.B --from-keyword <word>
+Override the \fBfrom\fR keyword (default: \fBfrom\fR). The entry document\u\s-2\u\s0\s+2\u's
+\fB_ymx.from_keyword\fR field sets this per-document; the CLI flag overrides it
+project-wide. Use this when a document uses a different word for the same
+concept, e.g. \fBymx . --from-keyword uses\fR to support YAML that says
+\fBuses: OtherComp\fR.
+.TP
+.B --default-keyword <word>
+Override the \fBdefault\fR keyword (default: \fBdefault\fR). The entry
+document\u\s-2\u\s0\s+2\u's \fB_ymx.default_keyword\fR field sets this per-document; the CLI
+flag overrides it project-wide. The engine prefixes $ internally. Use this
+when a document uses a different word for the shortcut-default property,
+e.g. \fBymx . --default-keyword fallback\fR to support YAML that says
+\fBfallback: $other_component\fR.
+
+.SS "Output and test"
+
+.TP
+.B --output <file>
+Write output to \fBfile\fR instead of stdout. The file is written only on
+success; on any diagnostic the CLI exits non-zero \fBwithout creating the
+file\fR.
+.TP
+.B --test
+Run inline \fB_test\fR blocks (via \fBymx-test\fR) instead of compiling the
+entry component. When \fBpath\fR is omitted it defaults to \fB.\fR.
+When \fBpath\fR is a directory, recursively walk it and run all \fB_test\fR
+blocks in every subdirectory containing .yml/.yaml files (each is an
+independent project); aggregate results across all projects and exit non-zero
+if any test fails. When \fBpath\fR is a file, run tests for that single
+project.
+
+.SS "Help"
+
+.TP
+.B --help , -h
+Print the short usage summary and exit 0. The full reference manual is
+available in the man page: \fBman ymx\fR.
+
+.SH RULES
+The following rules define how YMX parses and resolves YAML into a JSON value.
+Each rule is applied in order during compilation.
+
+.SS "Rule 1 — Top-level keys are components"
+Every top-level key-value pair in a document defines a component.
+The key is the component name; the value is its body.
+.PP
+.nf
+    user:
+      name: Mathew
+      phone: 123456789
+.fi
+.PP
+Here \fBuser\fR is a component with two properties.
+
+.SS "Rule 2 — Components are callable with arguments"
+Arguments passed to a component are referenced inside its body by name
+prefixed with \fB$\fR.
+.PP
+.nf
+    user:
+      name: $user_name
+      phone: $user_phone
+.fi
+.PP
+Calling \fBuser\fR with \fBuser_name=\"Alice\"\fR and \fBuser_phone=987654321\fR
+produces \fB{\"name\": \"Alice\", \"phone\": 987654321}\fR.
+.PP
+Bare \fB$name\fR (no parentheses) resolves in order: (a) a named argument in
+scope, (b) a regular component of that name called with no args, (c) error
+(rule 10).
+
+.SS "Rule 3 — Inline call syntax ($comp(...))"
+A \fB$name(...)\fR expression inside a value calls another component in place.
+Positional and named arguments may be mixed; a positional arg may not follow a
+named one (\fBE012\fR).
+.PP
+.nf
+    a: $b(x=12, y=34)
+    b: $x + $y
+.fi
+.PP
+Calling \fBa\fR returns \fB\"12 + 34\"\fR.
+.PP
+.nf
+    a: $b(12, y=34)    # positional $0=12, named y=34
+    b: $0 * $y
+.fi
+.PP
+Calling \fBa\fR returns \fB408\fR.
+
+.SS "Rule 4 — Positional arguments ($0, $1, ...)"
+When calling a component with \fB$\fR, unnamed arguments bind to positional
+slots \fB$0\fR, \fB$1\fR, \fB$2\fR, ...
+.PP
+.nf
+    a: $b(12, 34)
+    b: $0 + $1
+.fi
+.PP
+Calling \fBa\fR returns \fB\"12 + 34\"\fR.
+.PP
+Integer YAML keys denote positional slots: \fB0:\fR sets \fB$0\fR,
+\fB1:\fR sets \fB$1\fR, etc.
+
+.SS "Rule 5 — Template chaining ($a \\(-> $$a \\(-> $$$a)"
+A component whose name starts with \fB$\fR is a template and is applied
+automatically after its matching (non-\fB$\fR) component is called.
+Templates can be chained indefinitely: \fB$a\fR, \fB$$a\fR, \fB$$$a\fR, ...
+Each link runs in order; the innermost feeds the next.
+.PP
+.nf
+    $box:
+      from: div
+      children: Hello, $name!
+    box:
+      name: Sir. $name
+.fi
+.PP
+Calling \fBbox\fR with \fBname=\"Rocky\"\fR produces
+\fB{\"from\": \"div\", \"children\": \"Hello, Sir. Rocky\"}\fR.
+.PP
+Chain example:
+.PP
+.nf
+    $$$a: "final: $0"
+    $$a:  $0 + 1
+    $a:   $0 * 2
+    a:    10
+.fi
+.PP
+Calling \fBa\fR: 10 \\(-> 20 \\(-> 21 \\(-> \fB\"final: 21\"\fR.
+.PP
+Templates are namespaced by default: \fB$box\fR in \fBsubdir/\fR applies only
+to components in the \fBsubdir\fR namespace. Use \fB--plain\fR or
+\fB_ymx.plain: true\fR to promote sub-namespace names globally.
+
+.SS "Rule 6 — from property for explicit dispatch"
+The \fBfrom\fR property references another component by name, which is called
+with the current component's remaining properties as arguments.
+Override the keyword with \fB--from-keyword\fR or \fB_ymx.from_keyword\fR.
+.PP
+.nf
+    CompA:
+      from: CompB
+      x: 12
+      y: 34
+    CompB: $x + $y
+.fi
+.PP
+Calling \fBCompA\fR returns \fB\"12 + 34\"\fR.
+.PP
+If \fBfrom\fR does not resolve to a valid regular component, it is treated as
+a plain property (no error).
+
+.SS "Rule 7 — Math expressions in call arguments"
+\fB${...}\fR evaluates its contents as a math expression.
+Component calls inside math use \fBname(...)\fR syntax (no leading \fB$\fR).
+Math operators: \fB+\fR (add/concat), \fB-\fR, \fB*\\fR, \fB/\\fR (float),
+\fB%\\fR (mod), \fB**\\fR (pow). Precedence: \fB**\\fR > unary \fB-\fR >
+\fB* / %\fR > \fB+ -\fR.
+.PP
+.nf
+    a: $b(12, 34)
+    b: ${$0 + $1}
+.fi
+.PP
+Calling \fBa\fR returns the number \fB46\fR.
+.PP
+.nf
+    a: ${b(12,34) + c(28)}
+    b: ${$0 + $1}
+    c: ${2 * $0}
+.fi
+.PP
+Calling \fBa\fR returns \fB102\fR.
+.PP
+String operands are re-scanned as math expressions when possible.
+\fB\"1 + 2\"\fR as a string operand evaluates to \fB3\fR.
+Identifiers inside \fB${...}\fR (without \fB$\fR) are in-scope arguments or
+\fBlast\fR (previous reduce result). Use \fB$0\fR, \fB$1\fR for positional.
+Use \fBname(...)\fR (no \fB$\fR) to call a component; dotted paths allowed
+(e.g. \fBsubdir.comp(...)\fR).
+
+.SS "Rule 8 — Shortcut: property name matching a component calls it"
+If a component defines a property whose name matches another component, that
+property value is passed as \fB$default\fR to the matched component, and the
+remaining properties are passed as named arguments.
+Override the keyword with \fB--default-keyword\fR or \fB_ymx.default_keyword\fR.
+.PP
+.nf
+    a:
+      b: 1
+      y: 3
+      z: 5
+    b: [$default, $y, $z]
+.fi
+.PP
+Calling \fBa\fR returns \fB[1, 3, 5]\fR.
+.PP
+Shortcut fires during step 3 of rule 11. It is suppressed when \fBfrom\fR
+points to a valid regular component.
+
+.SS "Rule 9 — Non-existing properties are ignored"
+Extra caller properties that a component does not reference are silently
+ignored.
+.PP
+.nf
+    a: $x + $y
+.fi
+.PP
+Calling \fBa\fR with \fB{\"x\":1,\"y\":2,\"z\":3}\fR returns \fB\"1 + 2\"\fR;
+\fBz\fR is ignored.
+
+.SS "Rule 10 — All referenced properties are required"
+Any property referenced via \fB$name\fR, \fB$0\fR, \fB${name}\fR, etc.
+must be supplied by the caller or declared optional (rule 17).
+Missing a required argument raises \fBE003\fR.
+
+.SS "Rule 11 — Three-step resolution order"
+Resolving a component runs in three fixed steps:
+.TP
+1.
+\fBProperty resolution (before template)\fR — every property value is fully
+resolved. Nested call-sites (\fB$comp(...)\fR, \fB${...}\fR) resolve
+bottom-up. Bare \fB$name\fR resolves as: argument \\(-> component call \\(->
+error. Property-key modifiers (\fB?\fR, \fB$\\fR) are stripped first.
+.TP
+2.
+\fBTemplate chain (rule 5)\fR — applied to the post-step-1 result.
+.TP
+3.
+\fBfrom / shortcut dispatch (rules 6 and 8)\fR — mutually exclusive;
+\fBfrom\fR takes priority if valid, otherwise the shortcut fires.
+
+.SS "Rule 12 — Array template: map over items"
+When a component returns an array and a matching \fB$template\fR exists,
+each array item is passed through the template individually.
+.PP
+.nf
+    $a:
+      prop1: ${x + 1}
+      prop2: ${y * x}
+    a:
+      - x: 1
+        y: 2
+      - x: 3
+        y: 4
+.fi
+.PP
+Calling \fBa\fR produces
+\fB[{\"prop1\": 2, \"prop2\": 2}, {\"prop1\": 4, \"prop2\": 12}]\fR.
+
+.SS "Rule 13 — Array template reduces to last application result"
+When the template is an array, it iterates over its items, carrying the
+previous result as \fB$last\fR. The final result is the return value of the
+last iteration.
+.PP
+Each step starts from the \fBinitial\fR arguments; the previous step's result
+only overwrites keys it actually returns, and only for the immediately next
+step.
+.PP
+.nf
+    a:
+      x: 1
+      y: 2
+    $a:
+      - x: ${x + 1}
+        y: ${y + 2}
+      - ${x + y}
+      - $x + $y < $last
+.fi
+.PP
+Calling \fBa\fR:
+.IP 1. 3
+Step 1: \fBx=1, y=2\fR \\(-> \fB{\"x\": 2, \"y\": 4}\fR (object returned)
+.IP 2. 3
+Step 2: \fBx=2, y=4\fR \\(-> \fB6\fR (scalar; no overwrite carries forward)
+.IP 3. 3
+Step 3: reverts to \fBx=1, y=2, $last=6\fR \\(-> \fB\"1 + 2 < 6\"\fR
+.PP
+Result: \fB\"1 + 2 < 6\"\fR.
+
+.SS "Rule 14 — Both-array reduce"
+When both \fBa\fR and \fB$a\fR are arrays, \fB$a\fR is applied as a reduce
+sequence independently to each element of \fBa\fR. Result is an array of
+reduced entries.
+.PP
+.nf
+    $a:
+      - {sum: ${x + y}, x: 0}
+      - ${sum + x + y}
+      - a: $x
+        b: ${2*y}
+        sum: $last
+    a:
+      - x: 1
+        y: 2
+      - x: 3
+        y: 4
+.fi
+.PP
+Result: \fB[{\"a\": 1, \"b\": 4, \"sum\": 5}, {\"a\": 3, \"b\": 8, \"sum\": 11}]\fR.
+
+.SS "Rule 15 — $merge builtin"
+\fB$merge(a, b)\fR merges two values. Arrays are concatenated; objects are
+shallow-merged (second overwrites first for shared keys). Both arguments are
+evaluated eagerly. Mixed shapes are \fBE011\fR.
+.PP
+.nf
+    a: [1, 2, 3]
+    b: [4, 5, 6]
+    c: $merge(a, b)
+    # c -> [1, 2, 3, 4, 5, 6]
+.fi
+.PP
+.nf
+    defaults: {theme: dark, lang: en}
+    overrides: {debug: true, lang: fr}
+    config: $merge(defaults, overrides)
+    # config -> {theme: dark, lang: fr, debug: true}
+.fi
+
+.SS "Rule 16 — $map and $reduce builtins"
+.TP
+\fB$map(callable, array)\fR — applies \fBcallable\fR to each item of
+\fBarray\fR, returning an array of results. First arg (callable) is kept
+unevaluated; second arg is evaluated eagerly. Object items supply named args;
+scalar items bind \fB$0\fR.
+.PP
+.nf
+    double: ${$0 * 2}
+    items: [1, 2, 3]
+    result: $map($double, $items)
+    # result -> [2, 4, 6]
+.fi
+.PP
+.TP
+\fB$reduce(callable, array)\fR — applies \fBcallable\fR iteratively over
+\fBarray\fR, accumulating a result. The last iteration's return value is the
+result; empty array yields \fBnull\fR. First arg unevaluated; second arg eager.
+\fB$last\fR holds the previous result (undefined on first step; \fBE003\fR if
+referenced there).
+.PP
+.nf
+    sum_step: $a + $b
+    items:
+      - {a: 10, b: 0}
+      - {a: 20, b: 10}
+      - {a: 30, b: 30}
+    result: $reduce($sum_step, $items)
+    # result -> "30 + 30"
+.fi
+
+.SS "Rule 17 — ? optional property-key modifier (v1)"
+A property key of the form \fB<name>?:\fR declares an optional property with
+a default value. The caller-supplied value wins; if absent, the default is
+used. \fB?:\fR relaxes rule 10 for that property.
+.PP
+.nf
+    $a:
+      x?: 2
+    a:
+      x: 1
+    # Calling a -> {"x": 1}   (caller wins)
+    # Calling a with no x -> {"x": 2}   (default)
+.fi
+.PP
+\fB<name>?$:\fR combines optional with math evaluation of the default:
+.PP
+.nf
+    $button:
+      label?$: "Click me"
+      count?$: count + 1
+      disabled: false
+    counter:
+      count: 0
+    main: $button
+    # -> {label: "Click me", count: 1, disabled: false}
+.fi
+.PP
+Merge mode activates only when the callee body contains at least one \fB?:\fR
+property. In merge mode, caller-supplied keys forward into the output and win
+over the body; the body (including \fB?:\fR defaults) fills gaps.
+
+.SS "Rule 18 — $ math shorthand property-key modifier (v2)"
+A trailing \fB$\fR on a property key wraps the value in \fB${...}\fR.
+\fB<name>$: <src>\fR is equivalent to \fB<name>: ${<src>}\fR.
+.PP
+.nf
+    a:
+      sum$: x + y
+    # same as: a: {sum: ${x + y}}
+.fi
+.PP
+On a component name: \fBa$: x + y\fR is equivalent to \fBa: ${x + y}\fR.
+.PP
+Combined with \fB?\fR: \fB<name>?$: <src>\fR is equivalent to
+\fB<name>?: ${<src>}\fR (optional with math-evaluated default).
+\fB<name>$?:\fR is \fBE010\fR (wrong order).
+.PP
+Note: rule 18 is \fBv2\fR. In v1, \fB$\fR on a property key or the
+wrong-order modifier combination \fB$?:\fR surfaces as \fBE010\fR.
+
+.SH "EXIT CODES"
+
+.TP
+.B 0
+Success. For \fB--format diagnostics\fR this also means no diagnostics were
+produced; stdout is empty.
+.TP
+.B 1
+A diagnostic was produced: a load-time error (YAML parse failure,
+duplicate component, reserved name, I/O failure), an option-resolution error
+(missing entry, invalid _ymx field), or a compile-time error (unknown
+component, missing argument, max-depth exceeded, type error, etc.). The
+\fB--output\fR file is not created when exiting with code 1.
+.TP
+.B 2
+Usage error: unknown flag, missing required argument, mutually exclusive flags
+(\fB--plain\fR + \fB--plain-template\fR), or wrong number of positional
+arguments.
+
+.SH EXAMPLES
+
+Compile \fBmain.yml\fR and emit JSON to stdout:
+.PP
+.nf
+    ymx main.yml
+.fi
+.PP
+
+Compile a specific component:
+.PP
+.nf
+    ymx main.yml --entry foo
+.fi
+.PP
+
+Pretty-print JSON output:
+.PP
+.nf
+    ymx main.yml --pretty
+.fi
+.PP
+
+Write output to a file (only created on success):
+.PP
+.nf
+    ymx main.yml --output out.json
+.fi
+.PP
+
+Compile with a custom recursion limit:
+.PP
+.nf
+    ymx main.yml --max-depth 128
+.fi
+.PP
+
+Promote sub-namespace templates to global scope:
+.PP
+.nf
+    ymx . --plain-template
+.fi
+.PP
+
+Run inline tests for a project:
+.PP
+.nf
+    ymx . --test
+.fi
+.PP
+
+Run tests recursively across an entire directory tree:
+.PP
+.nf
+    ymx . --test
+.fi
+.PP
+
+Emit diagnostics instead of JSON (useful in CI):
+.PP
+.nf
+    ymx main.yml --format diagnostics
+.fi
+.PP
+
+Use an alternative \fBfrom\fR keyword in the YAML source:
+.PP
+.nf
+    ymx . --from-keyword uses
+.fi
+.PP
+
+.SH "SHELL COMPLETION"
+
+Shell completion scripts are provided in the \fBcompletions/\fR directory:
+
+.TP
+.B completions/ymx.bash
+Bash completion. Source from \fB~/.bashrc\fR or
+\fB/etc/bash_completion.d/ymx.bash\fR.
+.TP
+.B completions/_ymx
+Zsh completion. Place in \fB~/.zsh/completions/\fR or a directory in
+\fB$fpath\fR.
+.TP
+.B completions/ymx.fish
+Fish completion. Place in \fB~/.config/fish/completions/\fR.
+
+.SH DIAGNOSTICS
+
+Every diagnostic renders to stderr as:
+.PP
+.nf
+    [\fIcode\fR] \fIfile\fR:\fIline\fR:\fIcol\fR (\fIcomponent\fR): \fImessage\fR
+.fi
+.PP
+
+The following error codes are defined:
+
+.TS
+tab(@);
+lB lB l.
+Code@Stage@Description
+_
+E001@load@YAML parse error or unsupported YAML feature. Multi-document streams (---),
+ complex mapping keys, YAML merge keys (<<), or non-string top-level keys are
+ not supported. Also the catch-all for I/O failures (missing root, unreadable
+ file).
+E002@compile@Unknown component reference. A $name or ${name} or from: name
+ refers to a component that does not exist in any reachable namespace.
+E003@compile@Missing required argument. A property $x is referenced but neither
+ supplied by the caller nor declared with x?: (optional).
+E004@load@Duplicate component name in the same namespace. Two top-level
+ definitions of the same component in files belonging to the same namespace.
+E005@compile@File-scope violation. A _-prefixed (file-scoped) component is
+ referenced from outside its document.
+E006@compile@Ambiguous shortcut. Two properties in the same component body both
+ match names of existing components, making the rule-8 shortcut ambiguous.
+E007@load@Reserved builtin name. Defining a component or template named map,
+ reduce, or merge (or $map, $$reduce, etc.) is rejected.
+E008@compile@Max-depth exceeded. The recursion depth cap (--max-depth, default
+ 256) was exhausted.
+E009@options@Entry not found. The entry path has fewer than two segments,
+ resolves to a missing file, has an ambiguous .yml/.yaml stem, or the entry
+ name is not a valid component identifier.
+E010@both@Invalid syntax. Malformed call-site, bad string escape (\\X), math
+ identifier prefix ($letter), mixed-shape template chain, unknown/invalid _ymx
+ field, or malformed _test block. Also the v1 rejection of rule-17/18
+ constructs (?: property-key optional syntax, $ suffix on property key).
+E011@compile@Math error or builtin argument type error. Division by zero,
+ non-numeric operand, type mismatch in math, non-array second argument to
+ $map/$reduce, or mixed-shape $merge.
+E012@compile@Positional argument after a named argument. $f(name=1, 2) is
+ not allowed.
+E013@compile@Array or object literal as a direct call argument. $f([1,2,3])
+ or $f({a:1}) is not supported in v1.
+E015@load@Meta-key reserved name. A top-level key that is a leading-$ variant
+ of _ymx or _test (e.g. $_ymx, $$_test) is rejected as reserved.
+.TE
+
+.SH FILES
+
+.TP
+.B completions/ymx.bash
+Bash completion script.
+.TP
+.B completions/_ymx
+Zsh completion script.
+.TP
+.B completions/ymx.fish
+Fish completion script.
+.TP
+.B man/ymx.1
+This man page.
+
+.SH "SEE ALSO"
+.BR ymx (5)
+.PP
+Full language specification: \fBdocs/PRD.md\fR

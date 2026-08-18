@@ -156,8 +156,6 @@ ymx [path] [flags]
 ```
 
 - `--entry <component>`: name of the component within `<file>` to compile (default `main`). The project root is the file's parent directory; the entry path is derived internally as `<file_stem>.<component>` (always exactly 2 segments). If the file is missing or the entry name is not a valid component identifier, the CLI emits `E009` at option-resolution and exits non-zero. If the file exists but the component is not defined in it, the CLI emits `E002` at compile time and exits non-zero.
-- `--from-keyword <kw>`: override the `from` keyword (default `from`).
-- `--default-keyword <kw>`: override the `$default` keyword name (default `default`); the engine always prefixes the name with `$`.
 - `--max-depth <n>`: limit on template/call recursion (default `256`).
 - `--output <file>`: write JSON to a file instead of stdout. The file is written only on success; on any diagnostic the CLI exits non-zero without creating the file.
 - `--pretty`: pretty-print the JSON output.
