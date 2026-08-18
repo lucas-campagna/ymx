@@ -1,4 +1,0 @@
-# E009: both main.yml and main.yaml exist — ambiguous stem.
-# resolve_entry finds two candidates and returns E009 before checking components.
-_test:
-  _build_error: E009
