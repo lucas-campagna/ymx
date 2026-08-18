@@ -233,17 +233,29 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
     }
 
     // Use effective_path for project_root (the entry file's directory).
-    let project_root = effective_path
+    let _project_root = effective_path
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let project = match load_project(&project_root) {
+    let project = match load_project(&effective_path) {
         Ok(project) => project,
         Err(diags) => return render_diags_load_error(&diags),
     };
 
-    let overrides = cli.overrides();
+    // For stdin-is-script mode, effective_path is a temp main.yml, so use "main.main".
+    // For normal mode, use cli.overrides() which derives from cli.path.
+    let overrides = if cli.stdin_is_script {
+        CliOverrides {
+            entry: Some("main.main".to_string()),
+            max_depth: cli.max_depth,
+            pretty: cli.pretty,
+            format: cli.format.clone(),
+            plain: None,
+        }
+    } else {
+        cli.overrides()
+    };
     let opts = match extract_options(&project, &overrides) {
         Ok(opts) => opts,
         Err(diags) => return render_diags(&diags),
@@ -761,13 +773,13 @@ mod tests {
         let cli = cli_for(&missing);
         assert_eq!(run(cli), RunOutcome::LoadError);
     }
-
     #[test]
-    fn missing_default_entry_is_e009_diagnostic() {
+    fn missing_entry_file_is_e001_load_error() {
+        // Passing a non-existent entry file returns E001 (LoadError).
         let dir = TempDir::new();
         dir.write("other.yml", "other: 1\n");
-        let cli = cli_for(dir.path());
-        assert_eq!(run(cli), RunOutcome::Diagnostic);
+        let cli = cli_for(dir.path()); // path = dir/main.yml (does not exist)
+        assert_eq!(run(cli), RunOutcome::LoadError);
     }
 
     #[test]
@@ -997,16 +1009,16 @@ mod tests {
     }
 
     #[test]
-    fn run_does_not_write_output_file_on_compile_error() {
-        // Missing default entry -> E009 in extract_options, before compile /
+    fn run_does_not_write_output_file_on_load_error() {
+        // Entry file does not exist -> E001 in load_project, before compile /
         // emit. The --output file must NOT be created.
         let dir = TempDir::new();
         dir.write("other.yml", "other: 1\n");
         let out = dir.path().join("out.json");
-        let mut cli = cli_for(dir.path());
+        let mut cli = cli_for(dir.path()); // path = dir/main.yml (does not exist)
         cli.output = Some(out.clone());
-        assert_eq!(run(cli), RunOutcome::Diagnostic);
-        assert!(!out.exists(), "no file on diagnostic");
+        assert_eq!(run(cli), RunOutcome::LoadError);
+        assert!(!out.exists(), "no file on load error");
     }
 
     #[test]

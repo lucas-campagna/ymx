@@ -188,7 +188,7 @@ fn resolve_use_graph(entry_file: &Path) -> Result<Vec<PathBuf>, Vec<Diagnostic>>
     fn dfs(
         file_path: &Path,
         project_root: &Path,
-        is_entry: bool,
+        _is_entry: bool,
         visited: &mut HashSet<PathBuf>,
         stack: &mut Vec<PathBuf>,
         result: &mut Vec<PathBuf>,
@@ -266,17 +266,6 @@ fn resolve_use_graph(entry_file: &Path) -> Result<Vec<PathBuf>, Vec<Diagnostic>>
             for f in files {
                 dfs(&f, project_root, false, visited, stack, result, diags);
             }
-        } else if raw_use.is_none() && is_entry {
-            // Entry file with no _use: backward compat as _use: * (walk)
-            let dir = file_path.parent().unwrap_or(project_root);
-            let mut files = Vec::new();
-            walk_only(dir, &mut files);
-            files.sort();
-            // Filter out the current file to avoid duplicate processing
-            files.retain(|f| f != file_path);
-            for f in files {
-                dfs(&f, project_root, false, visited, stack, result, diags);
-            }
         } else if let Some(RawUse::WildcardFile(stem)) = raw_use {
             // Import all from a specific file (dots are path separators)
             match resolve_wildcard_file_stem(&stem, project_root) {
@@ -323,7 +312,7 @@ fn resolve_use_graph(entry_file: &Path) -> Result<Vec<PathBuf>, Vec<Diagnostic>>
     dfs(
         entry_file,
         &project_root,
-        true, // is_entry
+        true, // _is_entry
         &mut visited,
         &mut stack,
         &mut result,
@@ -845,7 +834,7 @@ mod tests {
     #[test]
     fn use_wildcard_all_loads_entry_plus_directory() {
         let dir = TempDir::new();
-        dir.write("main.yml", "main: 1\n");
+        dir.write("main.yml", "_use: \"*\"\nmain: 1\n");
         dir.write("a.yml", "a: 2\n");
         dir.write("subdir/b.yml", "b: 3\n");
 
@@ -966,28 +955,18 @@ mod tests {
     }
 
     #[test]
-    fn use_backward_compat_no_use_means_wildcard() {
-        // If entry has no _use, behave as _use: *
-        let dir = TempDir::new();
-        dir.write("main.yml", "main: 1\n");
-        dir.write("other.yml", "other: 2\n");
-
-        let project = load_project(&dir.path().join("main.yml")).expect("loads cleanly");
-
-        assert!(project.namespaces.get("", "main").is_some());
-        assert!(project.namespaces.get("", "other").is_some());
-    }
-
-    #[test]
-    fn use_directory_entry_falls_back_to_main() {
-        // Passing a directory instead of a file should find main.yml or main.yaml
+    fn use_directory_entry_loads_main_only() {
+        // Passing a directory finds main.yml (no implicit _use: *)
         let dir = TempDir::new();
         dir.write("main.yml", "main: 1\n");
         dir.write("other.yml", "other: 2\n");
 
         let project = load_project(dir.path()).expect("loads via dir");
         assert!(project.namespaces.get("", "main").is_some());
-        assert!(project.namespaces.get("", "other").is_some());
+        assert!(
+            project.namespaces.get("", "other").is_none(),
+            "other not loaded (no implicit wildcard)"
+        );
     }
 
     #[test]
@@ -1010,32 +989,6 @@ mod tests {
     }
 
     // ---- backward compat tests (existing behavior) ----
-
-    #[test]
-    fn loads_multi_file_tree_in_lex_order() {
-        let dir = TempDir::new();
-        dir.write("main.yml", "main: 1\n");
-        dir.write("a.yml", "a: 2\n");
-        dir.write("subdir/b.yml", "b: 3\n");
-        dir.write("subdir/nested/c.yml", "c: 4\n");
-
-        let project = load_project(&dir.path().join("main.yml")).expect("loads cleanly");
-
-        let expected: Vec<PathBuf> = ["a.yml", "main.yml", "subdir/b.yml", "subdir/nested/c.yml"]
-            .iter()
-            .map(|rel| dir.path().join(rel))
-            .collect();
-        assert_eq!(project.files, expected, "lexicographic path order");
-
-        let a = project.namespaces.get("", "a").expect("a global");
-        let main = project.namespaces.get("", "main").expect("main global");
-        let b = project.namespaces.get("", "b").expect("b global");
-        let c = project.namespaces.get("", "c").expect("c global");
-        assert_eq!(a.file, FileId(0));
-        assert_eq!(main.file, FileId(1));
-        assert_eq!(b.file, FileId(2));
-        assert_eq!(c.file, FileId(3));
-    }
 
     #[test]
     fn parse_error_diagnostic_carries_resolved_path() {
@@ -1110,7 +1063,10 @@ mod tests {
     #[test]
     fn raw_meta_values_land_in_load_order() {
         let dir = TempDir::new();
-        dir.write("a.yml", "_ymx:\n  v: 1\n_test:\n  t: a\na: 0\n");
+        dir.write(
+            "a.yml",
+            "_use: \"*\"\n_ymx:\n  v: 1\n_test:\n  t: a\na: 0\n",
+        );
         dir.write("m.yml", "_ymx:\n  v: 2\nm: 0\n");
 
         let project = load_project(&dir.path().join("a.yml")).expect("loads cleanly");
@@ -1135,7 +1091,7 @@ mod tests {
     #[test]
     fn non_document_files_are_ignored() {
         let dir = TempDir::new();
-        dir.write("main.yml", "main: 1\n");
+        dir.write("main.yml", "_use: \"*\"\nmain: 1\n");
         dir.write("notes.txt", "not yaml\n");
         dir.write("README.md", "# readme\n");
         dir.write("subdir/data.yaml", "data: 2\n");

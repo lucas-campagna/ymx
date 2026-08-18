@@ -1,3 +1,4 @@
+_use: "*"
 _ymx:
   plain: template
 helper:

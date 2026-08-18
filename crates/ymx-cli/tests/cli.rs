@@ -197,26 +197,6 @@ fn entry_flag_selects_component() {
 }
 
 #[test]
-fn ambiguous_stem_yamls_is_e009() {
-    // The default entry `main.main` resolves against `main.yml` and
-    // `main.yaml`. To reach the ambiguous-stem E009 (not an E004
-    // duplicate-name clash first), the two co-stemmed files define
-    // disjoint top-level keys — no E004 from the namespace merge.
-    let dir = TempDir::new();
-    dir.write("main.yml", "a: 1\n");
-    dir.write("main.yaml", "b: 2\n");
-
-    let out = ymx(&[dir.path().join("main.yml").to_str().unwrap()]);
-    assert!(!out.0.status.success(), "ambiguous stem errors");
-    let stderr = stderr(&out.0);
-    assert!(stderr.contains("E009"), "stderr renders E009: {stderr}");
-    assert!(
-        stderr.contains("ambiguous entry"),
-        "ambiguous-stem message: {stderr}"
-    );
-}
-
-#[test]
 fn test_flag_runs_inline_tests_and_exits_zero_on_pass() {
     let dir = TempDir::new();
     dir.write("main.yml", "main: 1\n_test:\n  main: 1\n");

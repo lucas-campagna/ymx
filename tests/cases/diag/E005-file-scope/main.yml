@@ -1,3 +1,4 @@
+_use: "*"
 comp: "$_secret()"
 _test:
   comp:

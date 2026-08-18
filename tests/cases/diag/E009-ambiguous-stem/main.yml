@@ -1,6 +1,5 @@
 # E009: both main.yml and main.yaml exist — ambiguous stem.
-# resolve_entry finds two candidates and returns E009 before checking components.
-# The component name in the entry path (main.main) doesn't matter at this point.
-_test:
-  _build_error: E009
+# OLD BEHAVIOR: passing directory to load_project returned E009.
+# NEW BEHAVIOR: load_project takes a file path. Explicit file wins.
+# This scenario is now a no-op (no assertions).
 helper: value
