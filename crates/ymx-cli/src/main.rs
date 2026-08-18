@@ -1,10 +1,14 @@
-//! `ymx` binary — milestone 1.10 orchestration glue.
+//! `ymx` — the YMX CLI binary.
 //!
-//! The binary is thin: parse argv (task 1), service `--help` (manual text in
-//! [`help`], task 6), surface usage errors (exit `2`), and dispatch into
-//! [`run::run`] (task 3) for the load → extract → compile / `run_tests`
-//! pipeline. The success-emit shape (JSON pretty / `--output` /
-//! `--format diagnostics`) lands in task 4.
+//! Thin entry point: parses `argv`, surfaces usage errors (exit 2), prints
+//! `--help`, and delegates to [`run::run`] for the full pipeline:
+//! `load_project` → `extract_options` → `compile` / `run_tests` → emit.
+//!
+//! ## Exit codes
+//!
+//! - `0` — success (no diagnostics)
+//! - `1` — one or more diagnostics (compile error, test failure)
+//! - `2` — CLI usage error (bad flags, missing file argument)
 
 mod args;
 mod help;

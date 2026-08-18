@@ -30,9 +30,9 @@ The project is written in Rust. Rust provides type and memory safety without a g
 
 YMX is being built in versions. The rules in this document describe the language and are stable across versions; the *output targets* arrive incrementally.
 
-**v1 (current)**: the resolver for rules 1–16, emits JSON. CLI and library only. HTML, PDF, and WEB are intentionally not in v1.
+**v1 (current)**: the resolver for rules 1–18, emits JSON. CLI and library only. HTML, PDF, and WEB are intentionally not in v1.
 
-**v2**: HTML renderer + CLI flag to pick the target; rules 17–18 (`?` default merge, `$` math shorthand).
+**v2**: HTML renderer + CLI flag to pick the target.
 
 **v3**: PDF renderer (backend choice deferred until needed).
 
@@ -67,22 +67,24 @@ ymx/
 
 ### Diagnostic codes
 
-| Code  | Diagnostic |
-|-------|------------|
-| `E001` | YAML parse error or unsupported YAML feature (multi-document stream, complex mapping key, merge key `<<`); also the load-stage catch-all for I/O failures (missing root, unreadable file) and non-string top-level keys. |
-| `E002` | Unknown component reference |
-| `E003` | Missing required argument |
-| `E004` | Duplicate component name in the same namespace |
-| `E005` | File-scope violation (cross-document `_`-prefixed reference) |
-| `E006` | Ambiguous shortcut (multiple property names match components) |
-| `E007` | Reserved name used as a component/template (`map`/`reduce`/`merge`) |
-| `E008` | Max-depth exceeded |
-| `E009` | Entry not found (entry path malformed — fewer than two segments —, resolved file missing, ambiguous `.yml`/`.yaml` stem, or entry name is not a valid component identifier) |
-| `E010` | Invalid syntax (call-site, string escape, math identifier prefix `$letter`, mixed-shape template chain, unknown or invalid `_ymx` field value (incl. bad `plain` value), or malformed `_test` block) |
-| `E011` | Math error (type mismatch, division by zero, non-numeric operand) or builtin argument type error (non-array 2nd arg to `$map`/`$reduce`; mixed-shape `$merge`) |
-| `E012` | Positional argument after a named argument in a call |
-| `E013` | Array/object literal as a direct call argument (unsupported in v1) |
-| `E015` | Meta-key reserved name used as a component or template (leading-`$` variant of `_ymx`/`_test`, e.g. `$_ymx`, `$_test`, `$$_ymx`) |
+Every diagnostic renders to stderr as `[code] file:line:col (component): message`. Load-time codes (`E001`, `E004`, `E007`, `E015`) are not `_test`-driveable because `load_project` is all-or-nothing; they are exercised by crate `#[test]` unit tests with inline YAML.
+
+| Code | Stage | Diagnostic | Example |
+|------|-------|------------|---------|
+| `E001` | load | YAML parse error or unsupported YAML feature (multi-document stream `---`, complex mapping key, merge key `<<`); also the load-stage catch-all for I/O failures (missing root, unreadable file) and non-string top-level keys. | `a: 1\n---\nb: 2` in one file → multi-document stream not supported. `0: value` → non-string top-level key. |
+| `E002` | compile | Unknown component reference. | `a: $nonexistent` → `a` references a component that does not exist. |
+| `E003` | compile | Missing required argument. A property `$x` is referenced but neither supplied by the caller nor declared with `x?:`. | `a: $x` called with no `x` argument → missing required `x`. |
+| `E004` | load | Duplicate component name in the same namespace. Two top-level definitions of `foo` in the same directory. | `a.yml` defines `x: 1` and `b.yml` also defines `x: 2` → both in the global namespace → `E004`. |
+| `E005` | compile | File-scope violation. A `_`-prefixed component is referenced from outside its document. | `_helper: 42` in `a.yml`; `b.yml` calls `$a(_helper=$_helper)` → cross-document reference to file-scoped `_helper` → `E005`. |
+| `E006` | compile | Ambiguous shortcut. Two properties in the same component body both match names of existing components. | `a:\n  b: 1\n  c: 2\nb: $default\nc: $default` — both `b` and `c` match components → shortcut is ambiguous → `E006`. |
+| `E007` | load | Reserved name used as a component or template (`map`/`reduce`/`merge`). | `map: 1` → defining a component named `map` (or `$map`, `$$map`, …) is rejected. |
+| `E008` | compile | Max-depth exceeded. The recursion depth cap (`--max-depth`, default 256) was exhausted. | A chain of 300 nested `$a()` calls hits the 256-deep limit → `E008`. |
+| `E009` | options | Entry not found. Entry path has fewer than two segments, resolves to a missing file, has an ambiguous `.yml`/`.yaml` stem, or the entry name is not a valid component identifier. | `ymx .` with no `main.yml`; `ymx ./folder` where both `folder.yml` and `folder.yaml` exist; `ymx ./file.yml --entry NOT_A_VALID_NAME`. |
+| `E010` | both | Invalid syntax: malformed call-site, bad string escape (`\X`), math identifier prefix `$letter`, mixed-shape template chain, unknown/invalid `_ymx` field, or malformed `_test` block. Also the v1 rejection of rule-18 constructs (`$` suffix on property key, `?$` combination). | `\n` in a string (unknown escape); `${ $x }` (bare `$` in math — drop the `$`); `plain: "maybe"` (invalid enum value); `x$?: y` (wrong modifier order). |
+| `E011` | compile | Math error (type mismatch, division by zero, non-numeric operand) or builtin argument type error (non-array 2nd arg to `$map`/`$reduce`; mixed-shape `$merge`). | `${true + 1}` → Bool + Int is a type mismatch. `$map(a, "not an array")` → second arg must be Array. `$merge({a:1}, [1,2])` → Object + Array is an unsupported merge shape. |
+| `E012` | compile | Positional argument after a named argument in a call. | `$f(name=1, 2)` → positional arg `2` follows named `name=1` → `E012`. |
+| `E013` | compile | Array/object literal as a direct call argument. Not supported in v1. | `$f([1,2,3])` or `$g({a:1})` → v1 does not support passing inline collection literals as call arguments. |
+| `E015` | load | Meta-key reserved name used as a component or template. A top-level key that is a leading-`$` variant of `_ymx` or `_test`. | `$_ymx:\n  v: 1` or `$$_test: 2` → leading-`$` variants of meta keys are rejected as reserved. |
 
 ## Multi-file projects
 
@@ -840,76 +842,103 @@ The following lenient fallbacks apply to rules 12–14:
 - A **non-array `$a`** applied to a **non-array `a`** simply calls `$a` with `a` as `$0` (per rule 5's chain semantics).
 - An **array `$a`** applied to a **non-array `a`** (a scalar or an object) reduces `$a` over `a` as a **single-element sequence** per rule 13 — an object `a` supplies the initial arguments, a scalar `a` binds `$0`. (The mixed-shape gap of rule 5 concerns array vs non-array links *within* a single chain and remains `E010`; this case — an array template applied to a non-array component — is defined.)
 
-### 15. Merging objects and arrays with `$merge`
+### 15. Builtins: `$map`, `$reduce`, `$merge`
 
-`$merge(a, b)` merges two values. Arrays are concatenated; objects are shallow-merged (later keys overwrite earlier ones).
+The three builtins are **special forms**: each declares its own argument-evaluation strategy, rather than uniformly receiving all arguments pre-evaluated. All three are invoked only via their `$`-prefixed forms; user components/templates named `map`/`reduce`/`merge` are rejected (`E007`).
 
-Example 1 — arrays
+#### `$map(callable, array)`
+
+**Syntax:** `$map(<component>, <array>)`
+
+**Semantics:** applies `<component>` to each item of `<array>`, returning an array of results. The second argument must be an Array (`E011` if not); an empty array yields an empty result.
+
+**Argument-evaluation strategy:**
+- The first argument (`<component>`) is kept **unevaluated** — it is a reference to a component to call per item, not a pre-evaluated value.
+- The second argument (`<array>`) is evaluated **eagerly** (per bare `$name` resolution).
+
+**Item binding:**
+- An **object** item supplies named arguments (its keys → `$<key>`).
+- A **scalar** item binds `$0`.
+- An array item is `E011`.
 
 ```yml
-a: [1,2,3]
-b: [4,5,6]
-c: $merge(a,b)
+double: ${$0 * 2}
+items: [1, 2, 3]
+result: $map($double, $items)
+# result → [2, 4, 6]
 ```
-
-Calling `c` produces `[1, 2, 3, 4, 5, 6]`.
-
-Example 2 — objects
 
 ```yml
-a: {a:1,b:0}
-b: {b:2,c:3}
-c: $merge(a,b)
+add_props: $a + $b
+rows:
+  - {a: 1, b: 2}
+  - {a: 3, b: 4}
+result: $map($add_props, $rows)
+# result → ["1 + 2", "3 + 4"]
 ```
 
-Calling `c` produces `{"a": 1, "b": 2, "c": 3}`.
+The callable may be namespace-qualified:
 
-### 16. `map` and `reduce` operations via `$map` and `$reduce`
+```yml
+result: $map(utils.trim, $names)
+```
 
-`$map`, `$reduce`, and `$merge` (rule 15) are **special forms**: each declares its own argument-evaluation strategy, rather than uniformly receiving all arguments pre-evaluated. `$map` and `$reduce` keep their first argument unevaluated (a callable component) and evaluate the array argument eagerly; `$merge` evaluates both arguments eagerly.
+#### `$reduce(callable, array)`
 
-> Builtin argument syntax. The builtins are invoked only via their `$`-prefixed forms (`$map`, `$reduce`, `$merge`); user components/templates named `map`/`reduce`/`merge` are rejected (`E007`, see *Reserved names*). Builtin arguments are component/value references resolved by each builtin's own strategy, not call-site argument values. The callable first argument of `$map`/`$reduce` is a bare effective identifier (optionally namespace-qualified via a dotted path, e.g. `$map(subdir.fn, b)`), kept unevaluated. The remaining arguments are eager references resolved per bare `$name` (rule 2), `$name(...)` (rule 3), or `${...}` (rule 7). `$reduce` exposes `$last` to the callable's body (math-evaluated as `last`, see below).
+**Syntax:** `$reduce(<component>, <array>)`
 
-`$map(object, array)` applies an object component to each item of an array, returning an array of results.
+**Semantics:** applies `<component>` iteratively over `<array>`, accumulating a result. The final result is the return value of the last iteration. An empty array yields `Value::Null`. A one-element array runs exactly one step (no `$last` in scope there).
 
-Example
+**Argument-evaluation strategy:** identical to `$map` — first arg unevaluated (callable), second arg eager.
+
+**Item binding:** identical to `$map` — object item → named args, scalar item → `$0`.
+
+**`$last` semantics:** the result of the previous iteration is available as `$last` in the next. `$last` is **undefined on the first iteration** — referencing it there is `E003`. Inside `${...}` math context, `last` (bare identifier) refers to `$last` and is subject to the *Math operand resolution* re-scan rule: a string previous result is re-evaluated as a math expression; a number is used directly; an object/array in a numeric context is `E011`.
+
+```yml
+sum_step: $a + $b
+items:
+  - {a: 10, b: 0}   # first: $last undefined; result "10"
+  - {a: 20, b: 10}  # second: $last = "10"; result "30"
+  - {a: 30, b: 30}  # third: $last = "30"; result "30 + 30"
+result: $reduce($sum_step, $items)
+# result → "30 + 30"
+```
+
+Using math re-scan with string results:
 
 ```yml
 a: $a + $b
 b:
-  - {a: 1, b: 2}
-  - {a: 2, b: 3}
-c: $map(a,b)
+  - {a: 1, b: 2}    # first: returns "1 + 2"
+  - $last = ${last}  # second: math-evaluates "1 + 2" → 3; result "1 + 2 = 3"
+c: $reduce($a, $b)
+# result → "1 + 2 = 3"
 ```
 
-Calling `c` produces `["1 + 2", "2 + 3"]`.
+#### `$merge(a, b)`
 
-`$reduce(object, array)` works like `$map`, but each item also has access to `$last`, the result of the previous iteration. The final result is the result of the last item.
+**Syntax:** `$merge(<value>, <value>)`
 
-Inside `${...}` (math context), `$last` is referenced by the bare name `last`: it is math-evaluated. So `${last}` takes the previous result and evaluates it as a math expression.
+**Semantics:** merges two values. Arrays are concatenated (first then second); objects are shallow-merged (second overwrites first for shared keys, second's unique keys are appended). Any other shape combination (Object + Array, Array + Object, scalar + anything) is `E011`.
 
-> Builtin argument types and shapes. The second argument of `$map` and `$reduce` must resolve to an **Array**; a non-Array value is `E011` (builtin argument type error). An empty array yields an empty array result (for `$map`) or — for `$reduce` — the `Value::Null` result with no reduction step run. A `$reduce` over a one-element array runs exactly that single step (its result is the builtin's result); `$last` is never in scope on it (a `last` reference there is `E003`). `$merge` is defined only for Array⊕Array (concatenation) and Object⊕Object (shallow merge); any other shape combination (Array⊕Object, Object⊕Array, or a scalar where a collection is required) is `E011` (builtin argument type error).
-
-> Item binding. Each array item is bound to the callable as a call: an **object** item supplies named arguments (its keys); a **scalar** item binds `$0` (consistent with rule 12's per-item map). An item that is itself an array is `E011`.
-
-> `last` semantics in `$reduce`: `$last` is undefined on the first iteration; referencing `$last` (or `last` in math) on the first iteration is `E003` (missing argument). On subsequent iterations `$last` holds the previous item's fully resolved result. `$last` follows the general rules of rule 7: outside math it interpolates the previous result with its native type preserved; inside math (`last` or `${last}`) it is subject to the *Math operand resolution (String re-scan)* rule — a String previous result is re-scanned as a math expression (so `"1 + 2"` → `3`), a number is used directly, and an object/array operand is `E011` under a numeric operator.
-
-Example
+**Argument-evaluation strategy:** **both** arguments are evaluated eagerly (no lazy callable).
 
 ```yml
-a: $a + $b
-b:
-  - {a: 1, b: 2}
-  - $last = ${last}
-c: $reduce(a,b)
+a: [1, 2, 3]
+b: [4, 5, 6]
+c: $merge(a, b)
+# c → [1, 2, 3, 4, 5, 6]
 ```
 
-Calling `c` produces `"1 + 2 = 3"`:
+```yml
+defaults: {theme: dark, lang: en, debug: false}
+overrides: {debug: true, log: verbose}
+config: $merge(defaults, overrides)
+# config → {theme: dark, lang: en, debug: true, log: verbose}
+```
 
-1. The first item calls component `a` with `a=1, b=2`, returning the string `"1 + 2"`. This becomes `$last` for the next step.
-2. The second (and last) item has body `$last = ${last}`. Substituting `$last` gives `"1 + 2"`, and math-evaluating `last` (the string `"1 + 2"`) gives the number `3`. The result is `"1 + 2 = 3"`.
 
----
 
 ### 17. Optional properties (`?`) — default-value object merge
 
@@ -963,6 +992,24 @@ a:
   z: "Value: $x"
 ```
 Calling `a` with no `x` → `{"x": 2, "y": 4, "z": "Value: 2"}`. Calling `a` with `x=10` → `{"x": 10, "y": 12, "z": "Value: 10"}`.
+
+**`?$` — optional property with a math-evaluated default.** `<name>?$: <src>` is exactly `<name>?: ${<src>}` — the default is computed by evaluating `<src>` as a math expression only when the caller omits `<name>`.
+
+```yml
+$button:
+  label?$: "Click me"       # evaluated as math only when label is absent
+  count?$: count + 1         # count must be in scope; evaluated when absent
+  disabled: false
+
+counter:
+  count: 0
+
+main: $button
+# → {label: "Click me", count: 1, disabled: false}
+# (count=0 supplied; count?$ is skipped because count was provided)
+```
+
+> `?$` evaluates the math expression in the callee's scope — `count + 1` sees the caller's `count`. If `count` is not in scope and not supplied, `$count` in the math expression is `E003`. The math value may be any type (not restricted to numbers); the result becomes the property value.
 
 > **Lazy defaults.** A `?:` default `v` is evaluated (interpolation, math, inline `$call(...)` resolved) **only** when the caller did **not** supply `<name>`. If the caller supplies the key, `v` is never evaluated — dead work in unused defaults is skipped, and errors in an unused default do not surface. The plain (non-`?:`) properties of the callee are evaluated as usual during step 1 of rule 11.
 
