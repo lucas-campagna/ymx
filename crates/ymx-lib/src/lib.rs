@@ -56,6 +56,13 @@ pub fn load_project(root: &Path) -> Result<Project, Vec<Diagnostic>> {
     let mut diags = Vec::new();
 
     let mut files = Vec::new();
+
+    // If the root directory itself does not exist or cannot be read, fail immediately.
+    if let Err(err) = fs::read_dir(root) {
+        diags.push(io_diagnostic(root, &err));
+        return Err(diags);
+    }
+
     walk(root, &mut files, &mut diags);
     files.sort();
 
@@ -123,27 +130,27 @@ pub fn load_project(root: &Path) -> Result<Project, Vec<Diagnostic>> {
 }
 
 /// Recursively collect the `.yml`/`.yaml` document paths under `dir` into
-/// `files`, pushing an `E001` diagnostic into `diags` for any directory that
-/// cannot be enumerated.
+/// `files`. Unreadable directories are skipped silently. Entries that cannot be
+/// read are skipped with a warning. `.git` and hidden directories (starting with
+/// `.`) are skipped — they never contain user project files.
 fn walk(dir: &Path, files: &mut Vec<PathBuf>, diags: &mut Vec<Diagnostic>) {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
-        Err(err) => {
-            diags.push(io_diagnostic(dir, &err));
+        Err(_) => {
+            // Unreadable directory — skip silently (e.g. permission-denied system dirs).
             return;
         }
     };
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                diags.push(io_diagnostic(dir, &err));
-                continue;
-            }
-        };
+    for entry in entries.flatten() {
         let path = entry.path();
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         if is_dir {
+            // Skip .git and hidden directories — never user project files.
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name == ".git" || name.starts_with('.') {
+                    continue;
+                }
+            }
             walk(&path, files, diags);
         } else if is_document(&path) {
             files.push(path);
