@@ -1,4 +1,4 @@
-//! Canonical pipeline orchestration (milestone 1.10, tasks 3 + 4).
+//! Canonical pipeline orchestration (milestone 1.10, tasks 3 + 4 + 1.23).
 //!
 //! `load_project` -> `extract_options` -> (`--test` ? `run_tests` :
 //! `compile`) -> emit. Diagnostic rendering (one
@@ -9,26 +9,26 @@
 //!   `opts.pretty`); write to the `--output` file if provided, else stdout.
 //!   The file is written only on success (compile already succeeded by the
 //!   time emit runs); a write failure prints a diagnostic-style error to
-//!   stderr and yields [`Outcome::Diagnostic`], best-effort removing any
+//!   stderr and yields [`RunOutcome::Diagnostic`], best-effort removing any
 //!   partially written file.
 //! * `Diagnostics`: on success stdout is empty and the outcome is
-//!   [`Outcome::Success`] (the compile-error branch is already handled as
-//!   [`Outcome::Diagnostic`] before emit runs).
+//!   [`RunOutcome::Success`] (the compile-error branch is already handled as
+//!   [`RunOutcome::Diagnostic`] before emit runs).
 //!
 //! Orchestration order (PRD §CLI):
 //! 1. `load_project(path)` — any load-time diagnostic (`E001` / `E004` /
 //!    `E007` / `E015`) renders all diagnostics to stderr and yields
-//!    [`Outcome::Diagnostic`].
+//!    [`RunOutcome::LoadError`].
 //! 2. `extract_options(&project, &cli.overrides())` — resolves the entry path
-//!    (`E009` / `E010`) the same way.
+//!    (`E009` / `E010`) the same way. Yields [`RunOutcome::OptionsError`].
 //! 3. `--test`: `parse_tests(&project)` first (its `Err` surfaces a malformed
 //!    `_test` block, `E010`, before any test runs — `run_tests` internally
 //!    re-parses and silently degrades, so `parse_tests` is the gate), then
 //!    `run_tests(&project, &opts)`. One line per test (`PASS` / `FAIL` + diff
 //!    on failure); any failure or parse error yields
-//!    [`Outcome::Diagnostic`]. No JSON is emitted under `--test`.
+//!    [`RunOutcome::Diagnostic`]. No JSON is emitted under `--test`.
 //! 4. Otherwise `compile(&project, &opts)` — any diagnostic renders to
-//!    stderr and yields [`Outcome::Diagnostic`]; success hits [`emit`].
+//!    stderr and yields [`RunOutcome::Diagnostic`]; success hits [`emit`].
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -40,32 +40,40 @@ use ymx_lib::{load_project, Diagnostic, Value};
 use ymx_test::{parse_tests, run_tests, Expected, TestResult};
 
 use crate::args::ParsedCli;
+use crate::diagnostic::render_with_guidance;
 
 /// The orchestration outcome, mapped to a process [`ExitCode`] by [`main`].
 /// Kept as a small enum rather than returning [`ExitCode`] directly so the
 /// pipeline is unit-testable (`ExitCode` does not implement `PartialEq`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Outcome {
+pub enum RunOutcome {
     /// Success — the pipeline completed without any diagnostic or test
     /// failure.
     Success,
-    /// A runtime diagnostic or test failure was rendered to stderr.
+    /// A load-time diagnostic was rendered to stderr (E001/E004/E007/E015).
+    /// Exit code 2 per milestone 1.23.
+    LoadError,
+    /// A compile-time diagnostic or test failure was rendered to stderr.
+    /// Exit code 1 per PRD §Exit codes.
     Diagnostic,
 }
 
-impl Outcome {
-    /// Map to the process exit code: `0` for [`Outcome::Success`], `1` for
-    /// [`Outcome::Diagnostic`] (PRD §Exit codes: default non-zero `1`).
+impl RunOutcome {
+    /// Map to the process exit code:
+    /// - `0` for [`RunOutcome::Success`]
+    /// - `2` for [`RunOutcome::LoadError`]
+    /// - `1` for [`RunOutcome::Diagnostic`]
     pub fn to_exit_code(self) -> ExitCode {
         match self {
-            Outcome::Success => ExitCode::SUCCESS,
-            Outcome::Diagnostic => ExitCode::from(1),
+            RunOutcome::Success => ExitCode::SUCCESS,
+            RunOutcome::LoadError => ExitCode::from(2),
+            RunOutcome::Diagnostic => ExitCode::from(1),
         }
     }
 }
 
 /// Drive the canonical pipeline against `cli`.
-pub fn run(cli: &ParsedCli) -> Outcome {
+pub fn run(cli: &ParsedCli) -> RunOutcome {
     // Recursive directory mode (--test with a directory path)
     if let Some(ref test_dir) = cli.test_dir {
         return run_recursive_tests(test_dir);
@@ -78,7 +86,7 @@ pub fn run(cli: &ParsedCli) -> Outcome {
         .unwrap_or_else(|| PathBuf::from("."));
     let project = match load_project(&project_root) {
         Ok(project) => project,
-        Err(diags) => return render_diags(&diags),
+        Err(diags) => return render_diags_load_error(&diags),
     };
 
     let overrides = cli.overrides();
@@ -148,12 +156,12 @@ fn find_project_roots(dir: &Path) -> Vec<PathBuf> {
 /// Recursive directory test mode: discover all project roots under `dir` and
 /// run tests in each. Load failures are warned and skipped; opts/parse failures
 /// and test failures cause non-zero exit.
-fn run_recursive_tests(dir: &Path) -> Outcome {
+fn run_recursive_tests(dir: &Path) -> RunOutcome {
     let roots = find_project_roots(dir);
 
     if roots.is_empty() {
         eprintln!("ymx: no YMX projects found in {}", dir.display());
-        return Outcome::Success;
+        return RunOutcome::Success;
     }
 
     let mut total_passed = 0usize;
@@ -214,15 +222,15 @@ fn run_recursive_tests(dir: &Path) -> Outcome {
     );
 
     if overall_success && total_passed == total_tests {
-        Outcome::Success
+        RunOutcome::Success
     } else {
-        Outcome::Diagnostic
+        RunOutcome::Diagnostic
     }
 }
 
 /// `--test` branch: parse tests first (its `Err` is the malformed-`_test`
 /// gate, surfaced as `E010`), then run them and print one line per result.
-fn run_test_branch(project: &Project, opts: &Options) -> Outcome {
+fn run_test_branch(project: &Project, opts: &Options) -> RunOutcome {
     match parse_tests(project) {
         Ok(_) => {}
         Err(diags) => return render_diags(&diags),
@@ -240,9 +248,9 @@ fn run_test_branch(project: &Project, opts: &Options) -> Outcome {
     }
     println!("PASS: {passed}/{total}");
     if passed == total {
-        Outcome::Success
+        RunOutcome::Success
     } else {
-        Outcome::Diagnostic
+        RunOutcome::Diagnostic
     }
 }
 
@@ -268,7 +276,7 @@ fn diff(result: &TestResult) -> String {
 /// Success-branch emit (task 4). Per `opts.format`:
 ///
 /// * [`Format::Diagnostics`]: emit nothing to stdout; the outcome is
-///   [`Outcome::Success`] (PRD: `--format diagnostics` on a successful
+///   [`RunOutcome::Success`] (PRD: `--format diagnostics` on a successful
 ///   compile leaves stdout empty and exits `0`). `--output` is ignored in
 ///   this mode.
 /// * [`Format::Json`]: serialize `value` with `serde_json` (pretty iff
@@ -276,32 +284,36 @@ fn diff(result: &TestResult) -> String {
 ///   file atomically — the string is materialized first, so a serialization
 ///   failure aborts before any file is created; a write failure prints a
 ///   diagnostic-style error to stderr, best-effort removes any partially
-///   written file, and yields [`Outcome::Diagnostic`]. Otherwise the JSON is
+///   written file, and yields [`RunOutcome::Diagnostic`]. Otherwise the JSON is
 ///   written to stdout. `--output` is ignored under `--test` (handled
 ///   earlier in [`run`]).
-fn emit(cli: &ParsedCli, opts: &Options, value: &Value) -> Outcome {
+fn emit(cli: &ParsedCli, opts: &Options, value: &Value) -> RunOutcome {
     match opts.format {
-        Format::Diagnostics => Outcome::Success,
-        Format::Json => emit_json(cli, opts.pretty, value),
+        Format::Diagnostics => RunOutcome::Success,
+        // JSON format uses pretty by default (milestone 1.23: "JSON output should
+        // use `--pretty` by default"); the CLI --pretty flag overrides for compact
+        Format::Json => emit_json(cli, true, value),
+        // Compact format uses opts.pretty (false by default, true if --pretty given)
+        Format::Compact => emit_json(cli, opts.pretty, value),
     }
 }
 
 /// Serialize `value` to JSON (pretty iff `pretty`) and dispatch to
 /// `--output` or stdout. Serialization is materialized into a `String`
 /// before any I/O, so a serialize failure never creates a file.
-fn emit_json(cli: &ParsedCli, pretty: bool, value: &Value) -> Outcome {
+fn emit_json(cli: &ParsedCli, pretty: bool, value: &Value) -> RunOutcome {
     let json = match serialize(value, pretty) {
         Ok(json) => json,
         Err(message) => {
             eprintln!("ymx: {message}");
-            return Outcome::Diagnostic;
+            return RunOutcome::Diagnostic;
         }
     };
     match cli.output.as_deref() {
         Some(path) => write_file(path, &json),
         None => {
             print!("{json}");
-            Outcome::Success
+            RunOutcome::Success
         }
     }
 }
@@ -321,26 +333,35 @@ fn serialize(value: &Value, pretty: bool) -> Result<String, String> {
 /// Write `json` to `path`: serialize first (done by the caller), then a single
 /// `fs::write` (which truncates-then-writes). A write failure prints a
 /// diagnostic-style error to stderr, best-effort removes any partial file,
-/// and yields [`Outcome::Diagnostic`].
-fn write_file(path: &Path, json: &str) -> Outcome {
+/// and yields [`RunOutcome::Diagnostic`].
+fn write_file(path: &Path, json: &str) -> RunOutcome {
     if let Err(e) = std::fs::write(path, json) {
         let _ = std::fs::remove_file(path);
         eprintln!(
             "ymx: failed to write output file `{path}`: {e}",
             path = path.display()
         );
-        return Outcome::Diagnostic;
+        return RunOutcome::Diagnostic;
     }
-    Outcome::Success
+    RunOutcome::Success
 }
 
-/// Render every diagnostic to stderr (one `Diagnostic::render()` line per
-/// entry) and report [`Outcome::Diagnostic`].
-fn render_diags(diags: &[Diagnostic]) -> Outcome {
+/// Render every diagnostic to stderr (one enhanced `render_with_guidance()` line
+/// per entry) and report [`RunOutcome::Diagnostic`].
+fn render_diags(diags: &[Diagnostic]) -> RunOutcome {
     for diag in diags {
-        eprintln!("{}", diag.render());
+        eprintln!("{}", render_with_guidance(diag));
     }
-    Outcome::Diagnostic
+    RunOutcome::Diagnostic
+}
+
+/// Render every load-error diagnostic to stderr and report
+/// [`RunOutcome::LoadError`].
+fn render_diags_load_error(diags: &[Diagnostic]) -> RunOutcome {
+    for diag in diags {
+        eprintln!("{}", render_with_guidance(diag));
+    }
+    RunOutcome::LoadError
 }
 
 #[cfg(test)]
@@ -449,23 +470,23 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "main: 1\n");
         let cli = cli_for(dir.path());
-        assert_eq!(run(&cli), Outcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
-    fn load_yaml_error_returns_diagnostic() {
+    fn load_yaml_error_returns_load_error() {
         let dir = TempDir::new();
         dir.write("bad.yml", "a: 1\n---\nb: 2\n");
         let cli = cli_for(dir.path());
-        assert_eq!(run(&cli), Outcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::LoadError);
     }
 
     #[test]
-    fn load_missing_root_returns_diagnostic() {
+    fn load_missing_root_returns_load_error() {
         let dir = TempDir::new();
         let missing = dir.path().join("nope");
         let cli = cli_for(&missing);
-        assert_eq!(run(&cli), Outcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::LoadError);
     }
 
     #[test]
@@ -473,7 +494,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("other.yml", "other: 1\n");
         let cli = cli_for(dir.path());
-        assert_eq!(run(&cli), Outcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -481,7 +502,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "_ymx:\n  foo: 1\nmain: 0\n");
         let cli = cli_for(dir.path());
-        assert_eq!(run(&cli), Outcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -489,7 +510,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("a/b.yml", "x: 7\n");
         let cli = cli_with_entry(&dir.path().join("a/b.yml"), "x");
-        assert_eq!(run(&cli), Outcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -497,7 +518,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("a/b.yml", "x: 7\n");
         let cli = cli_with_entry(&dir.path().join("a/b.yml"), "y");
-        assert_eq!(run(&cli), Outcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -505,7 +526,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "main: 1\n_test:\n  main: 1\n");
         let cli = cli_with_test(dir.path());
-        assert_eq!(run(&cli), Outcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -513,7 +534,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "main: 1\n_test:\n  main: 2\n");
         let cli = cli_with_test(dir.path());
-        assert_eq!(run(&cli), Outcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -525,7 +546,7 @@ mod tests {
             "main: \"$nope(1)\"\n_test:\n  main:\n    error: \"E002\"\n",
         );
         let cli = cli_with_test(dir.path());
-        assert_eq!(run(&cli), Outcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -537,7 +558,7 @@ mod tests {
             "main: 1\n_test:\n  main:\n    result: 1\n    error: \"E002\"\n",
         );
         let cli = cli_with_test(dir.path());
-        assert_eq!(run(&cli), Outcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -545,7 +566,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "main: 1\n");
         let cli = cli_with_test(dir.path());
-        assert_eq!(run(&cli), Outcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -556,7 +577,7 @@ mod tests {
         dir.write("main.yml", "main: \"$main()\"\n");
         let mut cli = cli_for(dir.path());
         cli.max_depth = Some(1);
-        assert_eq!(run(&cli), Outcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -609,7 +630,7 @@ mod tests {
     #[test]
     fn render_diags_reports_diagnostic_outcome() {
         let diags: Vec<Diagnostic> = Vec::new();
-        assert_eq!(render_diags(&diags), Outcome::Diagnostic);
+        assert_eq!(render_diags(&diags), RunOutcome::Diagnostic);
     }
 
     // ---- task 4: emit ----
@@ -639,7 +660,7 @@ mod tests {
         let cli = cli_for(dir.path());
         assert_eq!(
             emit(&cli, &Options::default(), &Value::Int(1)),
-            Outcome::Success
+            RunOutcome::Success
         );
     }
 
@@ -654,7 +675,7 @@ mod tests {
             format: Format::Diagnostics,
             ..Options::default()
         };
-        assert_eq!(emit(&cli, &opts, &Value::Int(1)), Outcome::Success);
+        assert_eq!(emit(&cli, &opts, &Value::Int(1)), RunOutcome::Success);
         assert!(!out.exists(), "--output ignored under --format diagnostics");
     }
 
@@ -667,7 +688,7 @@ mod tests {
         cli.output = Some(out.clone());
         assert_eq!(
             emit(&cli, &Options::default(), &Value::Int(1)),
-            Outcome::Success
+            RunOutcome::Success
         );
         assert!(out.exists(), "file created on success");
         let written = fs::read_to_string(&out).expect("read back");
@@ -685,7 +706,7 @@ mod tests {
             pretty: true,
             ..Options::default()
         };
-        assert_eq!(emit(&cli, &opts, &Value::Int(1)), Outcome::Success);
+        assert_eq!(emit(&cli, &opts, &Value::Int(1)), RunOutcome::Success);
         let written = fs::read_to_string(&out).expect("read back");
         assert_eq!(
             written, "1",
@@ -700,7 +721,7 @@ mod tests {
         let out = dir.path().join("out.json");
         let mut cli = cli_for(dir.path());
         cli.output = Some(out.clone());
-        assert_eq!(run(&cli), Outcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
         assert!(out.exists());
         assert_eq!(fs::read_to_string(&out).unwrap(), "1");
     }
@@ -714,7 +735,7 @@ mod tests {
         let out = dir.path().join("out.json");
         let mut cli = cli_for(dir.path());
         cli.output = Some(out.clone());
-        assert_eq!(run(&cli), Outcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::Diagnostic);
         assert!(!out.exists(), "no file on diagnostic");
     }
 
@@ -725,7 +746,7 @@ mod tests {
         let out = dir.path().join("out.json");
         let mut cli = cli_with_entry(&dir.path().join("a/b.yml"), "y");
         cli.output = Some(out.clone());
-        assert_eq!(run(&cli), Outcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::Diagnostic);
         assert!(!out.exists(), "no file on E009");
     }
 
@@ -740,7 +761,7 @@ mod tests {
         dir.write("main.yml", "main: 1\n");
         let mut cli = cli_for(dir.path());
         cli.format = Some(Format::Diagnostics);
-        assert_eq!(run(&cli), Outcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -750,7 +771,7 @@ mod tests {
         // removes any partial file (none created here) and reports Diagnostic.
         let dir = TempDir::new();
         let bad = dir.path().join("no_such_dir").join("out.json");
-        assert_eq!(write_file(&bad, "1"), Outcome::Diagnostic);
+        assert_eq!(write_file(&bad, "1"), RunOutcome::Diagnostic);
         assert!(!bad.exists());
     }
 
@@ -758,7 +779,7 @@ mod tests {
     fn write_file_success_returns_success() {
         let dir = TempDir::new();
         let out = dir.path().join("ok.json");
-        assert_eq!(write_file(&out, "42"), Outcome::Success);
+        assert_eq!(write_file(&out, "42"), RunOutcome::Success);
         assert_eq!(fs::read_to_string(&out).unwrap(), "42");
     }
 
@@ -768,7 +789,7 @@ mod tests {
     fn recursive_tests_single_passing_project() {
         let dir = TempDir::new();
         dir.write("proj/main.yml", "main: 1\n_test:\n  main: 1\n");
-        assert_eq!(run(&cli_with_test_dir(dir.path())), Outcome::Success);
+        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
     }
 
     #[test]
@@ -776,7 +797,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("proj1/main.yml", "main: 1\n_test:\n  main: 1\n");
         dir.write("proj2/main.yml", "main: 2\n_test:\n  main: 2\n");
-        assert_eq!(run(&cli_with_test_dir(dir.path())), Outcome::Success);
+        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
     }
 
     #[test]
@@ -786,7 +807,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("bad/bad.yml", "a: 1\n---\nb: 2\n"); // multi-doc is E001
                                                        // No valid projects found - warn and exit 0
-        assert_eq!(run(&cli_with_test_dir(dir.path())), Outcome::Success);
+        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
     }
 
     #[test]
@@ -794,14 +815,14 @@ mod tests {
         let dir = TempDir::new();
         dir.write("just_text.txt", "not yaml\n");
         // No YMX projects found
-        assert_eq!(run(&cli_with_test_dir(dir.path())), Outcome::Success);
+        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
     }
 
     #[test]
     fn recursive_tests_test_failure_returns_diagnostic() {
         let dir = TempDir::new();
         dir.write("proj/main.yml", "main: 1\n_test:\n  main: 2\n"); // expects 2, gets 1
-        assert_eq!(run(&cli_with_test_dir(dir.path())), Outcome::Diagnostic);
+        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Diagnostic);
     }
 
     #[test]

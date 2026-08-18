@@ -67,18 +67,17 @@ fn stderr(out: &std::process::Output) -> String {
 }
 
 #[test]
-fn compile_success_emits_compact_json_to_stdout() {
+fn compile_success_emits_pretty_json_to_stdout() {
     let dir = TempDir::new();
     dir.write("main.yml", "x: 1\nmain:\n  a: 2\n  b: 3\n");
 
     let out = ymx(&[dir.path().join("main.yml").to_str().unwrap()]);
     assert!(out.0.status.success(), "stderr: {}", stderr(&out.0));
     let stdout = stdout(&out.0);
-    assert_eq!(
-        stdout.trim_end(),
-        r#"{"a":2,"b":3}"#,
-        "compact JSON, insertion order"
-    );
+    // JSON is pretty-printed by default (milestone 1.23)
+    assert!(stdout.contains('\n'), "pretty JSON by default: {stdout}");
+    assert!(stdout.contains("\"a\":"), "pretty: {stdout}");
+    assert!(stdout.contains("\"b\":"), "pretty: {stdout}");
 }
 
 #[test]
@@ -460,10 +459,11 @@ fn exit_code_test_malformed_block_is_one() {
 }
 
 #[test]
-fn exit_code_load_error_is_one() {
+fn exit_code_load_error_is_two() {
     let dir = TempDir::new();
     dir.write("bad.yml", "a: 1\n---\nb: 2\n");
-    assert_exit(&[dir.path().join("bad.yml").to_str().unwrap()], 1);
+    // Load errors (E001/E004/E007/E015) exit with code 2 per milestone 1.23
+    assert_exit(&[dir.path().join("bad.yml").to_str().unwrap()], 2);
 }
 
 #[test]

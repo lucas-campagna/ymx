@@ -13,6 +13,7 @@ use crate::namespace::{Definition, FileScopeStore, NamespaceStore};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Format {
     Json,
+    Compact,
     Diagnostics,
 }
 

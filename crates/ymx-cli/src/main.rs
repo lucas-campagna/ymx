@@ -8,9 +8,10 @@
 //!
 //! - `0` — success (no diagnostics)
 //! - `1` — one or more diagnostics (compile error, test failure)
-//! - `2` — CLI usage error (bad flags, missing file argument)
+//! - `2` — CLI usage error (bad flags, missing file argument) OR load error
 
 mod args;
+mod diagnostic;
 mod help;
 mod run;
 

@@ -167,10 +167,13 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
                 let raw = take_value(args, &mut i, "--format")?;
                 format = Some(match raw.as_str() {
                     "json" => Format::Json,
+                    "compact" => Format::Compact,
                     "diagnostics" => Format::Diagnostics,
                     other => {
                         return Err(ParseError {
-                            message: format!("--format: `{other}` is not `json` or `diagnostics`"),
+                            message: format!(
+                                "--format: `{other}` is not `json`, `compact`, or `diagnostics`"
+                            ),
                         })
                     }
                 });
@@ -341,9 +344,12 @@ mod tests {
     }
 
     #[test]
-    fn format_parses_json_and_diagnostics() {
+    fn format_parses_json_compact_and_diagnostics() {
         let c = cli_of(&["--format", "json", "proj/main.yml"]);
         assert_eq!(c.format, Some(Format::Json));
+
+        let c = cli_of(&["--format", "compact", "proj/main.yml"]);
+        assert_eq!(c.format, Some(Format::Compact));
 
         let c = cli_of(&["--format", "diagnostics", "proj/main.yml"]);
         assert_eq!(c.format, Some(Format::Diagnostics));

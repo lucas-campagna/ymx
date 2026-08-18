@@ -1,4 +1,4 @@
-//! `--help` / `-h` manual page (milestone 1.10, task 6).
+//! `--help` / `-h` manual page (milestone 1.10, task 6 + 1.23).
 //!
 //! A plain-text manual page printed to stdout and followed by exit `0`. Lists
 //! every CLI flag (the full task-1 surface) with its default, the
@@ -41,6 +41,8 @@ USAGE
         Print this manual page to stdout and exit 0.
 
 FLAGS
+
+=== Input & Entry ===
     --entry <component>       Component name within <file> to compile (default: main.main =
                               component main in the entry file). The entry path internally
                               is <file_stem>.<component> (always exactly 2 segments). If the
@@ -54,21 +56,19 @@ FLAGS
     --default-keyword <kw>    Override the `$default` keyword name (default: default);
                               the engine always prefixes the name with `$` internally.
 
-    --max-depth <n>           Limit on template/call recursion (default: 256). <n> is
-                              parsed as a non-negative u32; a non-integer is a usage
-                              error (exit 2, no load).
+=== Output Format ===
+    --format <json|compact|diagnostics>
+                              Output format (default: json).
+                                json         Serialize the resolved Value as pretty-printed JSON.
+                                compact      Serialize the resolved Value as compact JSON (no
+                                             indentation or newlines).
+                                diagnostics  On success, emit nothing to stdout and exit 0.
+                                             On any diagnostic, render to stderr and exit non-zero.
 
-    --pretty                  Pretty-print the JSON output (default: compact). Only
-                              meaningful with --format json.
+    --pretty                  Force pretty-printed JSON even when --format compact is set.
+                              (Default for --format json is pretty; --format compact is compact.)
 
-    --format <json|diagnostics>
-                              Output style (default: json).
-                                json         Serialize the resolved Value as JSON.
-                                diagnostics  On a successful compile, emit nothing to
-                                             stdout and exit 0; on any diagnostic,
-                                             render to stderr and exit non-zero.
-
-    --output <file>           Write JSON to <file> instead of stdout (default: stdout).
+    --output <file>           Write output to <file> instead of stdout (default: stdout).
                               The file is written ONLY on success — if any diagnostic
                               is produced during load/extract/compile, the CLI exits
                               non-zero WITHOUT creating the file. Ignored under --test
@@ -76,6 +76,7 @@ FLAGS
                               diagnostic-style error to stderr, removes any partial
                               file (best effort), and exits non-zero.
 
+=== Namespace & Templates ===
     --plain                   Promote sub-namespace components AND templates into the
                               global namespace (equivalent to _ymx.plain: true).
                               Default: false (no promotion).
@@ -89,6 +90,12 @@ FLAGS
                               value per the precedence rule; a promoted name clashing
                               with an existing global name is E004.
 
+=== Execution Limits ===
+    --max-depth <n>           Limit on template/call recursion (default: 256). <n> is
+                              parsed as a non-negative u32; a non-integer is a usage
+                              error (exit 2, no load).
+
+=== Testing ===
     --test                    Run inline `_test` cases (via ymx-test) instead of
                               compiling the entry. Emits one line per test (PASS/FAIL
                               + a brief diff on failure) and exits non-zero if any test
@@ -100,29 +107,58 @@ FLAGS
                               is a directory, tests run recursively across all YMX
                               sub-projects under that directory.
 
+=== Help ===
     --help, -h                Print this manual page to stdout and exit 0.
 
 EXIT CODES
-    0   Success — compile succeeded (json or diagnostics), or --test with every
+    0   Success — compile succeeded (json or compact), or --test with every
         test passing (including the no-_test-blocks no-op case), or --help / -h.
-    1   A runtime diagnostic or test failure — load error (E001/E004/E007/E015),
-        entry/options error (E009/E010), a malformed `_test` block (E010), a
-        failing test under --test, or any error during compile
-        (E002/E003/E005/E006/E008/E010/E011/E012/E013). E002 covers missing entry
-        components; E009 covers missing files, ambiguous stems, and invalid
-        component names. Diagnostics are
-        rendered to stderr as `[code] file:line:col (component): message`.
+    1   A compile-time diagnostic or test failure — E002/E003/E005/E006/E008/E009/
+        E010/E011/E012/E013 (unknown component, missing arg, file-scope violation,
+        ambiguous shortcut, max-depth exceeded, entry not found, invalid syntax,
+        math/type error, positional after named, array/object as direct arg).
+        Diagnostics are rendered to stderr as:
+            [code] file:line:col (component): message
     2   Usage error — missing or extra positional path, bad --max-depth, bad
         --format, unknown flag, a flag missing its value, or --plain together
         with --plain-template. Printed to stderr as `ymx: <message>`; no
         load is attempted.
 
+EXAMPLES
+    ymx main.yml              Compile main.yml, output pretty JSON to stdout
+    ymx main.yml --format compact
+                              Compile main.yml, output compact JSON
+    ymx main.yml --entry foo  Compile component `foo` from main.yml
+    ymx main.yml --test       Run tests defined in main.yml
+    ymx . --test              Run tests in all YMX projects under current directory
+    ymx main.yml -h           Show this help
+
+SHELL COMPLETION
+    Shell completion scripts are available for bash, zsh, and fish in:
+        completions/ymx.bash     (bash)
+        completions/_ymx         (zsh)
+        completions/ymx.fish     (fish)
+
+    To install:
+    - bash:  source completions/ymx.bash  # or copy to /etc/bash_completion.d/
+    - zsh:   fpath+=(completions) && compinit _ymx  # or copy to fpath
+    - fish:  completions/ymx.fish  # or copy to ~/.config/fish/completions/
+
 DIAGNOSTICS
-    Every runtime diagnostic renders to stderr as
+    Every diagnostic renders to stderr as:
         [code] file:line:col (component): message
     where `file` is the resolved host-file path (rendered as `<?>` when no
     document is implicated, e.g. malformed entry path) and `component` is the
-    name implicated (rendered as `<?>` when none).
+    name implicated (rendered as `<?> ` when none).
+
+    Common errors and guidance:
+      E001  YAML parse error — check file syntax
+      E002  Unknown component — verify the component name is defined
+      E004  Duplicate name — each component/template must have a unique name
+      E007  Reserved name — `map`, `reduce`, `merge` are built-in names
+      E008  Max depth exceeded — use --max-depth to increase limit
+      E009  Entry not found — check --entry value and file contents
+      E010  Invalid syntax — see message for details
 ";
 
 /// Render the manual page. Currently identical to [`MANUAL`] (kept as a fn
@@ -144,7 +180,6 @@ mod tests {
         "--from-keyword",
         "--default-keyword",
         "--max-depth",
-        "--pretty",
         "--format",
         "--output",
         "--plain",
@@ -183,7 +218,7 @@ mod tests {
         for marker in [
             "EXIT CODES",
             "0   Success",
-            "1   A runtime",
+            "1   A compile-time",
             "2   Usage error",
         ] {
             assert!(MANUAL.contains(marker), "manual missing `{marker}`");
