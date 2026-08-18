@@ -42,9 +42,9 @@ use indexmap::IndexMap;
 use yaml_rust2::{Yaml, YamlLoader};
 
 use ymx_config::{extract_options, CliOverrides};
+use ymx_lib::ymx_core::ir::Args;
 use ymx_lib::ymx_core::project::{Format, Options, Project};
 use ymx_lib::ymx_core::resolve::{compile, compile_component};
-use ymx_lib::ymx_core::ir::Args;
 use ymx_lib::{load_project, Diagnostic, Value};
 use ymx_test::{parse_tests, run_tests, Expected, TestResult};
 
@@ -156,9 +156,7 @@ fn serde_json_value_to_value(v: &serde_json::Value) -> Value {
 /// Convert a yaml-rust2 `Yaml` node to a `Value`. Returns `None` for types
 /// that cannot be represented (e.g. `Yaml::Alias`).
 fn yaml_to_value(yaml: &Yaml) -> Option<Value> {
-    use yaml_rust2::Yaml::{
-        Array, Hash, Null, Real, String as YamlString, Boolean, Integer,
-    };
+    use yaml_rust2::Yaml::{Array, Boolean, Hash, Integer, Null, Real, String as YamlString};
     match yaml {
         Null => Some(Value::Null),
         Boolean(b) => Some(Value::Bool(*b)),
@@ -277,9 +275,7 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
                     let docs = match YamlLoader::load_from_str(&raw) {
                         Ok(d) => d,
                         Err(e) => {
-                            eprintln!(
-                                "ymx: stdin args: could not parse as JSON or YAML: {e}"
-                            );
+                            eprintln!("ymx: stdin args: could not parse as JSON or YAML: {e}");
                             return RunOutcome::Diagnostic;
                         }
                     };
@@ -293,9 +289,7 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
                     match yaml_to_value(doc) {
                         Some(v) => v,
                         None => {
-                            eprintln!(
-                                "ymx: stdin args: could not convert YAML to value"
-                            );
+                            eprintln!("ymx: stdin args: could not convert YAML to value");
                             return RunOutcome::Diagnostic;
                         }
                     }
@@ -1188,7 +1182,8 @@ mod tests {
 
     #[test]
     fn yaml_to_value_converts_all_yaml_types() {
-        let docs = YamlLoader::load_from_str("a: 1\nb: [1, 2]\nc: true\nd: ~\ne: 1.5\nf: hello\n").unwrap();
+        let docs = YamlLoader::load_from_str("a: 1\nb: [1, 2]\nc: true\nd: ~\ne: 1.5\nf: hello\n")
+            .unwrap();
         let doc = docs.first().expect("has doc");
         let value = yaml_to_value(doc).expect("converts");
         match value {
