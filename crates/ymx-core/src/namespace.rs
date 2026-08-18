@@ -29,13 +29,15 @@ use crate::diag::{Diagnostic, FileId, Span, E004, E007, E015};
 use crate::ir::Value;
 use crate::parse::{node_to_value, Entry, Key, Node};
 
-/// The two reserved meta keys (bare form, consumed by the engine).
+/// The three reserved meta keys (bare form, consumed by the engine).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetaKey {
     /// `_ymx` — front matter (interpreted by `ymx-config`).
     Ymx,
     /// `_test` — inline tests (interpreted by `ymx-test`).
     Test,
+    /// `_use` — file imports (interpreted by `ymx-lib`).
+    Use,
 }
 
 /// A registered top-level component/template definition.
@@ -177,7 +179,8 @@ pub fn classify(full_name: &str, span: Span) -> DefClass {
         "map" | "reduce" | "merge" => DefClass::BuiltinReserved(meta),
         "_ymx" if dollar_count == 0 => DefClass::MetaBare(MetaKey::Ymx, span),
         "_test" if dollar_count == 0 => DefClass::MetaBare(MetaKey::Test, span),
-        "_ymx" | "_test" => DefClass::MetaReserved(meta),
+        "_use" if dollar_count == 0 => DefClass::MetaBare(MetaKey::Use, span),
+        "_ymx" | "_test" | "_use" => DefClass::MetaReserved(meta),
         _ => DefClass::Component(meta),
     }
 }
@@ -407,6 +410,8 @@ pub struct DocExtract {
     pub meta_ymx: Option<MetaValue>,
     /// Bare `_test` meta values (at most one per document).
     pub meta_test: Option<MetaValue>,
+    /// Bare `_use` meta values (at most one per document).
+    pub meta_use: Option<MetaValue>,
     /// Classifications rejected at load time (`E007` / `E015`), awaiting the
     /// resolved file path to be rendered. The I/O layer folds these into the
     /// `Vec<Diagnostic>` returned by `load_project`.
@@ -484,7 +489,8 @@ pub fn extract_document(file: FileId, body: &Node) -> DocExtract {
                 match kind {
                     MetaKey::Ymx if out.meta_ymx.is_none() => out.meta_ymx = Some(mv),
                     MetaKey::Test if out.meta_test.is_none() => out.meta_test = Some(mv),
-                    MetaKey::Ymx | MetaKey::Test => {
+                    MetaKey::Use if out.meta_use.is_none() => out.meta_use = Some(mv),
+                    MetaKey::Ymx | MetaKey::Test | MetaKey::Use => {
                         // A duplicate bare meta key in the same document: the
                         // first wins; the second is silently dropped (it is
                         // not a component, and meta keys are not subject to
@@ -605,6 +611,7 @@ mod tests {
     fn bare_meta_keys_are_consumed_not_e015() {
         assert!(match_meta_bare(&classify("_ymx", S), MetaKey::Ymx));
         assert!(match_meta_bare(&classify("_test", S), MetaKey::Test));
+        assert!(match_meta_bare(&classify("_use", S), MetaKey::Use));
         // Bare meta keys are not errors.
         assert!(classify("_ymx", S)
             .into_diagnostic(PathBuf::from("f.yml"))
@@ -612,22 +619,30 @@ mod tests {
         assert!(classify("_test", S)
             .into_diagnostic(PathBuf::from("f.yml"))
             .is_none());
+        assert!(classify("_use", S)
+            .into_diagnostic(PathBuf::from("f.yml"))
+            .is_none());
         // Bare meta keys are *not* file-scoped components either.
         assert!(!classify("_ymx", S).is_component());
+        assert!(!classify("_test", S).is_component());
+        assert!(!classify("_use", S).is_component());
     }
 
     #[test]
     fn leading_dollar_meta_variants_are_e015() {
         // Reading: E015 iff the effective identifier (all leading `$`s stripped)
-        // is `_ymx` or `_test` AND there is ≥1 leading `$`. So `$_ymx`, `$_test`,
-        // `$$_ymx`, `$$_test`, … are all E015; the bare `_ymx`/`_test` are
-        // consumed (MetaBare), not E015.
+        // is `_ymx` or `_test` or `_use` AND there is ≥1 leading `$`. So `$_ymx`,
+        // `$_test`, `$_use`, `$$_ymx`, `$$_test`, `$$_use`, … are all E015; the
+        // bare `_ymx`/`_test`/`_use` are consumed (MetaBare), not E015.
         assert!(match_meta_reserved(&classify("$_ymx", S)));
         assert!(match_meta_reserved(&classify("$_test", S)));
+        assert!(match_meta_reserved(&classify("$_use", S)));
         assert!(match_meta_reserved(&classify("$$_ymx", S)));
         assert!(match_meta_reserved(&classify("$$_test", S)));
+        assert!(match_meta_reserved(&classify("$$_use", S)));
         assert!(match_meta_reserved(&classify("$$$_ymx", S)));
         assert!(match_meta_reserved(&classify("$$$_test", S)));
+        assert!(match_meta_reserved(&classify("$$$_use", S)));
         let diag = classify("$_ymx", S)
             .into_diagnostic(PathBuf::from("f.yml"))
             .unwrap();
@@ -1001,5 +1016,61 @@ mod tests {
         assert_eq!(mv.value, object_value(&[("pretty", Value::Bool(true))]));
         assert!(ex.rejections.is_empty());
         assert_eq!(ex.defs.len(), 1, "main registers normally");
+    }
+
+    #[test]
+    fn bare_use_is_consumed_not_registered() {
+        let mut ex = extract(0, "_use:\n  \"*\": foo\nmain: 1\n");
+        assert_eq!(ex.defs.len(), 1, "main is the only component");
+        assert!(ex.file_scoped_defs.is_empty());
+        assert!(ex.meta_use.is_some(), "_use consumed as meta");
+        assert!(ex.meta_ymx.is_none());
+        assert!(ex.meta_test.is_none());
+        assert!(ex.rejections.is_empty());
+        let mv = ex.meta_use.take().unwrap();
+        assert_eq!(mv.file, FileId(0));
+    }
+
+    #[test]
+    fn duplicate_bare_use_in_same_document_first_wins() {
+        let mut ex = extract(
+            0,
+            "_use:\n  x: a.b\n_use:\n  y: c.d\nmain: 1\n",
+        );
+        assert!(ex.meta_use.is_some());
+        let mv = ex.meta_use.take().unwrap();
+        assert_eq!(mv.file, FileId(0));
+        assert!(ex.rejections.is_empty());
+        assert_eq!(ex.defs.len(), 1, "main registers normally");
+    }
+
+    #[test]
+    fn use_with_all_meta_in_same_file() {
+        let ex = extract(
+            0,
+            "_ymx:\n  pretty: true\n_use:\n  \"*\": foo\n_test:\n  main: 1\nmain: 5\n",
+        );
+        assert_eq!(ex.defs.len(), 1, "main still registers normally");
+        assert!(ex.meta_ymx.is_some());
+        assert!(ex.meta_use.is_some());
+        assert!(ex.meta_test.is_some());
+        assert!(ex.rejections.is_empty());
+    }
+
+    #[test]
+    fn dollar_use_variant_is_e015_not_consumed() {
+        let ex = extract(0, "$_use: 1\nmain: 2\n");
+        assert_eq!(ex.defs.len(), 1, "main registers normally");
+        assert!(ex.meta_use.is_none(), "$_use is NOT consumed as meta");
+        assert_eq!(ex.rejections.len(), 1);
+        let diag = ex
+            .rejections
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_diagnostic(PathBuf::from("f.yml"))
+            .unwrap();
+        assert_eq!(diag.code, E015);
+        assert_eq!(diag.component.as_deref(), Some("$_use"));
     }
 }
