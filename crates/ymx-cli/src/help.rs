@@ -14,6 +14,10 @@ ymx 0.1.0 — YAML → JSON compiler for YMX v1
 Usage: ymx [path] [flags]
        ymx --help | -h
 
+Stdin modes (implicit, no flag needed):
+  No path given   → stdin is the YAML script (writes to temp main.yml)
+  Path given      → stdin provides call arguments (JSON, YAML fallback)
+
 Options:
   -e, --entry <comp>       Entry component (default: main.main)
   -m, --max-depth <n>      Recursion limit (default: 256)
@@ -24,7 +28,12 @@ Options:
   -h, --help               Show this help
 
 Exit codes: 0 success | 1 diagnostic | 2 usage error
-Examples: ymx main.yml | ymx . --test | ymx main.yml --entry foo
+
+Examples:
+  ymx main.yml                       Compile a file
+  cat main.yml | ymx                 Stdin is the script (equiv to above)
+  ymx . --test                       Run inline tests
+  echo '{\"a\":1}' | ymx main.yml    Stdin provides call arguments
 ";
 
 /// Render the manual page. Currently identical to [`MANUAL`] (kept as a fn

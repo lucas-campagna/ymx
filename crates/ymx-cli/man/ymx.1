@@ -35,6 +35,20 @@ in which case it defaults to \fB.\fR (the current directory). When a directory
 is given, it is treated as the project root. When a file is given, its parent
 directory is the project root and the entry component is derived from the file
 stem.
+
+When \fBpath\fR is absent, \fBymx\fR reads the full stdin content as a YAML
+script and writes it to a temporary \fBmain.yml\fR inside a temporary project
+directory. The entry is \fBmain.main\fR (or \fB--entry\fR overrides it). A
+terminal (tty) stdin with no \fBpath\fR produces a usage error (exit 2).
+
+When \fBpath\fR is given, \fBymx\fR reads stdin as \fIcall arguments\fR for the
+entry component: the stdin content is first parsed as JSON; if that fails it
+is retried as YAML. The resulting value is converted to arguments:
+object \fB{\&...}\fR becomes named arguments \fBname=value\fR,
+array \fB[\&...]\fR becomes positional arguments \fB$0, $1, ...\fR,
+and a scalar becomes a single positional argument \fB$0\fR.
+A terminal stdin with \fBpath\fR given also produces a usage error (exit 2).
+\fB--test\fR does not read stdin in either mode.
 .TP
 .B -e, --entry <component>
 The name of the component within the entry file to compile (default:
@@ -61,30 +75,6 @@ no JSON on success; on any diagnostic it lists each error to stderr.
 .B --pretty
 Pretty-print JSON output. Implies \fB--format json\fR and forces
 indentation. Mutually exclusive with \fB--format compact\fR.
-
-.SS "Front-matter keyword overrides"
-
-These flags override the keyword names used in \fB_ymx\fR front matter. They
-are not separate CLI flags \\(en they supply values for the same
-\fBfrom_keyword\fR and \fBdefault_keyword\fR fields that \fB_ymx\fR
-configures. They exist so users can write YAML that uses alternative
-keywords without polluting the entry document\u\s-2\u\s0\s+2\u's own _ymx block:
-
-.TP
-.B --from-keyword <word>
-Override the \fBfrom\fR keyword (default: \fBfrom\fR). The entry document\u\s-2\u\s0\s+2\u's
-\fB_ymx.from_keyword\fR field sets this per-document; the CLI flag overrides it
-project-wide. Use this when a document uses a different word for the same
-concept, e.g. \fBymx . --from-keyword uses\fR to support YAML that says
-\fBuses: OtherComp\fR.
-.TP
-.B --default-keyword <word>
-Override the \fBdefault\fR keyword (default: \fBdefault\fR). The entry
-document\u\s-2\u\s0\s+2\u's \fB_ymx.default_keyword\fR field sets this per-document; the CLI
-flag overrides it project-wide. The engine prefixes $ internally. Use this
-when a document uses a different word for the shortcut-default property,
-e.g. \fBymx . --default-keyword fallback\fR to support YAML that says
-\fBfallback: $other_component\fR.
 
 .SS "Output and test"
 
@@ -490,8 +480,8 @@ component, missing argument, max-depth exceeded, type error, etc.). The
 \fB--output\fR file is not created when exiting with code 1.
 .TP
 .B 2
-Usage error: unknown flag, missing required argument, or wrong number of
-positional arguments.
+Usage error: unknown flag, missing required argument, wrong number of
+positional arguments, or stdin is a terminal when it must be a pipe.
 
 .SH EXAMPLES
 
@@ -551,10 +541,38 @@ Emit diagnostics instead of JSON (useful in CI):
 .fi
 .PP
 
-Use an alternative \fBfrom\fR keyword in the YAML source:
+Compile a YAML script from stdin (equivalent to ymx main.yml):
 .PP
 .nf
-    ymx . --from-keyword uses
+    cat main.yml | ymx
+.fi
+.PP
+
+Pass call arguments via stdin (calls component 'main' with x=1):
+.PP
+.nf
+    echo '{"x":1}' | ymx main.yml
+.fi
+.PP
+
+Pass positional arguments via stdin (binds $0=[1, 2, 3]):
+.PP
+.nf
+    echo '[1, 2, 3]' | ymx main.yml
+.fi
+.PP
+
+YAML arguments (when JSON parse fails, YAML is tried):
+.PP
+.nf
+    echo 'x: 1' | ymx main.yml
+.fi
+.PP
+
+Select a different entry component with stdin args:
+.PP
+.nf
+    echo '{"a":1}' | ymx --entry foo main.yml
 .fi
 .PP
 
