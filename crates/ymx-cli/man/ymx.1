@@ -36,7 +36,7 @@ is given, it is treated as the project root. When a file is given, its parent
 directory is the project root and the entry component is derived from the file
 stem.
 .TP
-.B --entry <component>
+.B -e, --entry <component>
 The name of the component within the entry file to compile (default:
 \fBmain\fR). The entry path is derived internally as
 \fI<file_stem>\fR.\fI<component>\fR (always exactly two segments: empty
@@ -47,13 +47,13 @@ foo\fR compiles component \fBfoo\fR from \fBmain.yml\fR, with entry path
 .SS "Compiler flags"
 
 .TP
-.B --max-depth <n>
+.B -m, --max-depth <n>
 Limit on template/call recursion (default: 256). Each recursive operation
 (inline $\fIcomp\fR(...) call, math \fIcomp\fR(...) call, bare $name
 component fallback, template step, \fBfrom\fR dispatch) is checked against
 this cap. Exceeding it raises \fBE008\fR.
 .TP
-.B --format <json|diagnostics|compact>
+.B -f, --format <json|diagnostics|compact>
 Output format. \fBjson\fR (default) emits the compiled JSON value.
 \fBcompact\fR emits compact JSON (no whitespace). \fBdiagnostics\fR emits
 no JSON on success; on any diagnostic it lists each error to stderr.
@@ -61,17 +61,6 @@ no JSON on success; on any diagnostic it lists each error to stderr.
 .B --pretty
 Pretty-print JSON output. Implies \fB--format json\fR and forces
 indentation. Mutually exclusive with \fB--format compact\fR.
-.TP
-.B --plain
-Promote sub-namespace components \fBand\fR templates into the global
-namespace. Equivalent to \fB_ymx.plain: true\fR. A promoted name that
-collides with an existing global definition raises \fBE004\fR.
-Mutually exclusive with \fB--plain-template\fR.
-.TP
-.B --plain-template
-Promote sub-namespace \fBtemplates only\fR into the global namespace.
-Equivalent to \fB_ymx.plain: template\fR. Mutually exclusive with
-\fB--plain\fR.
 
 .SS "Front-matter keyword overrides"
 
@@ -100,12 +89,12 @@ e.g. \fBymx . --default-keyword fallback\fR to support YAML that says
 .SS "Output and test"
 
 .TP
-.B --output <file>
+.B -o, --output <file>
 Write output to \fBfile\fR instead of stdout. The file is written only on
 success; on any diagnostic the CLI exits non-zero \fBwithout creating the
 file\fR.
 .TP
-.B --test
+.B -t, --test
 Run inline \fB_test\fR blocks (via \fBymx-test\fR) instead of compiling the
 entry component. When \fBpath\fR is omitted it defaults to \fB.\fR.
 When \fBpath\fR is a directory, recursively walk it and run all \fB_test\fR
@@ -216,8 +205,8 @@ Chain example:
 Calling \fBa\fR: 10 \\(-> 20 \\(-> 21 \\(-> \fB\"final: 21\"\fR.
 .PP
 Templates are namespaced by default: \fB$box\fR in \fBsubdir/\fR applies only
-to components in the \fBsubdir\fR namespace. Use \fB--plain\fR or
-\fB_ymx.plain: true\fR to promote sub-namespace names globally.
+to components in the \fBsubdir\fR namespace. Use \fB_ymx.plain: true\fR
+to promote sub-namespace names globally.
 
 .SS "Rule 6 — from property for explicit dispatch"
 The \fBfrom\fR property references another component by name, which is called
@@ -501,9 +490,8 @@ component, missing argument, max-depth exceeded, type error, etc.). The
 \fB--output\fR file is not created when exiting with code 1.
 .TP
 .B 2
-Usage error: unknown flag, missing required argument, mutually exclusive flags
-(\fB--plain\fR + \fB--plain-template\fR), or wrong number of positional
-arguments.
+Usage error: unknown flag, missing required argument, or wrong number of
+positional arguments.
 
 .SH EXAMPLES
 
@@ -539,13 +527,6 @@ Compile with a custom recursion limit:
 .PP
 .nf
     ymx main.yml --max-depth 128
-.fi
-.PP
-
-Promote sub-namespace templates to global scope:
-.PP
-.nf
-    ymx . --plain-template
 .fi
 .PP
 

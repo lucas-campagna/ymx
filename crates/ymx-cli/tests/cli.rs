@@ -264,26 +264,6 @@ fn test_flag_does_not_emit_json() {
 }
 
 #[test]
-fn plain_and_plain_template_together_errors_before_load() {
-    let dir = TempDir::new();
-    dir.write("main.yml", "main: 1\n");
-
-    let out = ymx(&[
-        "--plain",
-        "--plain-template",
-        dir.path().join("main.yml").to_str().unwrap(),
-    ]);
-    assert!(
-        !out.0.status.success(),
-        "non-zero exit on mutual-exclusion error"
-    );
-    let stderr = stderr(&out.0);
-    assert!(stderr.contains("mutually exclusive"), "stderr: {stderr}");
-    // No diagnostic rendered — the error fired before load_project.
-    assert!(!stderr.contains("E001"), "no load touched: {stderr}");
-}
-
-#[test]
 fn missing_path_is_usage_error() {
     let out = ymx(&[]);
     assert!(!out.0.status.success(), "non-zero exit on missing path");
@@ -316,8 +296,6 @@ fn help_flag_exits_zero() {
         "--pretty",
         "--format",
         "--output",
-        "--plain",
-        "--plain-template",
         "--test",
         "--help",
         "-h",
@@ -334,10 +312,6 @@ fn help_flag_exits_zero() {
                 "{arg}: manual page missing flag `{flag}`\n--- stdout ---\n{stdout}"
             );
         }
-        assert!(
-            stdout.contains("mutually exclusive"),
-            "{arg}: manual must call out --plain/--plain-template mutual exclusion"
-        );
         // Defaults documented inline.
         assert!(
             stdout.contains("main.main"),
@@ -531,27 +505,6 @@ fn exit_code_bad_format_usage_is_two() {
 #[test]
 fn exit_code_unknown_flag_usage_is_two() {
     assert_exit(&["--bogus", "/tmp/main.yml"], 2);
-}
-
-#[test]
-fn exit_code_plain_and_plain_template_usage_is_two_no_load() {
-    // Mutual exclusion fires in arg-parse, before any `load_project`. Lock
-    // the contract: exit 2 (not 1), and stderr carries the usage message,
-    // never an `E00x` diagnostic.
-    let dir = TempDir::new();
-    dir.write("main.yml", "main: 1\n");
-    let out = ymx(&[
-        "--plain",
-        "--plain-template",
-        dir.path().join("main.yml").to_str().unwrap(),
-    ]);
-    assert_eq!(out.0.status.code(), Some(2));
-    let stderr = stderr(&out.0);
-    assert!(stderr.contains("mutually exclusive"), "stderr: {stderr}");
-    assert!(
-        !stderr.contains('E'),
-        "no E00x diagnostic under usage error: {stderr}"
-    );
 }
 
 #[test]

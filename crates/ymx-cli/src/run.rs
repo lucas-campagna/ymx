@@ -488,7 +488,6 @@ mod tests {
             max_depth: None,
             pretty: None,
             format: None,
-            plain: None,
             output: None,
             test: false,
             test_dir: None,
@@ -509,7 +508,6 @@ mod tests {
             max_depth: None,
             pretty: None,
             format: None,
-            plain: None,
             output: None,
             test: true,
             test_dir: Some(dir.to_path_buf()),
@@ -524,7 +522,6 @@ mod tests {
             max_depth: None,
             pretty: None,
             format: None,
-            plain: None,
             output: None,
             test: false,
             test_dir: None,
@@ -656,7 +653,6 @@ mod tests {
         assert_eq!(ov.max_depth, None);
         assert_eq!(ov.pretty, None);
         assert_eq!(ov.format, None);
-        assert_eq!(ov.plain, None);
     }
 
     #[test]

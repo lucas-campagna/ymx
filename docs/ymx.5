@@ -257,8 +257,8 @@ a:    10
 Calling `a`: 10 -> 20 -> 21 -> `"final: 21"`.
 
 Templates are namespaced by default: `$box` in `subdir/` applies only to
-components in the `subdir` namespace. Use `--plain` or `_ymx.plain: true` to
-promote sub-namespace names globally.
+components in the `subdir` namespace. Use `_ymx.plain: true` to promote
+sub-namespace names globally.
 
 Template chain lookup consults the component's own namespace first, then global.
 A broken link stops the chain (no skip to `$$a` if `$a` is absent).

@@ -32,9 +32,7 @@ pub struct CliOverrides {
     pub pretty: Option<bool>,
     /// `--format <json|diagnostics>` override (default `Format::Json`).
     pub format: Option<Format>,
-    /// `--plain` / `--plain-template` override (default
-    /// `PlainMode::False`). `--plain` maps to `PlainMode::All`,
-    /// `--plain-template` to `PlainMode::TemplatesOnly`.
+    /// Plain mode override (set via `_ymx` front matter, not CLI).
     pub plain: Option<PlainMode>,
 }
 

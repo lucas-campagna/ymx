@@ -4,23 +4,20 @@
 //! parser keeps the dependency tree minimal. Recognises the flag surface in
 //! PRD §CLI:
 //!   `ymx <path> [flags]`
-//!   --entry <path>      --max-depth <n>        --pretty
-//!   --format <json|diagnostics>
-//!   --output <file>     --plain                 --plain-template
-//!   --test              --help | -h
+//!   -e, --entry <path>  -m, --max-depth <n>   --pretty
+//!   -f, --format <json|diagnostics>
+//!   -o, --output <file>
+//!   -t, --test           -h, --help
 //!
-//! `--plain` and `--plain-template` are mutually exclusive: providing both
-//! is a usage error (the parser returns [`Err`](Result::Err)
-//! <[`ParseError`]>) surfaced before any `load_project` call. Every flag maps
-//! to `None` when absent, so the [`ParsedCli`] is a 1:1 source for
-//! `ymx_config::CliOverrides` via [`ParsedCli::overrides`]. The
+//! Every flag maps to `None` when absent, so the [`ParsedCli`] is a 1:1 source
+//! for `ymx_config::CliOverrides` via [`ParsedCli::overrides`]. The
 //! orchestration-only concerns (`path`, `output`, `test`) stay on
-//! [`ParsedCli`] and never reach `CliOverrides`.
+//! [`ParsedCli`] and never reach `ymx_config::CliOverrides`.
 
 use std::path::PathBuf;
 
 use ymx_config::CliOverrides;
-use ymx_lib::{ymx_core::project::PlainMode, Format};
+use ymx_lib::ymx_core::project::Format;
 
 /// The parsed command line: the file positional and per-flag inputs
 /// (`None` when the flag was absent — i.e. defer to `_ymx` then engine
@@ -43,9 +40,6 @@ pub struct ParsedCli {
     pub pretty: Option<bool>,
     /// `--format <json|diagnostics>` (default `json`).
     pub format: Option<Format>,
-    /// `--plain` (→ `PlainMode::All`) or `--plain-template`
-    /// (→ `PlainMode::TemplatesOnly`); mutually exclusive.
-    pub plain: Option<PlainMode>,
     /// `--output <file>` orchestration concern — never consumed by
     /// `extract_options`.
     pub output: Option<PathBuf>,
@@ -85,7 +79,7 @@ impl ParsedCli {
             max_depth: self.max_depth,
             pretty: self.pretty,
             format: self.format.clone(),
-            plain: self.plain.clone(),
+            plain: None,
         }
     }
 }
@@ -112,46 +106,32 @@ pub enum ParseOutcome {
 /// Pass `args = &argv[1..]` (the program name is not consumed). The parser
 /// walks left-to-right, recognising flags in any order interspersed with the
 /// single required positional. `--flag value` is the supported form
-/// (`--flag=value` is rejected — keep it simple). `--plain` together with
-/// `--plain-template` is detected after the full walk so order does not
-/// matter; the error fires before any `load_project` call (per the milestone
-/// mutual-exclusion sub-bullet).
+/// (`--flag=value` is rejected — keep it simple).
 pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     let mut positionals: Vec<PathBuf> = Vec::new();
     let mut entry: Option<String> = None;
     let mut max_depth: Option<u32> = None;
     let mut pretty: Option<bool> = None;
     let mut format: Option<Format> = None;
-    let mut plain: Option<PlainMode> = None;
     let mut output: Option<PathBuf> = None;
     let mut test = false;
-    let mut saw_plain = false;
-    let mut saw_plain_template = false;
 
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
         match arg {
             "-h" | "--help" => return Ok(ParseOutcome::Help),
-            "--test" => test = true,
+            "-t" | "--test" => test = true,
             "--pretty" => pretty = Some(true),
-            "--plain" => {
-                saw_plain = true;
-                plain = Some(PlainMode::All);
-            }
-            "--plain-template" => {
-                saw_plain_template = true;
-                plain = Some(PlainMode::TemplatesOnly);
-            }
-            "--entry" => entry = Some(take_value(args, &mut i, "--entry")?),
-            "--max-depth" => {
+            "-e" | "--entry" => entry = Some(take_value(args, &mut i, "--entry")?),
+            "-m" | "--max-depth" => {
                 let raw = take_value(args, &mut i, "--max-depth")?;
                 let n: u32 = raw.parse().map_err(|_| ParseError {
                     message: format!("--max-depth: `{raw}` is not a non-negative integer"),
                 })?;
                 max_depth = Some(n);
             }
-            "--format" => {
+            "-f" | "--format" => {
                 let raw = take_value(args, &mut i, "--format")?;
                 format = Some(match raw.as_str() {
                     "json" => Format::Json,
@@ -166,7 +146,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
                     }
                 });
             }
-            "--output" => {
+            "-o" | "--output" => {
                 let raw = take_value(args, &mut i, "--output")?;
                 output = Some(PathBuf::from(raw));
             }
@@ -185,12 +165,6 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
             }
         }
         i += 1;
-    }
-
-    if saw_plain && saw_plain_template {
-        return Err(ParseError {
-            message: "`--plain` and `--plain-template` are mutually exclusive".to_string(),
-        });
     }
 
     // When --test is given, 0 positionals is acceptable (defaults to ".")
@@ -228,7 +202,6 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         max_depth,
         pretty,
         format,
-        plain,
         output,
         test,
         test_dir,
@@ -275,7 +248,6 @@ mod tests {
         assert_eq!(c.max_depth, None);
         assert_eq!(c.pretty, None);
         assert_eq!(c.format, None);
-        assert_eq!(c.plain, None);
         assert_eq!(c.output, None);
         assert!(!c.test);
     }
@@ -342,30 +314,6 @@ mod tests {
     fn output_parses_path() {
         let c = cli_of(&["--output", "out.json", "proj/main.yml"]);
         assert_eq!(c.output.as_deref(), Some(std::path::Path::new("out.json")));
-    }
-
-    #[test]
-    fn plain_and_plain_template_set_mode() {
-        let c = cli_of(&["--plain", "proj/main.yml"]);
-        assert_eq!(c.plain, Some(PlainMode::All));
-
-        let c = cli_of(&["--plain-template", "proj/main.yml"]);
-        assert_eq!(c.plain, Some(PlainMode::TemplatesOnly));
-    }
-
-    #[test]
-    fn plain_and_plain_template_together_are_rejected() {
-        let err = err_of(&["--plain", "--plain-template", "proj/main.yml"]);
-        assert!(err.message.contains("mutually exclusive"));
-
-        let err = err_of(&["--plain-template", "--plain", "proj/main.yml"]);
-        assert!(err.message.contains("mutually exclusive"));
-    }
-
-    #[test]
-    fn plain_may_repeat_without_changing_mode() {
-        let c = cli_of(&["--plain", "--plain", "proj/main.yml"]);
-        assert_eq!(c.plain, Some(PlainMode::All));
     }
 
     #[test]
@@ -467,7 +415,6 @@ mod tests {
             "--pretty",
             "--format",
             "diagnostics",
-            "--plain",
             "proj/main.yml",
         ]);
         let ov = c.overrides();
@@ -476,13 +423,6 @@ mod tests {
         assert_eq!(ov.max_depth, Some(8));
         assert_eq!(ov.pretty, Some(true));
         assert_eq!(ov.format, Some(Format::Diagnostics));
-        assert_eq!(ov.plain, Some(PlainMode::All));
-    }
-
-    #[test]
-    fn overrides_plain_template_maps_to_templates_only() {
-        let c = cli_of(&["--plain-template", "proj/main.yml"]);
-        assert_eq!(c.overrides().plain, Some(PlainMode::TemplatesOnly));
     }
 
     #[test]

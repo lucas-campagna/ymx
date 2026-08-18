@@ -15,16 +15,13 @@ Usage: ymx [path] [flags]
        ymx --help | -h
 
 Options:
-  --entry <comp>       Entry component (default: main.main)
-  --format <fmt>       Output format: json, compact, or diagnostics (default: json)
-  --pretty             Force pretty JSON with --format compact
-  --output <file>      Write to file instead of stdout
-  --plain              Promote sub-namespace names to global (mutually exclusive
-                       with --plain-template)
-  --plain-template     Promote sub-namespace templates only (mutually exclusive
-                       with --plain)
-  --max-depth <n>      Recursion limit (default: 256)
-  --test               Run inline `_test` blocks instead of compiling
+  -e, --entry <comp>       Entry component (default: main.main)
+  -m, --max-depth <n>      Recursion limit (default: 256)
+  -f, --format <fmt>       Output format: json, compact, or diagnostics (default: json)
+      --pretty             Force pretty JSON with -f compact
+  -o, --output <file>      Write to file instead of stdout
+  -t, --test               Run inline `_test` blocks instead of compiling
+  -h, --help               Show this help
 
 Exit codes: 0 success | 1 diagnostic | 2 usage error
 Examples: ymx main.yml | ymx . --test | ymx main.yml --entry foo
@@ -45,16 +42,19 @@ mod tests {
     /// is the in-crate content guard; the binary-level `--help` wiring is
     /// exercised by `tests/cli.rs`.
     const EXPECTED_FLAGS: &[&str] = &[
+        "-e",
         "--entry",
+        "-m",
         "--max-depth",
+        "-f",
         "--format",
-        "--output",
-        "--plain",
-        "--plain-template",
-        "--test",
-        "--help",
-        "-h",
         "--pretty",
+        "-o",
+        "--output",
+        "-t",
+        "--test",
+        "-h",
+        "--help",
     ];
 
     #[test]
@@ -62,14 +62,6 @@ mod tests {
         for flag in EXPECTED_FLAGS {
             assert!(MANUAL.contains(flag), "manual missing flag `{flag}`");
         }
-    }
-
-    #[test]
-    fn manual_calls_out_mutual_exclusion() {
-        assert!(
-            MANUAL.contains("mutually exclusive"),
-            "manual must call out --plain/--plain-template mutual exclusion"
-        );
     }
 
     #[test]
