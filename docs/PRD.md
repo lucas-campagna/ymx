@@ -359,12 +359,13 @@ Tests are **first-class**: every scenario lives in `tests/cases/rule-NN/<scenari
 
 ```
 tests/cases/rule-NN/<scenario>/
-├── main.yml        # the entry document (defines the `_test` block; may define `_ymx`; defines main only if a test targets it)
+├── main.yml        # the entry document (defines the `_test` block; may define `_ymx`; may define `_test._build_error`; defines main only if a test targets it)
 ├── <other>.yml     # additional documents in the same project (multi-file scenarios)
 └── subdir/         # sub-namespace documents
 ```
 
 - Every scenario must define at least one `_test` entry. A scenario asserts either a value (`Expected::Value`) or a diagnostic (`Expected::Error`); the `error` variant may assert codes that arise **after** a successful `load_project` — option-resolution (`E009`, the unknown/invalid-`_ymx`-field part of `E010`) and target-compilation (`E002`, `E003`, `E005`, `E006`, `E008`, the call-site / string-escape / math-identifier / mixed-shape-chain parts of `E010`, `E011`, `E012`, `E013`). Load-time codes (`E001`, `E004`, `E007`, `E015`) are not `_test`-driveable because `load_project` is all-or-nothing (see *Reach of the error variant*).
+- The `_test._build_error: <code>` key asserts that `load_project` **or** `extract_options` fails with the given diagnostic code — a matching diagnostic is a PASS, a mismatch or unexpected success is a FAIL. This makes `E009` (entry not found), the invalid-`_ymx`-field part of `E010`, and all other load/option-time codes `_test`-driveable without silently skipping them. The shape mirrors `Expected::Error` from regular `_test` assertions; when `_build_error` is set, no `result`/`error` assertions may appear in the same `_test` block.
 - The only diagnostics that are **not** `_test`-driveable by construction are produced by parsing the `_test` block itself (the malformed-`_test`-block part of `E010`) and YAML-parse failures (`E001`) of the document that hosts the `_test` block — both yield an unreadable `_test`. Together with the other load-time codes (`E004`, `E007`, `E015`) they are exercised by ordinary crate `#[test]` unit tests with inline YAML snippets. The test crate `ymx-test` exposes enough of `parse_tests`/`run_tests` to drive these where convenient.
 - `_ymx` in a scenario's entry document sets non-default flags the rule needs (e.g. `max_depth` for an `E008` case, a custom `from_keyword` for rule 6 keyword-override scenarios, or `plain: template` / `plain: true` for namespace-promotion scenarios).
 - Multi-file / namespace / file-scope scenarios add documents and subdirectories; `_test` targets must be components in the same document as the `_test` block.

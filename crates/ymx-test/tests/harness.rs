@@ -5,10 +5,11 @@
 //! Per scenario (PRD §Testing): `ymx_lib::load_project` ->
 //! `ymx_config::extract_options` with `CliOverrides::default_for_tests()` ->
 //! `ymx_test::parse_tests` + `ymx_test::run_tests`. A scenario is a FAIL if
-//! loading, option extraction, or `_test` parsing errors (load-time codes are
-//! not `_test`-driveable — invariant #2), or if any test result is not
-//! `passed`. Failures are collected across all scenarios and asserted zero at
-//! the end, so a single run reports every failing scenario.
+//! loading or option extraction fails unexpectedly, if `parse_tests` errors,
+//! or if any test result is not `passed`. The `_test._build_error` key
+//! handles expected load/option-time failures (see PRD §Testing). Failures
+//! are collected across all scenarios and asserted zero at the end, so a
+//! single run reports every failing scenario.
 //!
 //! The `tests/cases` directory does not exist yet (scenarios land in milestone
 //! 1.11); with zero scenarios the harness passes trivially.
@@ -63,62 +64,85 @@ fn sorted_dirs(dir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// Returns true when `dir/main.yml` has a top-level `_ymx._test: error` key,
-/// marking the scenario as an expected-error demonstration.
-fn is_error_scenario(dir: &Path) -> bool {
+/// Returns the expected build error code from `dir/main.yml`'s top-level
+/// `_test._build_error` key, or `None` if not present.
+fn build_error_code(dir: &Path) -> Option<String> {
     let main_yml = dir.join("main.yml");
     let Ok(contents) = std::fs::read_to_string(&main_yml) else {
-        return false;
+        return None;
     };
     let Ok(docs) = YamlLoader::load_from_str(&contents) else {
-        return false;
+        return None;
     };
-    let Some(ymx) = docs.first().and_then(|doc| doc.as_hash().cloned()) else {
-        return false;
+    let Some(Yaml::Hash(top)) = docs.first().cloned() else {
+        return None;
     };
-    let Some(Yaml::Hash(ymx_inner)) = ymx.get(&Yaml::String("_ymx".into())) else {
-        return false;
+    let Some(Yaml::Hash(test_block)) = top.get(&Yaml::String("_test".into())) else {
+        return None;
     };
-    matches!(ymx_inner.get(&Yaml::String("_test".into())), Some(Yaml::String(s)) if s == "error")
+    let Some(Yaml::String(code)) = test_block.get(&Yaml::String("_build_error".into())) else {
+        return None;
+    };
+    Some(code.clone())
 }
 
 /// Run one scenario's full pipeline, appending a rendered failure description
 /// per problem found.
-///
-/// Scenarios marked with `_ymx._test: error` in their `main.yml` are
-/// expected-error demonstrations (load-time failures in `extract_options`).
-/// The harness silently skips them rather than treating them as harness
-/// failures, since invariant #2 bars load-time codes from `_test`-driven
-/// assertion.
 fn run_scenario(dir: &Path, failures: &mut Vec<String>) {
     let name = dir.display().to_string();
-
-    // Skip expected-error scenarios: `_ymx._test: error` signals that the
-    // scenario intentionally fails at load/option-extraction time.
-    if is_error_scenario(dir) {
-        return;
-    }
+    let build_error = build_error_code(dir);
 
     let project = match ymx_lib::load_project(dir) {
         Ok(project) => project,
         Err(diags) => {
-            failures.push(format!(
-                "{name}: load_project failed:\n{}",
-                render_diags(&diags)
-            ));
+            if let Some(ref expected_code) = build_error {
+                if diags.iter().any(|d| d.code == *expected_code) {
+                    return; // expected error — PASS
+                }
+                failures.push(format!(
+                    "{name}: load_project failed with {expected_code} expected, but got:\n{}",
+                    render_diags(&diags)
+                ));
+            } else {
+                failures.push(format!(
+                    "{name}: load_project failed:\n{}",
+                    render_diags(&diags)
+                ));
+            }
             return;
         }
     };
+
     let opts = match ymx_config::extract_options(&project, &CliOverrides::default_for_tests()) {
         Ok(opts) => opts,
         Err(diags) => {
-            failures.push(format!(
-                "{name}: extract_options failed:\n{}",
-                render_diags(&diags)
-            ));
+            if let Some(ref expected_code) = build_error {
+                if diags.iter().any(|d| d.code == *expected_code) {
+                    return; // expected error — PASS
+                }
+                failures.push(format!(
+                    "{name}: extract_options failed with {expected_code} expected, but got:\n{}",
+                    render_diags(&diags)
+                ));
+            } else {
+                failures.push(format!(
+                    "{name}: extract_options failed:\n{}",
+                    render_diags(&diags)
+                ));
+            }
             return;
         }
     };
+
+    // If `_build_error` was set but we reached `parse_tests`, the scenario was
+    // supposed to fail at load/extract but didn't — that's a failure.
+    if build_error.is_some() {
+        failures.push(format!(
+            "{name}: _build_error was set but load and extract_options succeeded",
+        ));
+        return;
+    }
+
     if let Err(diags) = ymx_test::parse_tests(&project) {
         failures.push(format!(
             "{name}: parse_tests failed:\n{}",
@@ -126,6 +150,7 @@ fn run_scenario(dir: &Path, failures: &mut Vec<String>) {
         ));
         return;
     }
+
     for result in ymx_test::run_tests(&project, &opts) {
         if !result.passed {
             failures.push(format!(

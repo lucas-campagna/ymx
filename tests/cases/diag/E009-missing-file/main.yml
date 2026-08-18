@@ -1,3 +1,4 @@
-# E009: no main.yml or main.yaml in this directory — file not found.
-_ymx:
-  _test: error
+# E009: both main.yml and main.yaml exist — ambiguous stem.
+# resolve_entry finds two candidates and returns E009 before checking components.
+_test:
+  _build_error: E009
