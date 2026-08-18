@@ -88,19 +88,25 @@ Every diagnostic renders to stderr as `[code] file:line:col (component): message
 
 ## Multi-file projects
 
-A project is a directory. Namespaces are directory-scoped:
+A project consists of a single **entry file** plus any files it references via the `_use` directive. Loading is explicit and import-based — no automatic recursive directory walk by default.
 
-- Top-level files in the project root share one global namespace.
-- Subdirectories form sub-namespaces, accessed via a dotted path (e.g. `subdir.comp`).
-- Two definitions of the same component name in the same namespace are a hard error (`E004`).
-- Each `.yml` / `.yaml` file is one document. Multi-document YAML streams (`---`) inside a single file are not supported in v1 (`E001`). YAML anchors (`&`) and aliases (`*`) are resolved by the parser and inlined before YMX sees a value; explicit YAML tags (`!!str`, `!!int`, …) are ignored. Complex mapping keys and YAML merge keys (`<<`) are not supported in v1 (`E001`).
-- A component or template whose name starts with `_` is restricted to file scope: it does not participate in the namespace merge and is not visible from other documents (cross-document reference is `E005`).
+**`_use` — explicit file imports.** `_use` is a meta key (like `_ymx`, `_test`). It lives in the entry file's document and/or in any file loaded via `_use`. It comes in three forms:
 
-> Files are loaded in lexicographic path order. The global namespace is the union of all non-`_` definitions across the root-level files; each subdirectory contributes a sub-namespace identified by its relative dotted path. A definition lives in the namespace of the directory containing its file. `from: subdir.comp` resolves `comp` in the `subdir` namespace, raising `E002` if absent. The **entry path** (see *Terminology* / CLI `--entry`) is a separate, file-path-based resolution that pinpoints one file + one component for compilation and front-matter selection; it does **not** use the namespace merge.
+- **`*`** (bare string `_use: *`): recursive wildcard — walk all `.yml`/`.yaml` files under the entry file's directory, skipping `.git`, hidden directories, and subdirectories containing no YAML files directly. This is the default when no `_use` is present.
+- **Wildcard object** (`_use: {"*": "foo"}`): import all public (non-`_`-prefixed) components and templates from `foo.yml` (or `foo.yaml`) into the global namespace, keeping their original names. The file stem `foo` resolves with the same E009 rules as the entry path.
+- **Named imports** (`_use: {x: "foo.bar"}`): import component `bar` from `foo.yml` and make it available as `x` in the global namespace. The RHS is `<file>.<component>` — the file stem must resolve to exactly one `.yml`/`.yaml` file (E009 on ambiguity or missing); the component must exist in that file (E002). Multiple files may define the same component name internally; renaming on import prevents namespace collisions.
+
+All imported components land in the **entry's global namespace**. File-scoped components (`_`-prefixed) are never importable (E005). Components may be renamed on import, so two imported files may both define `main` internally without conflict — as long as the local aliases differ.
+
+**Transitive `_use`**: an imported file's own `_use` is also processed. If `main.yml` imports `utils.yml` and `utils.yml` imports `math.yml`, all components from `math.yml` are available in `main`'s global namespace too. Cycles are detected and raise `E001`.
+
+**Path syntax**: the dotted path in `_use` values (`foo.bar`) follows the same `<file>.<component>` notation as `from:` — the file stem is the first segment, the component is the last. Only the global namespace is reachable via `_use`; sub-namespace prefixes are not allowed.
+
+> **Backward compatibility.** When no `_use` key is present in the entry file, the engine behaves as if `_use: *` were given — a recursive walk of the entry file's directory, with the same filtering rules as the previous automatic behaviour. This means existing single-file projects continue to work unchanged.
 
 ## Project metadata
 
-A document may carry two reserved **meta keys** at its top level — `_ymx` (front matter) and `_test` (tests). They are not components (see *Reserved names*); `ymx-core` strips them from the namespace and stores their raw parsed values on the `Project`, and the `ymx-config` / `ymx-test` crates interpret them. A document with two top-level `_ymx` (or `_test`) keys keeps the first and ignores the rest; meta keys are consumed, not registered, so E004 (duplicate name) does not apply.
+A document may carry three reserved **meta keys** at its top level — `_ymx` (front matter), `_test` (tests), and `_use` (file imports). They are not components (see *Reserved names*); `ymx-core` strips them from the namespace and stores their raw parsed values on the `Project`, and the `ymx-config` / `ymx-test` / `ymx-lib` crates interpret them. A document with two top-level `_ymx` (or `_test` or `_use`) keys keeps the first and ignores the rest; meta keys are consumed, not registered, so E004 (duplicate name) does not apply.
 
 ### `_ymx` — front matter
 
@@ -148,6 +154,18 @@ A document may carry two reserved **meta keys** at its top level — `_ymx` (fro
 **Reach of the error variant.** `load_project` is **all-or-nothing**: any load-time diagnostic aborts with `Err` and no `Project` is produced, so `run_tests` never runs for a project that fails to load. The error variant therefore asserts codes that arise **after** a successful load — option-resolution (`E009`, the unknown/invalid-`_ymx`-field part of `E010`) and target-compilation (`E002`, `E003`, `E005`, `E006`, `E008`, the call-site / string-escape / math-identifier / mixed-shape-chain parts of `E010`, `E011`, `E012`, `E013`). Load-time codes (`E001`, `E004`, `E007`, `E015`) are **not** `_test`-driveable (the project that would surface them never loads). Matching is by code only: a test passes iff some diagnostic observed across the harness's pipeline (`extract_options` → `compile_component` of the test's target, run against an already-loaded `Project`) has `code` equal to the asserted code.
 
 > Diagnostics that are unreachable by construction — the malformed-`_test`-block case of `E010`, and YAML-parse failures (`E001`) of the document that hosts the `_test` block (an un-parseable carrier file is unreadable), plus all other load-time codes (`E004`, `E007`, `E015`) — are exercised by ordinary crate `#[test]` unit tests with inline YAML snippets (see *Testing*). Every other code is reachable: option-resolution and target-compilation errors fire after `_test` is parsed, against the loaded `Project`.
+
+### `_use` — file imports
+
+`_use` is a mapping of explicit file imports. Its value has three forms:
+
+- **Bare `*`**: `_use: *` — recursive wildcard. The entry file's directory is walked for all `.yml`/`.yaml` files (same filter as the legacy behaviour: skip `.git`, skip hidden directories, skip subdirectories with no YAML files directly). All public components/templates found are added to the entry's global namespace.
+- **Wildcard string**: `_use: {"*": "foo"}` — import all public components and templates from `foo.yml` into the global namespace, keeping their original names.
+- **Named entries**: `_use: {x: "foo.bar", ...}` — for each `alias: "file.component"`, import `component` from `file.yml` and register it under `alias` in the global namespace. The file must exist and the component must be defined (E002 if not). Multiple files may define the same component internally; renaming prevents collisions.
+
+All imported components land in the **global namespace** of the entry file. File-scoped components (`_`-prefixed) cannot be imported (E005). If an imported file has its own `_use`, that is processed too (transitive imports). A cycle in the import graph raises `E001`.
+
+Only the **entry file's** `_use` and those of its transitively imported files are processed. `_use` in other files (not imported) is ignored.
 
 ## CLI
 
