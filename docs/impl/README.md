@@ -40,9 +40,9 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.18 | `done` | Rule 18: `$` math shorthand property-key modifier | ymx-core | [1.18-math-shorthand.md](1.18-math-shorthand.md) | 1.6 |
 | 1.19 | `done` | Rule 17: `?` optional/default-merge property-key modifier | ymx-core | [1.19-optional-merge.md](1.19-optional-merge.md) | 1.6 |
 | 1.20 | `done` | Rule 17+18: `?$` optional property with math-evaluated default | ymx-core | [1.20-combination.md](1.20-combination.md) | 1.18, 1.19 |
-| 1.21 | `planned` | Extended test scenario suite | tests/ | [1.21-scenarios.md](1.21-scenarios.md) | 1.20 |
-| 1.22 | `planned` | Documentation hardening | (docs) | [1.22-documentation.md](1.22-documentation.md) | 1.20 |
-| 1.23 | `planned` | CLI ergonomics pass | ymx-cli | [1.23-cli-ergonomics.md](1.23-cli-ergonomics.md) | 1.20 |
+| 1.21 | `done` | Extended test scenario suite | tests/ | [1.21-scenarios.md](1.21-scenarios.md) | 1.20 |
+| 1.22 | `done` | Documentation hardening | (docs) | [1.22-documentation.md](1.22-documentation.md) | 1.20 |
+| 1.23 | `done` | CLI ergonomics pass | ymx-cli | [1.23-cli-ergonomics.md](1.23-cli-ergonomics.md) | 1.20 |
 
 ## Cross-cutting notes
 
