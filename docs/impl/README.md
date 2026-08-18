@@ -43,6 +43,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.21 | `done` | Extended test scenario suite | tests/ | [1.21-scenarios.md](1.21-scenarios.md) | 1.20 |
 | 1.22 | `done` | Documentation hardening | (docs) | [1.22-documentation.md](1.22-documentation.md) | 1.20 |
 | 1.23 | `done` | CLI ergonomics pass | ymx-cli | [1.23-cli-ergonomics.md](1.23-cli-ergonomics.md) | 1.20 |
+| 1.24 | `planned` | CLI stdin support (script and args) | ymx-cli | [1.24-stdin-cli.md](1.24-stdin-cli.md) | 1.23 |
 
 ## Cross-cutting notes
 

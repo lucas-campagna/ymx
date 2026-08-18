@@ -183,6 +183,7 @@ dependencies = [
 name = "ymx-cli"
 version = "0.1.0"
 dependencies = [
+ "indexmap",
  "serde_json",
  "yaml-rust2",
  "ymx-config",

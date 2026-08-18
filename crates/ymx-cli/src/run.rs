@@ -35,12 +35,16 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use indexmap::IndexMap;
 
 use yaml_rust2::{Yaml, YamlLoader};
 
 use ymx_config::{extract_options, CliOverrides};
 use ymx_lib::ymx_core::project::{Format, Options, Project};
-use ymx_lib::ymx_core::resolve::compile;
+use ymx_lib::ymx_core::resolve::{compile, compile_component};
+use ymx_lib::ymx_core::ir::Args;
 use ymx_lib::{load_project, Diagnostic, Value};
 use ymx_test::{parse_tests, run_tests, Expected, TestResult};
 
@@ -61,34 +65,180 @@ pub enum RunOutcome {
     /// A compile-time diagnostic or test failure was rendered to stderr.
     /// Exit code 1 per PRD §Exit codes.
     Diagnostic,
+    /// A CLI usage error (e.g. empty stdin in script mode).
+    /// Exit code 2 per PRD §Exit codes.
+    UsageError,
 }
 
 impl RunOutcome {
     /// Map to the process exit code:
     /// - `0` for [`RunOutcome::Success`]
-    /// - `2` for [`RunOutcome::LoadError`]
+    /// - `2` for [`RunOutcome::LoadError`] / [`RunOutcome::UsageError`]
     /// - `1` for [`RunOutcome::Diagnostic`]
     pub fn to_exit_code(self) -> ExitCode {
         match self {
             RunOutcome::Success => ExitCode::SUCCESS,
-            RunOutcome::LoadError => ExitCode::from(2),
+            RunOutcome::LoadError | RunOutcome::UsageError => ExitCode::from(2),
             RunOutcome::Diagnostic => ExitCode::from(1),
         }
     }
 }
 
+/// Panic-safe temporary project directory for stdin-as-script mode.
+/// The directory is removed when this struct drops (best-effort on Windows).
+struct TempProjDir(PathBuf);
+
+impl TempProjDir {
+    fn new() -> Self {
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let nonce = format!(
+            "ymx-stdin-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        );
+        let path = std::env::temp_dir().join(nonce);
+        std::fs::create_dir_all(&path).expect("create temp dir");
+        TempProjDir(path)
+    }
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempProjDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Convert a parsed stdin Value to `Args` for `compile_component`.
+fn value_to_args(value: &Value) -> Args {
+    match value {
+        Value::Object(m) => {
+            let mut pairs: Vec<(String, Value)> =
+                m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            Args::Named(pairs)
+        }
+        Value::Array(a) => Args::Positional(a.clone()),
+        other => Args::Positional(vec![other.clone()]),
+    }
+}
+
+/// Convert a `serde_json::Value` to a `ymx_lib::Value`.
+fn serde_json_value_to_value(v: &serde_json::Value) -> Value {
+    match v {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(b) => Value::Bool(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else if let Some(f) = n.as_f64() {
+                Value::Float(f)
+            } else {
+                Value::Null
+            }
+        }
+        serde_json::Value::String(s) => Value::String(s.clone()),
+        serde_json::Value::Array(arr) => {
+            Value::Array(arr.iter().map(serde_json_value_to_value).collect())
+        }
+        serde_json::Value::Object(m) => {
+            let map: IndexMap<String, Value> = m
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json_value_to_value(v)))
+                .collect();
+            Value::Object(map)
+        }
+    }
+}
+
+/// Convert a yaml-rust2 `Yaml` node to a `Value`. Returns `None` for types
+/// that cannot be represented (e.g. `Yaml::Alias`).
+fn yaml_to_value(yaml: &Yaml) -> Option<Value> {
+    use yaml_rust2::Yaml::{
+        Array, Hash, Null, Real, String as YamlString, Boolean, Integer,
+    };
+    match yaml {
+        Null => Some(Value::Null),
+        Boolean(b) => Some(Value::Bool(*b)),
+        Integer(i) => Some(Value::Int(*i)),
+        Real(r) => {
+            if let Ok(i) = r.parse::<i64>() {
+                Some(Value::Int(i))
+            } else if let Ok(f) = r.parse::<f64>() {
+                Some(Value::Float(f))
+            } else {
+                Some(Value::String(r.clone()))
+            }
+        }
+        YamlString(s) => Some(Value::String(s.clone())),
+        Array(arr) => {
+            let vals: Option<Vec<Value>> = arr.iter().map(yaml_to_value).collect();
+            vals.map(Value::Array)
+        }
+        Hash(h) => {
+            let mut map = IndexMap::new();
+            for (k, v) in h.iter() {
+                let key = match k {
+                    YamlString(s) => s.clone(),
+                    Integer(i) => i.to_string(),
+                    _ => continue,
+                };
+                if let Some(val) = yaml_to_value(v) {
+                    map.insert(key, val);
+                }
+            }
+            Some(Value::Object(map))
+        }
+        _ => None,
+    }
+}
+
 /// Drive the canonical pipeline against `cli`.
-pub fn run(cli: &ParsedCli) -> RunOutcome {
-    // Recursive directory mode (--test with a directory path)
+pub fn run(cli: ParsedCli) -> RunOutcome {
+    // Recursive directory mode (--test with a directory path) — unaffected by stdin.
     if let Some(ref test_dir) = cli.test_dir {
         return run_recursive_tests(test_dir);
     }
 
-    let project_root = cli
-        .path
+    // Handle stdin-as-script mode: read stdin as the YAML document.
+    // _temp_dir is kept alive for the entire function so Drop runs on return/panic.
+    let _temp_dir: Option<TempProjDir>;
+    let effective_path: PathBuf;
+
+    if cli.stdin_is_script {
+        let raw = match std::io::read_to_string(std::io::stdin()) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("ymx: failed to read stdin: {e}");
+                return RunOutcome::Diagnostic;
+            }
+        };
+        if raw.is_empty() {
+            eprintln!("ymx: missing script — no path given and no content provided via stdin — usage: `ymx [path] [flags]`");
+            return RunOutcome::UsageError;
+        }
+        let temp = TempProjDir::new();
+        let script_path = temp.path().join("main.yml");
+        if let Err(e) = std::fs::write(&script_path, &raw) {
+            eprintln!("ymx: failed to write temp script: {e}");
+            return RunOutcome::Diagnostic;
+        }
+        // Keep temp_dir alive for the duration of the function.
+        _temp_dir = Some(temp);
+        effective_path = script_path;
+    } else {
+        _temp_dir = None;
+        effective_path = cli.path.clone();
+    }
+
+    // Use effective_path for project_root (the entry file's directory).
+    let project_root = effective_path
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
+
     let project = match load_project(&project_root) {
         Ok(project) => project,
         Err(diags) => return render_diags_load_error(&diags),
@@ -101,11 +251,74 @@ pub fn run(cli: &ParsedCli) -> RunOutcome {
     };
 
     if cli.test {
+        // --test is unaffected by stdin modes; temp_dir is unused here.
         return run_test_branch(&project, &opts);
     }
 
+    // Args-from-stdin mode: positional was given and stdin is non-tty.
+    // Read stdin as call arguments (JSON first, YAML fallback), then call
+    // compile_component instead of compile.
+    if !cli.stdin_is_script {
+        let stdin_content = match std::io::read_to_string(std::io::stdin()) {
+            Ok(s) if !s.is_empty() => Some(s),
+            Ok(_) => None, // empty stdin → no args
+            Err(e) => {
+                eprintln!("ymx: failed to read stdin args: {e}");
+                return RunOutcome::Diagnostic;
+            }
+        };
+
+        if let Some(raw) = stdin_content {
+            // Try JSON first, then YAML fallback.
+            let value: Value = match serde_json::from_str::<serde_json::Value>(&raw) {
+                Ok(json_v) => serde_json_value_to_value(&json_v),
+                Err(_) => {
+                    // Retry as YAML.
+                    let docs = match YamlLoader::load_from_str(&raw) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            eprintln!(
+                                "ymx: stdin args: could not parse as JSON or YAML: {e}"
+                            );
+                            return RunOutcome::Diagnostic;
+                        }
+                    };
+                    let doc = match docs.first() {
+                        Some(d) => d,
+                        None => {
+                            eprintln!("ymx: stdin args: empty YAML document");
+                            return RunOutcome::Diagnostic;
+                        }
+                    };
+                    match yaml_to_value(doc) {
+                        Some(v) => v,
+                        None => {
+                            eprintln!(
+                                "ymx: stdin args: could not convert YAML to value"
+                            );
+                            return RunOutcome::Diagnostic;
+                        }
+                    }
+                }
+            };
+
+            let args = value_to_args(&value);
+            // Extract the bare component name from the entry override.
+            let entry_component = overrides
+                .entry
+                .as_ref()
+                .and_then(|e| e.split('.').last())
+                .unwrap_or("main");
+            match compile_component(&project, entry_component, &args, &opts) {
+                Ok(v) => return emit(&cli, &opts, &v),
+                Err(diags) => return render_diags(&diags),
+            }
+        }
+    }
+
+    // Normal compile (no positional, no stdin args, or stdin was empty).
     match compile(&project, &opts) {
-        Ok(value) => emit(cli, &opts, &value),
+        Ok(value) => emit(&cli, &opts, &value),
         Err(diags) => render_diags(&diags),
     }
 }
@@ -491,6 +704,7 @@ mod tests {
             output: None,
             test: false,
             test_dir: None,
+            stdin_is_script: false,
         }
     }
 
@@ -511,6 +725,7 @@ mod tests {
             output: None,
             test: true,
             test_dir: Some(dir.to_path_buf()),
+            stdin_is_script: false,
         }
     }
 
@@ -525,6 +740,7 @@ mod tests {
             output: None,
             test: false,
             test_dir: None,
+            stdin_is_script: false,
         }
     }
 
@@ -533,7 +749,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "main: 1\n");
         let cli = cli_for(dir.path());
-        assert_eq!(run(&cli), RunOutcome::Success);
+        assert_eq!(run(cli), RunOutcome::Success);
     }
 
     #[test]
@@ -541,7 +757,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("bad.yml", "a: 1\n---\nb: 2\n");
         let cli = cli_for(dir.path());
-        assert_eq!(run(&cli), RunOutcome::LoadError);
+        assert_eq!(run(cli), RunOutcome::LoadError);
     }
 
     #[test]
@@ -549,7 +765,7 @@ mod tests {
         let dir = TempDir::new();
         let missing = dir.path().join("nope");
         let cli = cli_for(&missing);
-        assert_eq!(run(&cli), RunOutcome::LoadError);
+        assert_eq!(run(cli), RunOutcome::LoadError);
     }
 
     #[test]
@@ -557,7 +773,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("other.yml", "other: 1\n");
         let cli = cli_for(dir.path());
-        assert_eq!(run(&cli), RunOutcome::Diagnostic);
+        assert_eq!(run(cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -565,7 +781,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "_ymx:\n  foo: 1\nmain: 0\n");
         let cli = cli_for(dir.path());
-        assert_eq!(run(&cli), RunOutcome::Diagnostic);
+        assert_eq!(run(cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -573,7 +789,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("a/b.yml", "x: 7\n");
         let cli = cli_with_entry(&dir.path().join("a/b.yml"), "x");
-        assert_eq!(run(&cli), RunOutcome::Success);
+        assert_eq!(run(cli), RunOutcome::Success);
     }
 
     #[test]
@@ -581,7 +797,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("a/b.yml", "x: 7\n");
         let cli = cli_with_entry(&dir.path().join("a/b.yml"), "y");
-        assert_eq!(run(&cli), RunOutcome::Diagnostic);
+        assert_eq!(run(cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -589,7 +805,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "main: 1\n_test:\n  main: 1\n");
         let cli = cli_with_test(dir.path());
-        assert_eq!(run(&cli), RunOutcome::Success);
+        assert_eq!(run(cli), RunOutcome::Success);
     }
 
     #[test]
@@ -597,7 +813,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "main: 1\n_test:\n  main: 2\n");
         let cli = cli_with_test(dir.path());
-        assert_eq!(run(&cli), RunOutcome::Diagnostic);
+        assert_eq!(run(cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -609,7 +825,7 @@ mod tests {
             "main: \"$nope(1)\"\n_test:\n  main:\n    error: \"E002\"\n",
         );
         let cli = cli_with_test(dir.path());
-        assert_eq!(run(&cli), RunOutcome::Success);
+        assert_eq!(run(cli), RunOutcome::Success);
     }
 
     #[test]
@@ -621,7 +837,7 @@ mod tests {
             "main: 1\n_test:\n  main:\n    result: 1\n    error: \"E002\"\n",
         );
         let cli = cli_with_test(dir.path());
-        assert_eq!(run(&cli), RunOutcome::Diagnostic);
+        assert_eq!(run(cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -629,7 +845,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "main: 1\n");
         let cli = cli_with_test(dir.path());
-        assert_eq!(run(&cli), RunOutcome::Success);
+        assert_eq!(run(cli), RunOutcome::Success);
     }
 
     #[test]
@@ -640,7 +856,7 @@ mod tests {
         dir.write("main.yml", "main: \"$main()\"\n");
         let mut cli = cli_for(dir.path());
         cli.max_depth = Some(1);
-        assert_eq!(run(&cli), RunOutcome::Diagnostic);
+        assert_eq!(run(cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -781,7 +997,7 @@ mod tests {
         let out = dir.path().join("out.json");
         let mut cli = cli_for(dir.path());
         cli.output = Some(out.clone());
-        assert_eq!(run(&cli), RunOutcome::Success);
+        assert_eq!(run(cli), RunOutcome::Success);
         assert!(out.exists());
         assert_eq!(fs::read_to_string(&out).unwrap(), "1");
     }
@@ -795,7 +1011,7 @@ mod tests {
         let out = dir.path().join("out.json");
         let mut cli = cli_for(dir.path());
         cli.output = Some(out.clone());
-        assert_eq!(run(&cli), RunOutcome::Diagnostic);
+        assert_eq!(run(cli), RunOutcome::Diagnostic);
         assert!(!out.exists(), "no file on diagnostic");
     }
 
@@ -806,7 +1022,7 @@ mod tests {
         let out = dir.path().join("out.json");
         let mut cli = cli_with_entry(&dir.path().join("a/b.yml"), "y");
         cli.output = Some(out.clone());
-        assert_eq!(run(&cli), RunOutcome::Diagnostic);
+        assert_eq!(run(cli), RunOutcome::Diagnostic);
         assert!(!out.exists(), "no file on E009");
     }
 
@@ -821,7 +1037,7 @@ mod tests {
         dir.write("main.yml", "main: 1\n");
         let mut cli = cli_for(dir.path());
         cli.format = Some(Format::Diagnostics);
-        assert_eq!(run(&cli), RunOutcome::Success);
+        assert_eq!(run(cli), RunOutcome::Success);
     }
 
     #[test]
@@ -849,7 +1065,7 @@ mod tests {
     fn recursive_tests_single_passing_project() {
         let dir = TempDir::new();
         dir.write("proj/main.yml", "main: 1\n_test:\n  main: 1\n");
-        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
+        assert_eq!(run(cli_with_test_dir(dir.path())), RunOutcome::Success);
     }
 
     #[test]
@@ -857,7 +1073,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("proj1/main.yml", "main: 1\n_test:\n  main: 1\n");
         dir.write("proj2/main.yml", "main: 2\n_test:\n  main: 2\n");
-        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
+        assert_eq!(run(cli_with_test_dir(dir.path())), RunOutcome::Success);
     }
 
     #[test]
@@ -867,7 +1083,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("bad/bad.yml", "a: 1\n---\nb: 2\n"); // multi-doc is E001
                                                        // No valid projects found - warn and exit 0
-        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
+        assert_eq!(run(cli_with_test_dir(dir.path())), RunOutcome::Success);
     }
 
     #[test]
@@ -875,14 +1091,14 @@ mod tests {
         let dir = TempDir::new();
         dir.write("just_text.txt", "not yaml\n");
         // No YMX projects found
-        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
+        assert_eq!(run(cli_with_test_dir(dir.path())), RunOutcome::Success);
     }
 
     #[test]
     fn recursive_tests_test_failure_returns_diagnostic() {
         let dir = TempDir::new();
         dir.write("proj/main.yml", "main: 1\n_test:\n  main: 2\n"); // expects 2, gets 1
-        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Diagnostic);
+        assert_eq!(run(cli_with_test_dir(dir.path())), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -906,5 +1122,109 @@ mod tests {
         let roots = find_project_roots(dir.path());
         // Only the non-hidden proj is found
         assert_eq!(roots.len(), 1);
+    }
+
+    // ---- stdin support helpers ----
+
+    #[test]
+    fn value_to_args_object_becomes_named_sorted() {
+        use ymx_lib::ymx_core::ir::Args;
+        let mut map = indexmap::IndexMap::new();
+        map.insert("z".into(), Value::Int(1));
+        map.insert("a".into(), Value::Int(2));
+        let args = value_to_args(&Value::Object(map));
+        match args {
+            Args::Named(pairs) => {
+                assert_eq!(pairs.len(), 2);
+                assert_eq!(pairs[0].0, "a"); // sorted
+                assert_eq!(pairs[1].0, "z");
+            }
+            other => panic!("expected Named, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn value_to_args_array_becomes_positional() {
+        use ymx_lib::ymx_core::ir::Args;
+        let args = value_to_args(&Value::Array(vec![Value::Int(1), Value::Int(2)]));
+        match args {
+            Args::Positional(vals) => {
+                assert_eq!(vals.len(), 2);
+                assert_eq!(vals[0], Value::Int(1));
+            }
+            other => panic!("expected Positional, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn value_to_args_scalar_becomes_positional_singleton() {
+        use ymx_lib::ymx_core::ir::Args;
+        let args = value_to_args(&Value::Int(42));
+        match args {
+            Args::Positional(vals) => {
+                assert_eq!(vals.len(), 1);
+                assert_eq!(vals[0], Value::Int(42));
+            }
+            other => panic!("expected Positional, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn serde_json_value_to_value_converts_all_types() {
+        use serde_json::json;
+        let v = json!({"a": 1, "b": [1, 2, 3], "c": true, "d": null, "e": "hi"});
+        let value = serde_json_value_to_value(&v);
+        match value {
+            Value::Object(m) => {
+                assert_eq!(m.get("a"), Some(&Value::Int(1)));
+                assert_eq!(m.get("c"), Some(&Value::Bool(true)));
+                assert_eq!(m.get("d"), Some(&Value::Null));
+                assert_eq!(m.get("e"), Some(&Value::String("hi".into())));
+                assert!(matches!(m.get("b"), Some(&Value::Array(_))));
+            }
+            other => panic!("expected Object, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn yaml_to_value_converts_all_yaml_types() {
+        let docs = YamlLoader::load_from_str("a: 1\nb: [1, 2]\nc: true\nd: ~\ne: 1.5\nf: hello\n").unwrap();
+        let doc = docs.first().expect("has doc");
+        let value = yaml_to_value(doc).expect("converts");
+        match value {
+            Value::Object(m) => {
+                assert_eq!(m.get("a"), Some(&Value::Int(1)));
+                assert!(matches!(m.get("b"), Some(&Value::Array(_))));
+                assert_eq!(m.get("c"), Some(&Value::Bool(true)));
+                assert_eq!(m.get("d"), Some(&Value::Null));
+                // Real number preserved as float
+                assert_eq!(m.get("e"), Some(&Value::Float(1.5)));
+                assert_eq!(m.get("f"), Some(&Value::String("hello".into())));
+            }
+            other => panic!("expected Object, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn yaml_to_value_array_converts_correctly() {
+        let docs = YamlLoader::load_from_str("[1, two, 3.0]\n").unwrap();
+        let doc = docs.first().expect("has doc");
+        let value = yaml_to_value(doc).expect("converts");
+        match value {
+            Value::Array(vals) => {
+                assert_eq!(vals.len(), 3);
+                assert_eq!(vals[0], Value::Int(1));
+                assert_eq!(vals[1], Value::String("two".into()));
+                assert_eq!(vals[2], Value::Float(3.0));
+            }
+            other => panic!("expected Array, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn yaml_to_value_integer_preserved_as_int() {
+        let docs = YamlLoader::load_from_str("42\n").unwrap();
+        let value = yaml_to_value(docs.first().expect("has doc")).expect("converts");
+        assert_eq!(value, Value::Int(42));
     }
 }

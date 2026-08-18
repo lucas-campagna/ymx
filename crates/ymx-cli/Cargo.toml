@@ -9,6 +9,7 @@ name = "ymx"
 path = "src/main.rs"
 
 [dependencies]
+indexmap.workspace = true
 ymx-lib.workspace = true
 ymx-config.workspace = true
 ymx-test.workspace = true

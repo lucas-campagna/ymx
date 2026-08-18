@@ -14,6 +14,7 @@
 //! orchestration-only concerns (`path`, `output`, `test`) stay on
 //! [`ParsedCli`] and never reach `ymx_config::CliOverrides`.
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use ymx_config::CliOverrides;
@@ -51,6 +52,11 @@ pub struct ParsedCli {
     /// when `--test` is absent or when the path was a file (or does not exist).
     /// Used by `run.rs` to decide between single-project and recursive modes.
     pub test_dir: Option<PathBuf>,
+    /// True when no positional was given and stdin is the script (non-test
+    /// mode only). In this mode `run.rs` reads stdin as a YAML document,
+    /// writes it to a temp file, and compiles it. False when a positional
+    /// file path was provided (stdin is args, if non-tty, in non-test mode).
+    pub stdin_is_script: bool,
 }
 
 impl ParsedCli {
@@ -168,8 +174,8 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     }
 
     // When --test is given, 0 positionals is acceptable (defaults to ".")
-    // When --test is NOT given, 0 positionals is an error (unchanged)
-    // 2+ positionals is always an error
+    // When --test is NOT given, 0 positionals means stdin-as-script (if non-tty).
+    // 2+ positionals is always an error.
     if positionals.len() > 1 {
         return Err(ParseError {
             message: format!(
@@ -179,19 +185,39 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         });
     }
 
-    let path = if positionals.is_empty() {
-        if !test {
+    let stdin_is_script: bool;
+    let path: PathBuf;
+
+    if positionals.is_empty() {
+        if test {
+            // --test with no positional: use "." as project dir; no stdin involved.
+            stdin_is_script = false;
+            path = PathBuf::from(".");
+        } else {
+            // Non-test with no positional: stdin is the script.
+            if std::io::stdin().is_terminal() {
+                return Err(ParseError {
+                    message: "stdin is a terminal, cannot read script or args".to_string(),
+                });
+            }
+            stdin_is_script = true;
+            path = PathBuf::from("."); // sentinel; run.rs replaces with temp file
+        }
+    } else {
+        // One positional given: stdin (if non-tty) provides call arguments.
+        if std::io::stdin().is_terminal() {
             return Err(ParseError {
-                message: "missing file — usage: `ymx <file> [flags]`".to_string(),
+                message: "stdin is a terminal, cannot read args".to_string(),
             });
         }
-        PathBuf::from(".")
-    } else {
-        positionals.pop().unwrap()
-    };
+        stdin_is_script = false;
+        path = positionals.pop().unwrap();
+    }
 
-    // Determine test_dir: set when --test is given and the path is a directory
-    let test_dir = if test && path.is_dir() {
+    // Determine test_dir: set when --test is given and the path is a directory.
+    // When stdin_is_script is true the actual project path is a temp file created
+    // at run time, so test_dir must be None even if the sentinel path is ".".
+    let test_dir = if test && !stdin_is_script && path.is_dir() {
         Some(path.clone())
     } else {
         None
@@ -205,6 +231,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         output,
         test,
         test_dir,
+        stdin_is_script,
     }))
 }
 
@@ -336,12 +363,6 @@ mod tests {
             parse(&args(&["proj/main.yml", "--test", "--help"])),
             Ok(ParseOutcome::Help)
         );
-    }
-
-    #[test]
-    fn missing_path_errors() {
-        let err = err_of(&[]);
-        assert!(err.message.contains("missing"));
     }
 
     #[test]
@@ -513,9 +534,30 @@ mod tests {
     }
 
     #[test]
-    fn non_test_missing_path_still_errors() {
-        // Without --test, missing path is still an error
-        let err = err_of(&[]);
-        assert!(err.message.contains("missing"));
+    fn non_test_empty_args_with_non_tty_stdin_succeeds_with_stdin_is_script() {
+        // Without --test, empty args with non-tty stdin → stdin-is-script mode.
+        // (stdin is never a tty in cargo test, so this succeeds.)
+        let c = cli_of(&[]);
+        assert!(c.stdin_is_script);
+        assert_eq!(c.path, PathBuf::from("."));
+        assert!(!c.test);
+        assert!(c.test_dir.is_none()); // stdin-is-script overrides test_dir
+    }
+
+    #[test]
+    fn positional_with_non_tty_stdin_sets_stdin_is_script_false() {
+        // With a positional and non-tty stdin, stdin_is_script is false (stdin is args).
+        let c = cli_of(&["proj/main.yml"]);
+        assert!(!c.stdin_is_script);
+        assert_eq!(c.path, PathBuf::from("proj/main.yml"));
+    }
+
+    #[test]
+    fn test_flag_without_path_does_not_set_stdin_is_script() {
+        // --test with no positional: path=".''; stdin_is_script must stay false.
+        let c = cli_of(&["--test"]);
+        assert!(!c.stdin_is_script);
+        assert!(c.test);
+        assert_eq!(c.path, PathBuf::from("."));
     }
 }

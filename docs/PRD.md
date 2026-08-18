@@ -155,6 +155,20 @@ A document may carry two reserved **meta keys** at its top level — `_ymx` (fro
 ymx [path] [flags]
 ```
 
+**Stdin modes.** `ymx` uses stdin in two implicit ways, distinguished by whether `path` is present:
+
+- **No `path` — stdin is the script.** `cat script.yml | ymx` is equivalent to `ymx script.yml`. The full stdin content is treated as a YAML document; it is written to a temporary file (`main.yml`) inside a temporary project directory. The entry is `main.main` (or `--entry` overrides). If stdin is a terminal (tty) and no `path` is given, the CLI exits 2 with a usage error.
+
+- **`path` given — stdin is call arguments.** `echo '{"a":123}' | ymx script.yml` calls the `main` component of `script.yml` with `a=123`. The positional argument `path` is the entry file (derived as `<file_stem>.<component>`, default `main.main`); the project root is the file's parent directory. Stdin is read as call arguments: it is first parsed as JSON; if that fails it is retried as YAML. The resulting value is converted to `Args`:
+  - `Value::Object` → `Args::Named([(k,v), …])` (sorted by key for determinism)
+  - `Value::Array` → `Args::Positional([v0, v1, …])`
+  - `Value::Scalar` (number / string / bool / null) → `Args::Positional([value])` — binds to `$0`
+  The CLI calls `compile_component(project, "<entry>", &args, &opts)` instead of `compile`. If stdin is a terminal (tty) and `path` is given, the CLI exits 2 with a usage error.
+
+`-`**`--test` is unaffected by stdin modes**; it requires a `path` argument and does not read stdin in either case.
+
+**Flags:**
+
 - `--entry <component>`: name of the component within `<file>` to compile (default `main`). The project root is the file's parent directory; the entry path is derived internally as `<file_stem>.<component>` (always exactly 2 segments). If the file is missing or the entry name is not a valid component identifier, the CLI emits `E009` at option-resolution and exits non-zero. If the file exists but the component is not defined in it, the CLI emits `E002` at compile time and exits non-zero.
 - `--max-depth <n>`: limit on template/call recursion (default `256`).
 - `--output <file>`: write JSON to a file instead of stdout. The file is written only on success; on any diagnostic the CLI exits non-zero without creating the file.
@@ -162,16 +176,11 @@ ymx [path] [flags]
 - `--plain`: promote sub-namespace components **and** templates into the global namespace (equivalent to `_ymx.plain: true`).
 - `--plain-template`: promote sub-namespace **templates only** into the global namespace (equivalent to `_ymx.plain: template`). `--plain` and `--plain-template` are mutually exclusive (CLI arg error). Each overrides the entry-file `_ymx.plain` value per the precedence rule.
 - `--format <json|diagnostics>`: output style (v1: `json`; `diagnostics` lists errors only).
-- `--test`: run inline `_test` cases (via `ymx-test`) instead of compiling the entry.
-  When `path` is omitted it defaults to `.` (the current directory). When `path`
-  is a **directory**, recursively walk it and run all `_test` blocks in every
-  subdirectory containing `.yml`/`.yaml` files (each is an independent project);
-  aggregate results across all projects and exit non-zero if any test fails. When
-  `path` is a **file**, run tests for that single project (the existing behaviour).
+- `--test`: run inline `_test` cases (via `ymx-test`) instead of compiling the entry. When `path` is omitted it defaults to `.` (the current directory). When `path` is a **directory**, recursively walk it and run all `_test` blocks in every subdirectory containing `.yml`/`.yaml` files (each is an independent project); aggregate results across all projects and exit non-zero if any test fails. When `path` is a **file**, run tests for that single project (the existing behaviour). `--test` does not read stdin.
 
-**Orchestration.** The CLI is the canonical full pipeline: `ymx_lib::load_project(path.parent())` → `ymx_config::extract_options(&project, &cli)` → `ymx_core::compile(&project, &opts)` (or `ymx_test::run_tests(&project, &opts)` under `--test`) → serialize/emit. The project root is derived from the file's parent directory; `--entry` is resolved before `extract_options` because it selects the front-matter source file (see *`_ymx` — front matter*). When `--test` is given with a directory path (or `.` by default), the CLI walks that directory recursively, treating each subdirectory containing `.yml`/`.yaml` files as an independent project, and runs `load_project` → `extract_options` → `parse_tests` + `run_tests` per project, aggregating results and exiting non-zero if any test fails across all projects.
+**Exit codes.** `0` on success; `2` for CLI usage errors (missing required argument, `--stdin` with a terminal, etc.); `1` for any diagnostic produced by the pipeline (parse/namespace errors, E001/E004/…, a missing entry file, a missing entry component, max-depth, or a failing `_test` under `--test`). With `--format diagnostics` on a successful compile, stdout is empty and the exit code is `0`.
 
-**Exit codes.** `0` on success; non-zero (default `1`) when any diagnostic is produced — including parse/namespace errors (`E001`, `E004`, …), a missing entry file or invalid entry name (`E009`), a missing entry component (`E002`), max-depth (`E008`), or a failing `_test` under `--test`. With `--format diagnostics` on a successful compile, stdout is empty and the exit code is `0`.
+**Orchestration.** The CLI is the canonical full pipeline: `ymx_lib::load_project(path.parent())` → `ymx_config::extract_options(&project, &cli)` → `ymx_core::compile(&project, &opts)` (or `ymx_test::run_tests(&project, &opts)` under `--test`) → serialize/emit. When stdin provides call arguments (no `path` or `path` given but stdin provides args), `compile` is replaced by `ymx_core::compile_component(project, "<entry>", &args, &opts)`. The project root is derived from the file's parent directory; `--entry` is resolved before `extract_options` because it selects the front-matter source file (see *`_ymx` — front matter*). When `--test` is given with a directory path (or `.` by default), the CLI walks that directory recursively, treating each subdirectory containing `.yml`/`.yaml` files as an independent project, and runs `load_project` → `extract_options` → `parse_tests` + `run_tests` per project, aggregating results and exiting non-zero if any test fails across all projects.
 
 ## Library API
 
