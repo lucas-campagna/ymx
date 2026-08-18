@@ -331,6 +331,7 @@ fn b_check(
 /// (`compile_component` pins bare `_` names by lowest [`FileId`], which the
 /// same-document check makes the host).
 fn same_doc_target(project: &Project, file: FileId, key: &str) -> Option<String> {
+    // Try exact match first.
     let mut paths: Vec<&str> = project
         .namespaces
         .namespaces()
@@ -347,6 +348,31 @@ fn same_doc_target(project: &Project, file: FileId, key: &str) -> Option<String>
     }
     if project.file_scoped.get(file, key).is_some() {
         return Some(key.to_string());
+    }
+    // For components, also try appending trailing `$` (top-level `a$` shorthand).
+    if !key.ends_with('$') {
+        let with_dollar = format!("{}$", key);
+        let mut paths: Vec<&str> = project
+            .namespaces
+            .namespaces()
+            .filter(|(_, ns)| {
+                ns.get(&with_dollar)
+                    .map(|def| def.file == file)
+                    .unwrap_or(false)
+            })
+            .map(|(path, _)| path)
+            .collect();
+        paths.sort_unstable();
+        if let Some(path) = paths.first() {
+            return Some(if path.is_empty() {
+                with_dollar
+            } else {
+                format!("{path}.{with_dollar}")
+            });
+        }
+        if project.file_scoped.get(file, &with_dollar).is_some() {
+            return Some(with_dollar);
+        }
     }
     None
 }
@@ -441,6 +467,7 @@ mod tests {
             full_name: name.to_string(),
             span: SPAN,
             body: Node::Int(1, SPAN),
+            math_shorthand: false,
         }
     }
 
@@ -450,6 +477,7 @@ mod tests {
             full_name: name.to_string(),
             span: SPAN,
             body,
+            math_shorthand: false,
         }
     }
 

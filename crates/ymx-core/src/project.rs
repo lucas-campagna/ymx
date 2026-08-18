@@ -203,6 +203,7 @@ mod tests {
             full_name: name.to_string(),
             span: SPAN,
             body: Node::Int(1, SPAN),
+            math_shorthand: false,
         }
     }
 

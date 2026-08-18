@@ -243,8 +243,21 @@ pub fn resolve_ref<'a>(
             }
         }
         DefClass::Component(_) => {
+            // Try exact match first.
             if let Some(def) = project.namespaces.get("", name) {
                 return Ok(def);
+            }
+            // For non-template components, also try appending a trailing `$` (the
+            // top-level `a$` shorthand registers as `full_name: "a$"` but is
+            // called by the bare name `a`).
+            if !name.ends_with('$') {
+                let with_dollar = format!("{}$", name);
+                if let Some(def) = project.namespaces.get("", &with_dollar) {
+                    // Only match if it's not a template (templates have leading $).
+                    if !def.full_name.starts_with('$') {
+                        return Ok(def);
+                    }
+                }
             }
             if plain != PlainMode::False {
                 let mut paths: Vec<&str> = project
@@ -259,6 +272,15 @@ pub fn resolve_ref<'a>(
                     if let Some(def) = project.namespaces.get(path, name) {
                         if !templates_only || def.full_name.starts_with('$') {
                             return Ok(def);
+                        }
+                    }
+                    // Also try the trailing-$ variant for sub-namespace lookups.
+                    if !name.ends_with('$') {
+                        let with_dollar = format!("{}$", name);
+                        if let Some(def) = project.namespaces.get(path, &with_dollar) {
+                            if !templates_only || def.full_name.starts_with('$') {
+                                return Ok(def);
+                            }
                         }
                     }
                 }
@@ -426,6 +448,21 @@ impl<'a> Resolver<'a> {
         chain_initial: Option<&Args>,
     ) -> Result<Value, Diagnostic> {
         let scope = self.scope_for(def, args);
+        // Top-level `a$` / `a?$` shorthand: body is a math source string.
+        // Evaluate it as `${<body>}` and use the result directly.
+        if def.math_shorthand {
+            let Node::String(math_src, span) = &def.body else {
+                return Err(self.def_err(
+                    def,
+                    E010,
+                    "value for `$` component-name shorthand must be a string (math source)"
+                        .to_string(),
+                ));
+            };
+            let segments = interp::scan(&format!("${{{math_src}}}"), *span)?;
+            let value = interp::resolve(&segments, &scope, &V1Engine)?;
+            return self.finish(def, args, chain_initial, ResolvedBody::Value(value));
+        }
         let body = self.resolve_body(&def.body, &scope, def.file)?;
         self.finish(def, args, chain_initial, body)
     }
@@ -1691,6 +1728,7 @@ mod tests {
             full_name: name.to_string(),
             span: SPAN,
             body: Node::Int(1, SPAN),
+            math_shorthand: false,
         }
     }
 

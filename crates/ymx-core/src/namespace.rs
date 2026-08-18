@@ -53,6 +53,9 @@ pub struct Definition {
     /// The raw parsed body (pre-interpolation); the resolver (milestone 1.6)
     /// walks this into a [`crate::ir::Value`].
     pub body: Node,
+    /// `true` for a top-level `a$` / `a?$` shorthand: the body is a math
+    /// source string to be evaluated as `${<body>}` when the component resolves.
+    pub math_shorthand: bool,
 }
 
 /// Parsed metadata about a regular component/template name.
@@ -67,6 +70,9 @@ pub struct ComponentMeta {
     pub effective_id: String,
     /// `true` iff the effective identifier starts with `_` (file-scoped).
     pub file_scoped: bool,
+    /// `true` iff the name had a trailing `$` (or `?$`) that was stripped.
+    /// The body is a math source string to be evaluated as `${<body>}`.
+    pub trailing_dollar: bool,
     /// Span of the name (for diagnostics).
     pub span: Span,
 }
@@ -150,11 +156,15 @@ impl ComponentMeta {
 
 /// Classify a top-level definition name (already extracted from its YAML key).
 ///
-/// The name is `[$]*<effective-id>` where the effective id is
+/// The name is `[$]*<effective-id>[?$]?` where the effective id is
 /// `[A-Za-z_][A-Za-z0-9_]*`. The bare meta keys `_ymx` / `_test` are recognized
 /// as consumed metadata (not components); their leading-`$` variants are
 /// `E015`; the builtin effective ids `map` / `reduce` / `merge` are `E007` (any
 /// leading `$` count).
+///
+/// A trailing `$` (or `?$`) is stripped before effective-id validation: `a$`
+/// registers as component `a` with `math_shorthand: true` (body is a math source
+/// string to be evaluated as `${<body>}`).
 pub fn classify(full_name: &str, span: Span) -> DefClass {
     let bytes = full_name.as_bytes();
     let mut idx = 0;
@@ -162,7 +172,17 @@ pub fn classify(full_name: &str, span: Span) -> DefClass {
         idx += 1;
     }
     let dollar_count = idx as u32;
-    let effective_id = &full_name[idx..];
+    let after_leading = &full_name[idx..];
+
+    // Strip trailing `$` or `?$` before effective-id validation.
+    let (effective_id, trailing_dollar) = if let Some(stripped) = after_leading.strip_suffix("?$") {
+        (stripped, true)
+    } else if let Some(stripped) = after_leading.strip_suffix('$') {
+        (stripped, true)
+    } else {
+        (after_leading, false)
+    };
+
     if !is_valid_effective_id(effective_id) {
         return DefClass::InvalidName(span);
     }
@@ -173,13 +193,14 @@ pub fn classify(full_name: &str, span: Span) -> DefClass {
         dollar_count,
         effective_id: effective_id.clone(),
         file_scoped,
+        trailing_dollar,
         span,
     };
     match effective_id.as_str() {
         "map" | "reduce" | "merge" => DefClass::BuiltinReserved(meta),
-        "_ymx" if dollar_count == 0 => DefClass::MetaBare(MetaKey::Ymx, span),
-        "_test" if dollar_count == 0 => DefClass::MetaBare(MetaKey::Test, span),
-        "_use" if dollar_count == 0 => DefClass::MetaBare(MetaKey::Use, span),
+        "_ymx" if dollar_count == 0 && !trailing_dollar => DefClass::MetaBare(MetaKey::Ymx, span),
+        "_test" if dollar_count == 0 && !trailing_dollar => DefClass::MetaBare(MetaKey::Test, span),
+        "_use" if dollar_count == 0 && !trailing_dollar => DefClass::MetaBare(MetaKey::Use, span),
         "_ymx" | "_test" | "_use" => DefClass::MetaReserved(meta),
         _ => DefClass::Component(meta),
     }
@@ -473,6 +494,7 @@ pub fn extract_document(file: FileId, body: &Node) -> DocExtract {
                     full_name: meta.full_name.clone(),
                     span: meta.span,
                     body: value.clone(),
+                    math_shorthand: meta.trailing_dollar,
                 };
                 if meta.file_scoped {
                     out.file_scoped_defs.push(def);
@@ -699,12 +721,73 @@ mod tests {
         assert!(!is_valid_effective_id("a b"));
     }
 
+    #[test]
+    fn trailing_dollar_strips_before_validation() {
+        // `a$` strips to `a`, registered as component `a` with `math_shorthand: true`.
+        let DefClass::Component(m) = classify("a$", S) else {
+            panic!("a$ should be a Component");
+        };
+        assert_eq!(m.effective_id, "a");
+        assert_eq!(m.full_name, "a$");
+        assert!(m.trailing_dollar);
+        assert!(!m.file_scoped);
+
+        // `a?$` also strips to `a` with `math_shorthand: true`.
+        let DefClass::Component(m) = classify("a?$", S) else {
+            panic!("a?$ should be a Component");
+        };
+        assert_eq!(m.effective_id, "a");
+        assert_eq!(m.full_name, "a?$");
+        assert!(m.trailing_dollar);
+
+        // `$a$` (leading + trailing) — leading $ counts, trailing is stripped.
+        let DefClass::Component(m) = classify("$a$", S) else {
+            panic!("$a$ should be a Component");
+        };
+        assert_eq!(m.dollar_count, 1);
+        assert_eq!(m.effective_id, "a");
+        assert_eq!(m.full_name, "$a$");
+        assert!(m.trailing_dollar);
+
+        // `$$a$` — two leading $s, trailing $.
+        let DefClass::Component(m) = classify("$$a$", S) else {
+            panic!("$$a$ should be a Component");
+        };
+        assert_eq!(m.dollar_count, 2);
+        assert_eq!(m.effective_id, "a");
+        assert!(m.trailing_dollar);
+    }
+
+    #[test]
+    fn trailing_dollar_on_meta_key_is_e015() {
+        // `$_ymx$` — effective id `_ymx`, leading $, trailing $ -> E015.
+        let c = classify("$_ymx$", S);
+        assert!(matches!(c, DefClass::MetaReserved(_)));
+
+        // `$_test$` — effective id `_test`, leading $, trailing $ -> E015.
+        let c = classify("$_test$", S);
+        assert!(matches!(c, DefClass::MetaReserved(_)));
+    }
+
+    #[test]
+    fn trailing_dollar_on_reserved_builtin_is_e007() {
+        // `map$` — builtin effective id, trailing $ stripped -> E007 still applies.
+        let c = classify("map$", S);
+        assert!(matches!(c, DefClass::BuiltinReserved(_)));
+        let DefClass::BuiltinReserved(m) = c else {
+            unreachable!()
+        };
+        assert_eq!(m.effective_id, "map");
+        assert!(m.trailing_dollar);
+    }
+
     fn def(name: &str, file: u32, line: u32) -> Definition {
         Definition {
             file: FileId(file),
             full_name: name.to_string(),
             span: Span { line, col: 1 },
             body: Node::Null(Span { line, col: 1 }),
+            math_shorthand: false,
         }
     }
 
@@ -1069,5 +1152,37 @@ mod tests {
             .unwrap();
         assert_eq!(diag.code, E015);
         assert_eq!(diag.component.as_deref(), Some("$_use"));
+    }
+
+    #[test]
+    fn trailing_dollar_top_level_component_registered_with_math_shorthand() {
+        // `sum$: x + y` — component `sum` with math_shorthand flag.
+        let ex = extract(0, "sum$: x + y\n");
+        assert_eq!(ex.defs.len(), 1, "sum$ registers as a component");
+        let def = &ex.defs[0];
+        assert_eq!(def.full_name, "sum$");
+        assert!(def.math_shorthand, "math_shorthand should be true");
+        // Body is stored as the raw string "x + y".
+        assert!(matches!(&def.body, Node::String(s, _) if s == "x + y"));
+    }
+
+    #[test]
+    fn trailing_dollar_question_mark_top_level_component() {
+        // `a?$: x + y` — optional with math-evaluated default, math_shorthand true.
+        let ex = extract(0, "a?$: x + y\n");
+        assert_eq!(ex.defs.len(), 1, "a?$ registers as a component");
+        let def = &ex.defs[0];
+        assert_eq!(def.full_name, "a?$");
+        assert!(def.math_shorthand, "math_shorthand should be true for a?$");
+    }
+
+    #[test]
+    fn leading_and_trailing_dollar_both_stripped() {
+        // `$sum$: x + y` — leading $ for template, trailing $ for math shorthand.
+        let ex = extract(0, "$sum$: x + y\n");
+        assert_eq!(ex.defs.len(), 1, "$sum$ registers as a component");
+        let def = &ex.defs[0];
+        assert_eq!(def.full_name, "$sum$");
+        assert!(def.math_shorthand);
     }
 }

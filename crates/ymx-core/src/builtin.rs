@@ -802,6 +802,7 @@ fn eval_resolve_mini(
             full_name: "<builtin迷你>".to_string(),
             span: ctx.span,
             body: super::parse::Node::Object(entries.to_vec(), ctx.span),
+            math_shorthand: false,
         },
         &set.to_object(),
     )

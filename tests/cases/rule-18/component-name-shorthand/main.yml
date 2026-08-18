@@ -1,7 +1,16 @@
-# a$: x + y — key ends with $, value is math source, stored under stripped name "a"
+# a$: x + y — property key ends with $, value is math source, stored under stripped name "a"
 comp:
   a$: x + y
+
+# sum$: x + y — top-level key ends with $, value is math source, stored as component "sum"
+# with math_shorthand=true; equivalent to sum: ${x + y}
+sum$:
+  x + y
+
 _test:
   comp:
     args: {x: 3, y: 5}
     result: {a: 8}
+  sum:
+    args: {x: 3, y: 5}
+    result: 8
