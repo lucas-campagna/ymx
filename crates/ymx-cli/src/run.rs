@@ -437,6 +437,7 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
                 if let Some(ref expected_code) = build_error {
                     if diags.iter().any(|d| d.code == *expected_code) {
                         println!("PASS {}: _build_error", relpath);
+                        total_tests += 1;
                         total_passed += 1;
                     } else {
                         let actual_code = diags
@@ -447,6 +448,7 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
                             "FAIL {}: _build_error mismatch (expected {}, got {})",
                             relpath, expected_code, actual_code
                         );
+                        total_tests += 1;
                         overall_success = false;
                     }
                 } else {
@@ -462,6 +464,7 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
                 if let Some(ref expected_code) = build_error {
                     if diags.iter().any(|d| d.code == *expected_code) {
                         println!("PASS {}: _build_error", relpath);
+                        total_tests += 1;
                         total_passed += 1;
                     } else {
                         let actual_code = diags
@@ -472,6 +475,7 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
                             "FAIL {}: _build_error mismatch (expected {}, got {})",
                             relpath, expected_code, actual_code
                         );
+                        total_tests += 1;
                         overall_success = false;
                     }
                 } else {
