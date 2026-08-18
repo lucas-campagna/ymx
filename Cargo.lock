@@ -219,6 +219,7 @@ name = "ymx-test"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "yaml-rust2",
  "ymx-config",
  "ymx-core",
  "ymx-lib",

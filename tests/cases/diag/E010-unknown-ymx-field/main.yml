@@ -2,6 +2,7 @@
 # extract_options fails with E010 because "invalid_field" is not a recognized _ymx key.
 _ymx:
   invalid_field: true
+  _test: error
 helper: value
 _test:
   helper:

@@ -2,6 +2,7 @@
 # Valid values are "false", "true", "template".
 _ymx:
   plain: "maybe"
+  _test: error
 helper: value
 _test:
   helper:

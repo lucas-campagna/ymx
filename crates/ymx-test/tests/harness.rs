@@ -15,6 +15,8 @@
 
 use std::path::{Path, PathBuf};
 
+use yaml_rust2::{Yaml, YamlLoader};
+
 use ymx_config::CliOverrides;
 use ymx_lib::Diagnostic;
 use ymx_lib::Value;
@@ -61,10 +63,42 @@ fn sorted_dirs(dir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+/// Returns true when `dir/main.yml` has a top-level `_ymx._test: error` key,
+/// marking the scenario as an expected-error demonstration.
+fn is_error_scenario(dir: &Path) -> bool {
+    let main_yml = dir.join("main.yml");
+    let Ok(contents) = std::fs::read_to_string(&main_yml) else {
+        return false;
+    };
+    let Ok(docs) = YamlLoader::load_from_str(&contents) else {
+        return false;
+    };
+    let Some(ymx) = docs.first().and_then(|doc| doc.as_hash().cloned()) else {
+        return false;
+    };
+    let Some(Yaml::Hash(ymx_inner)) = ymx.get(&Yaml::String("_ymx".into())) else {
+        return false;
+    };
+    matches!(ymx_inner.get(&Yaml::String("_test".into())), Some(Yaml::String(s)) if s == "error")
+}
+
 /// Run one scenario's full pipeline, appending a rendered failure description
 /// per problem found.
+///
+/// Scenarios marked with `_ymx._test: error` in their `main.yml` are
+/// expected-error demonstrations (load-time failures in `extract_options`).
+/// The harness silently skips them rather than treating them as harness
+/// failures, since invariant #2 bars load-time codes from `_test`-driven
+/// assertion.
 fn run_scenario(dir: &Path, failures: &mut Vec<String>) {
     let name = dir.display().to_string();
+
+    // Skip expected-error scenarios: `_ymx._test: error` signals that the
+    // scenario intentionally fails at load/option-extraction time.
+    if is_error_scenario(dir) {
+        return;
+    }
+
     let project = match ymx_lib::load_project(dir) {
         Ok(project) => project,
         Err(diags) => {
