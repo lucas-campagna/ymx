@@ -1,0 +1,8 @@
+# E010: _ymx.plain has an invalid value "maybe".
+# Valid values are "false", "true", "template".
+_ymx:
+  plain: "maybe"
+helper: value
+_test:
+  helper:
+    result: value

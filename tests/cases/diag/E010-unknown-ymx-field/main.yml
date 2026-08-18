@@ -1,0 +1,8 @@
+# E010: the entry file's _ymx block contains an unknown field "invalid_field".
+# extract_options fails with E010 because "invalid_field" is not a recognized _ymx key.
+_ymx:
+  invalid_field: true
+helper: value
+_test:
+  helper:
+    result: value

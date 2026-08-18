@@ -1,0 +1,8 @@
+# E010: _ymx.plain is a bare bool (YAML unquoted), not a string.
+# The valid values are the strings "false", "true", "template".
+_ymx:
+  plain: true
+helper: value
+_test:
+  helper:
+    result: value

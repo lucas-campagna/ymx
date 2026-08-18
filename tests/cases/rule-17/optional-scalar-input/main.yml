@@ -1,0 +1,10 @@
+# Rule 17: scalar input carries no keys, so optional defaults fill all gaps.
+# When input is null (a scalar), it has no keys to override with.
+_callee:
+  x?: 10
+  y?: 20
+caller:
+  from: _callee
+_test:
+  caller:
+    result: {x: 10, y: 20}

@@ -1,0 +1,11 @@
+# x?$ is an optional property with math-evaluated default (v1, not v2).
+# When caller omits x, the math default "1 + 1" is evaluated to 2.
+comp:
+  x?$: "1 + 1"
+_test:
+  comp:
+    args: {}
+    result: {x: 2}
+  comp:
+    args: {x: 99}
+    result: {x: 99}

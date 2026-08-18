@@ -1,0 +1,12 @@
+# Rule 17: optional property with from dispatch.
+# When a component has from and the callee has optional properties,
+# the caller's supplied properties win and the optional defaults fill gaps.
+_callee:
+  x?: 10
+  y?: 20
+caller:
+  from: _callee
+  x: 99
+_test:
+  caller:
+    result: {x: 99, y: 20}
