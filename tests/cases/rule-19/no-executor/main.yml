@@ -1,0 +1,6 @@
+comp:
+  out: $sh{echo nope}
+_test:
+  comp:
+    args: {}
+    error: E016

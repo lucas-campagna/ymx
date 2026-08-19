@@ -1,0 +1,6 @@
+comp:
+  out: $ruby{puts 1}
+_test:
+  comp:
+    args: {}
+    error: E016

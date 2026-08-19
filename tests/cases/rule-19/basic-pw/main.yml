@@ -1,0 +1,6 @@
+comp:
+  out: $sh{echo world}
+_test:
+  comp:
+    args: {}
+    result: {out: {exit_code: 0, stdout: "world\n"}}

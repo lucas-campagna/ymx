@@ -1,0 +1,8 @@
+_ymx:
+  allowed_backends: [sh]
+comp:
+  out: $sh{echo ok}
+_test:
+  comp:
+    args: {}
+    result: {out: {exit_code: 0, stdout: "ok\n"}}

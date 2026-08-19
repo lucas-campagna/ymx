@@ -1,0 +1,11 @@
+comp:
+  a: $sh{echo $x}
+  b: $sh{echo $flag}
+  c: $sh{echo $val}
+_test:
+  comp:
+    args: {x: 42, flag: true, val: 3.14}
+    result:
+      a: {exit_code: 0, stdout: "42\n"}
+      b: {exit_code: 0, stdout: "true\n"}
+      c: {exit_code: 0, stdout: "3.14\n"}

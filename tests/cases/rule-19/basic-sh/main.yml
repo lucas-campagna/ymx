@@ -1,0 +1,6 @@
+comp:
+  out: $sh{echo hello}
+_test:
+  comp:
+    args: {}
+    result: {out: {exit_code: 0, stdout: "hello\n"}}

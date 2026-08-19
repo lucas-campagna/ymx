@@ -1,0 +1,6 @@
+comp:
+  out: $sh{exit 1}
+_test:
+  comp:
+    args: {}
+    result: {out: {exit_code: 1, stdout: ""}}
