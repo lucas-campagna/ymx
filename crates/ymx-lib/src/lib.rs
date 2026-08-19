@@ -59,7 +59,9 @@ impl CommandExecutor for StdExecutor {
             other => return Err(ExecError::UnknownBackend(other.to_string())),
         };
 
-        let output = cmd.output().map_err(|e| ExecError::SpawnFailed(e.to_string()))?;
+        let output = cmd
+            .output()
+            .map_err(|e| ExecError::SpawnFailed(e.to_string()))?;
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         Ok(ExecOutput {
             exit_code: output.status.code().unwrap_or(-1),

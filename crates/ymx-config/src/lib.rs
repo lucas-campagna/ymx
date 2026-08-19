@@ -770,8 +770,8 @@ mod tests {
     #[test]
     fn allowed_backends_empty_list() {
         let p = with_ymx(project(), 0, "allowed_backends: []\n");
-        let opts = extract_options(&p, &CliOverrides::default_for_tests())
-            .expect("empty list is valid");
+        let opts =
+            extract_options(&p, &CliOverrides::default_for_tests()).expect("empty list is valid");
         assert_eq!(opts.allowed_backends, Some(vec![]));
     }
 
@@ -843,7 +843,11 @@ mod tests {
     fn allowed_backends_collected_alongside_other_errors() {
         let p = with_ymx(project(), 0, "allowed_backends: [5]\nfoo: 1\n");
         let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
-        assert_eq!(diags.len(), 2, "1 E010 for allowed_backends + 1 E010 for foo");
+        assert_eq!(
+            diags.len(),
+            2,
+            "1 E010 for allowed_backends + 1 E010 for foo"
+        );
         let components: Vec<Option<&str>> = diags.iter().map(|d| d.component.as_deref()).collect();
         assert_eq!(
             components,
