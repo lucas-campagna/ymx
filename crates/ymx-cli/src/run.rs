@@ -37,6 +37,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use indexmap::IndexMap;
 
@@ -46,7 +47,7 @@ use ymx_config::{extract_options, CliOverrides};
 use ymx_lib::ymx_core::ir::Args;
 use ymx_lib::ymx_core::project::{Format, Options, Project};
 use ymx_lib::ymx_core::resolve::{compile, compile_component};
-use ymx_lib::{load_project, Diagnostic, Value};
+use ymx_lib::{load_project, Diagnostic, StdExecutor, Value};
 use ymx_test::{parse_tests, run_tests, Expected, TestResult};
 
 use crate::args::ParsedCli;
@@ -252,15 +253,23 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
             pretty: cli.pretty,
             format: cli.format.clone(),
             plain: None,
-            allowed_backends: None,
+            allowed_backends: cli.allowed_backends.clone(),
         }
     } else {
         cli.overrides()
     };
-    let opts = match extract_options(&project, &overrides) {
+    let mut opts = match extract_options(&project, &overrides) {
         Ok(opts) => opts,
         Err(diags) => return render_diags(&diags),
     };
+
+    // Inject the default command executor so shell execution works out of the box.
+    opts.executor = Some(Arc::new(StdExecutor));
+
+    // --no-exec disables shell execution entirely.
+    if cli.no_exec {
+        opts.executor = None;
+    }
 
     if cli.test {
         // --test is unaffected by stdin modes; temp_dir is unused here.
@@ -772,6 +781,8 @@ mod tests {
             test: false,
             test_dir: None,
             stdin_is_script: false,
+            allowed_backends: None,
+            no_exec: false,
         }
     }
 
@@ -793,6 +804,8 @@ mod tests {
             test: true,
             test_dir: Some(dir.to_path_buf()),
             stdin_is_script: false,
+            allowed_backends: None,
+            no_exec: false,
         }
     }
 
@@ -808,6 +821,8 @@ mod tests {
             test: false,
             test_dir: None,
             stdin_is_script: false,
+            allowed_backends: None,
+            no_exec: false,
         }
     }
 

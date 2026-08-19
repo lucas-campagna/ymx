@@ -57,6 +57,12 @@ pub struct ParsedCli {
     /// writes it to a temp file, and compiles it. False when a positional
     /// file path was provided (stdin is args, if non-tty, in non-test mode).
     pub stdin_is_script: bool,
+    /// `--allowed-backends <list>` — comma-separated list of backends that
+    /// `$<backend>{...}` may use. Overrides `_ymx.allowed_backends`.
+    pub allowed_backends: Option<Vec<String>>,
+    /// `--no-exec` — disables shell execution entirely (`$<backend>{...}`
+    /// raises E016). Sets `opts.executor = None`.
+    pub no_exec: bool,
 }
 
 impl ParsedCli {
@@ -86,7 +92,7 @@ impl ParsedCli {
             pretty: self.pretty,
             format: self.format.clone(),
             plain: None,
-            allowed_backends: None,
+            allowed_backends: self.allowed_backends.clone(),
         }
     }
 }
@@ -122,6 +128,8 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     let mut format: Option<Format> = None;
     let mut output: Option<PathBuf> = None;
     let mut test = false;
+    let mut allowed_backends: Option<Vec<String>> = None;
+    let mut no_exec = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -157,6 +165,18 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
                 let raw = take_value(args, &mut i, "--output")?;
                 output = Some(PathBuf::from(raw));
             }
+            "--allowed-backends" => {
+                let raw = take_value(args, &mut i, "--allowed-backends")?;
+                let list: Vec<String> = raw.split(',').map(|s| s.trim().to_string()).collect();
+                if list.is_empty() || list.iter().any(|s| s.is_empty()) {
+                    return Err(ParseError {
+                        message: "--allowed-backends: list must not contain empty entries"
+                            .to_string(),
+                    });
+                }
+                allowed_backends = Some(list);
+            }
+            "--no-exec" => no_exec = true,
             other => {
                 if other.starts_with("--") {
                     return Err(ParseError {
@@ -229,6 +249,8 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         test,
         test_dir,
         stdin_is_script,
+        allowed_backends,
+        no_exec,
     }))
 }
 
