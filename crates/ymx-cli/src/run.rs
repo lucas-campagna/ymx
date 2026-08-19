@@ -329,46 +329,101 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
     }
 }
 
-/// Recursively discover project roots under `dir`. A subdirectory is a project
-/// root if it contains at least one `.yml` or `.yaml` file in its direct
-/// children. Skips `.git` and hidden directories (starting with `.`).
+/// Recursively discover entry files under `dir`. A directory is a project
+/// root if it contains `.yml`/`.yaml` files directly. The entry file is
+/// chosen by priority: `<dirname>.yml`/`.yaml` > `main.yml`/`main.yaml` >
+/// first `.yml` file. Subdirectories containing their own entry file
+/// (`<subdir-name>.yml`) are recursed into as separate projects. Skips
+/// `.git` and hidden directories.
 fn find_project_roots(dir: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
 
     while let Some(current) = stack.pop() {
-        // Check if current dir has any .yml or .yaml files directly in it
-        let mut has_yaml = false;
+        // Collect .yml/.yaml files and subdirs directly in this directory
+        let mut yml_files: Vec<PathBuf> = Vec::new();
+        let mut subdirs: Vec<PathBuf> = Vec::new();
+
         if let Ok(entries) = std::fs::read_dir(&current) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_file() {
-                    if let Some(ext) = path.extension() {
+                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                         if ext == "yml" || ext == "yaml" {
-                            has_yaml = true;
-                            break;
+                            yml_files.push(path);
                         }
                     }
+                } else if path.is_dir() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if name == ".git" || name.starts_with('.') {
+                            continue;
+                        }
+                    }
+                    subdirs.push(path);
                 }
             }
         }
 
-        if has_yaml {
-            roots.push(current.clone());
-        } else {
-            // Recurse into subdirectories (not into hidden or .git dirs)
-            if let Ok(entries) = std::fs::read_dir(&current) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            if name == ".git" || name.starts_with('.') {
-                                continue;
+        if !yml_files.is_empty() {
+            // This directory has YAML files — determine if single project or category.
+            let dir_name = current.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let has_entry_match = yml_files.iter().any(|f| {
+                let stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                stem == dir_name || stem == "main"
+            });
+
+            if has_entry_match {
+                // Single project: pick the entry file by priority
+                let entry = yml_files
+                    .iter()
+                    .find(|f| {
+                        f.file_stem()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s == dir_name)
+                            .unwrap_or(false)
+                    })
+                    .or_else(|| {
+                        yml_files.iter().find(|f| {
+                            f.file_stem()
+                                .and_then(|s| s.to_str())
+                                .map(|s| s == "main")
+                                .unwrap_or(false)
+                        })
+                    })
+                    .cloned();
+                if let Some(entry) = entry {
+                    roots.push(entry);
+                }
+                // Recurse into subdirs with their own entry file (nested projects)
+                for subdir in &subdirs {
+                    if let Some(sub_name) = subdir.file_name().and_then(|n| n.to_str()) {
+                        for ext in ["yml", "yaml"] {
+                            if subdir.join(format!("{sub_name}.{ext}")).is_file() {
+                                stack.push(subdir.clone());
+                                break;
                             }
                         }
-                        stack.push(path);
                     }
                 }
+            } else {
+                // Category directory: each YAML file is a separate project.
+                // Also recurse into subdirs with their own entry file.
+                roots.extend(yml_files);
+                for subdir in &subdirs {
+                    if let Some(sub_name) = subdir.file_name().and_then(|n| n.to_str()) {
+                        for ext in ["yml", "yaml"] {
+                            if subdir.join(format!("{sub_name}.{ext}")).is_file() {
+                                stack.push(subdir.clone());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // No YAML files here — recurse into all subdirectories
+            for subdir in &subdirs {
+                stack.push(subdir.clone());
             }
         }
     }
@@ -377,19 +432,10 @@ fn find_project_roots(dir: &Path) -> Vec<PathBuf> {
     roots
 }
 
-/// Returns the expected build-error code from `proj_dir/main.yml`'s top-level
+/// Returns the expected build-error code from an entry file's top-level
 /// `_test._build_error` key, or `None` if not present.
-fn build_error_code(proj_dir: &Path) -> Option<String> {
-    let main_yml = proj_dir.join("main.yml");
-    let main_yaml = proj_dir.join("main.yaml");
-    let contents = if main_yml.exists() {
-        std::fs::read_to_string(&main_yml)
-    } else if main_yaml.exists() {
-        std::fs::read_to_string(&main_yaml)
-    } else {
-        return None;
-    };
-    let Ok(contents) = contents else {
+fn build_error_code(entry_file: &Path) -> Option<String> {
+    let Ok(contents) = std::fs::read_to_string(entry_file) else {
         return None;
     };
     let Ok(docs) = YamlLoader::load_from_str(&contents) else {
@@ -407,7 +453,7 @@ fn build_error_code(proj_dir: &Path) -> Option<String> {
     Some(code.clone())
 }
 
-/// Recursive directory test mode: discover all project roots under `dir` and
+/// Recursive directory test mode: discover all entry files under `dir` and
 /// run tests in each. Load/extract failures with a matching `_test._build_error`
 /// code are PASS; mismatches are FAIL; failures without a key are warned and
 /// skipped. Parse failures and test failures cause non-zero exit.
@@ -423,15 +469,15 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
     let mut total_tests = 0usize;
     let mut overall_success = true;
 
-    for proj_dir in &roots {
-        let relpath = proj_dir
+    for entry_file in &roots {
+        let relpath = entry_file
             .strip_prefix(dir)
-            .unwrap_or(proj_dir.as_path())
+            .unwrap_or(entry_file.as_path())
             .to_string_lossy();
 
-        let build_error = build_error_code(proj_dir);
+        let build_error = build_error_code(entry_file);
 
-        let project = match load_project(proj_dir) {
+        let project = match load_project(entry_file) {
             Ok(p) => p,
             Err(diags) => {
                 if let Some(ref expected_code) = build_error {
@@ -452,13 +498,24 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
                         overall_success = false;
                     }
                 } else {
-                    eprintln!("ymx: warning: {}: {}", proj_dir.display(), diags[0].message);
+                    eprintln!("ymx: warning: {}: {}", relpath, diags[0].message);
                 }
                 continue;
             }
         };
 
-        let opts = match extract_options(&project, &CliOverrides::default_for_tests()) {
+        // Derive entry path from file stem (same logic as CLI overrides).
+        let file_stem = entry_file
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("main");
+        let entry = format!("{}.{}", file_stem, "main");
+        let overrides = CliOverrides {
+            entry: Some(entry),
+            ..CliOverrides::default_for_tests()
+        };
+
+        let opts = match extract_options(&project, &overrides) {
             Ok(o) => o,
             Err(diags) => {
                 if let Some(ref expected_code) = build_error {
@@ -479,23 +536,22 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
                         overall_success = false;
                     }
                 } else {
-                    eprintln!("ymx: warning: {}: {}", proj_dir.display(), diags[0].message);
+                    eprintln!("ymx: warning: {}: {}", relpath, diags[0].message);
                 }
                 continue;
             }
         };
 
-        if let Err(diags) = parse_tests(&project) {
+        if let Err(diags) = parse_tests(&project, Some(&opts.entry)) {
             eprintln!(
                 "ymx: warning: {}: parse error: {}",
-                proj_dir.display(),
-                diags[0].message
+                relpath, diags[0].message
             );
             overall_success = false;
             continue;
         }
 
-        let results = run_tests(&project, &opts);
+        let results = run_tests(&project, &opts, Some(&opts.entry));
         total_tests += results.len();
 
         for result in &results {
@@ -526,11 +582,11 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
 /// `--test` branch: parse tests first (its `Err` is the malformed-`_test`
 /// gate, surfaced as `E010`), then run them and print one line per result.
 fn run_test_branch(project: &Project, opts: &Options) -> RunOutcome {
-    match parse_tests(project) {
+    match parse_tests(project, Some(&opts.entry)) {
         Ok(_) => {}
         Err(diags) => return render_diags(&diags),
     }
-    let results = run_tests(project, opts);
+    let results = run_tests(project, opts, Some(&opts.entry));
     let total = results.len();
     let mut passed = 0usize;
     for result in &results {
@@ -887,7 +943,7 @@ mod tests {
         dir.write("main.yml", "main: 1\n_test:\n  main: 2\n");
         let project = load_project(dir.path()).expect("loads");
         let opts = extract_options(&project, &CliOverrides::default_for_tests()).expect("opts");
-        let results = run_tests(&project, &opts);
+        let results = run_tests(&project, &opts, None);
         assert_eq!(results.len(), 1);
         let r = &results[0];
         assert!(!r.passed);
@@ -905,7 +961,7 @@ mod tests {
         );
         let project = load_project(dir.path()).expect("loads");
         let opts = extract_options(&project, &CliOverrides::default_for_tests()).expect("opts");
-        let results = run_tests(&project, &opts);
+        let results = run_tests(&project, &opts, None);
         assert_eq!(results.len(), 1);
         let r = &results[0];
         assert!(!r.passed);

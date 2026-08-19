@@ -1,6 +1,6 @@
-//! Integration harness (milestone 1.9): walks `tests/cases/rule-NN/<scenario>/`
-//! under the workspace root and runs each scenario's `_test` blocks against a
-//! real loaded [`Project`].
+//! Integration harness (milestone 1.9): walks `tests/cases/<category>/`
+//! under the workspace root, discovers `<scenario>.yml` files, and runs each
+//! scenario's `_test` blocks against a real loaded [`Project`].
 //!
 //! Per scenario (PRD §Testing): `ymx_lib::load_project` ->
 //! `ymx_config::extract_options` with `CliOverrides::default_for_tests()` ->
@@ -10,9 +10,6 @@
 //! handles expected load/option-time failures (see PRD §Testing). Failures
 //! are collected across all scenarios and asserted zero at the end, so a
 //! single run reports every failing scenario.
-//!
-//! The `tests/cases` directory does not exist yet (scenarios land in milestone
-//! 1.11); with zero scenarios the harness passes trivially.
 
 use std::path::{Path, PathBuf};
 
@@ -23,7 +20,7 @@ use ymx_lib::Diagnostic;
 use ymx_lib::Value;
 use ymx_test::Expected;
 
-/// Run every scenario under `<workspace root>/tests/cases/rule-NN/<scenario>/`.
+/// Run every scenario under `<workspace root>/tests/cases/<category>/<scenario>.yml`.
 ///
 /// The cases root is two directory levels above this crate
 /// (`crates/ymx-test` -> workspace root), resolved at runtime via
@@ -37,9 +34,9 @@ fn run_all_scenarios() {
         return; // no scenarios yet — zero scenarios pass trivially
     };
     let mut failures: Vec<String> = Vec::new();
-    for rule_dir in sorted_dirs(&cases) {
-        for scenario in sorted_dirs(&rule_dir) {
-            run_scenario(&scenario, &mut failures);
+    for category_dir in sorted_dirs(&cases) {
+        for scenario_file in sorted_yml_files(&category_dir) {
+            run_scenario(&scenario_file, &mut failures);
         }
     }
     assert!(
@@ -50,7 +47,7 @@ fn run_all_scenarios() {
     );
 }
 
-/// The sorted subdirectory paths of `dir` (deterministic scenario order).
+/// The sorted subdirectory paths of `dir` (deterministic category order).
 fn sorted_dirs(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -64,11 +61,39 @@ fn sorted_dirs(dir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// Returns the expected build error code from `dir/main.yml`'s top-level
+/// The sorted `.yml` entry-file paths in `dir` (deterministic scenario order).
+/// An entry file is a `.yml` file whose stem matches its parent directory name
+/// (e.g., `diag/E005-file-scope/E005-file-scope.yml`), or a `.yml` file
+/// directly in a category directory (e.g., `rule-01/basic.yml`).
+fn sorted_yml_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if path.extension().and_then(|e| e.to_str()) == Some("yml") {
+                files.push(path);
+            }
+        } else if path.is_dir() {
+            // Check if this subdir has an entry file (stem matches dirname)
+            if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
+                let entry_file = path.join(format!("{dir_name}.yml"));
+                if entry_file.is_file() {
+                    files.push(entry_file);
+                }
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+/// Returns the expected build error code from a scenario file's top-level
 /// `_test._build_error` key, or `None` if not present.
-fn build_error_code(dir: &Path) -> Option<String> {
-    let main_yml = dir.join("main.yml");
-    let Ok(contents) = std::fs::read_to_string(&main_yml) else {
+fn build_error_code(file: &Path) -> Option<String> {
+    let Ok(contents) = std::fs::read_to_string(file) else {
         return None;
     };
     let Ok(docs) = YamlLoader::load_from_str(&contents) else {
@@ -88,11 +113,11 @@ fn build_error_code(dir: &Path) -> Option<String> {
 
 /// Run one scenario's full pipeline, appending a rendered failure description
 /// per problem found.
-fn run_scenario(dir: &Path, failures: &mut Vec<String>) {
-    let name = dir.display().to_string();
-    let build_error = build_error_code(dir);
+fn run_scenario(file: &Path, failures: &mut Vec<String>) {
+    let name = file.display().to_string();
+    let build_error = build_error_code(file);
 
-    let project = match ymx_lib::load_project(dir) {
+    let project = match ymx_lib::load_project(file) {
         Ok(project) => project,
         Err(diags) => {
             if let Some(ref expected_code) = build_error {
@@ -113,7 +138,15 @@ fn run_scenario(dir: &Path, failures: &mut Vec<String>) {
         }
     };
 
-    let opts = match ymx_config::extract_options(&project, &CliOverrides::default_for_tests()) {
+    // Derive the entry path from the file stem (same logic as CLI overrides).
+    let file_stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("main");
+    let entry = format!("{}.{}", file_stem, "main");
+    let overrides = CliOverrides {
+        entry: Some(entry),
+        ..CliOverrides::default_for_tests()
+    };
+
+    let opts = match ymx_config::extract_options(&project, &overrides) {
         Ok(opts) => opts,
         Err(diags) => {
             if let Some(ref expected_code) = build_error {
@@ -143,7 +176,8 @@ fn run_scenario(dir: &Path, failures: &mut Vec<String>) {
         return;
     }
 
-    if let Err(diags) = ymx_test::parse_tests(&project) {
+    let entry_str = overrides.entry.as_deref().unwrap_or("main.main");
+    if let Err(diags) = ymx_test::parse_tests(&project, Some(entry_str)) {
         failures.push(format!(
             "{name}: parse_tests failed:\n{}",
             render_diags(&diags)
@@ -151,7 +185,7 @@ fn run_scenario(dir: &Path, failures: &mut Vec<String>) {
         return;
     }
 
-    for result in ymx_test::run_tests(&project, &opts) {
+    for result in ymx_test::run_tests(&project, &opts, Some(entry_str)) {
         if !result.passed {
             failures.push(format!(
                 "{name}: FAIL on `{}`\n  expected: {}\n  actual: {}",

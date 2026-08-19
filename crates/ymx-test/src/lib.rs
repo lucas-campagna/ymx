@@ -115,10 +115,12 @@ pub struct TestResult {
 /// Tests are produced in load order (lexicographic document order, then
 /// insertion order within a block); a test's `file`/`span` anchor the `_test`
 /// block at 1:1 (raw meta values are span-less).
-pub fn parse_tests(project: &Project) -> Result<Vec<Test>, Vec<Diagnostic>> {
+pub fn parse_tests(project: &Project, entry: Option<&str>) -> Result<Vec<Test>, Vec<Diagnostic>> {
     if project.raw_meta_test.is_empty() {
         return Ok(Vec::new());
     }
+
+    let entry_path = entry.unwrap_or("main.main");
 
     // First pass: determine if any test block is bare A or bare B.
     // Bare B = top-level object with `result` or `error` key.
@@ -133,7 +135,7 @@ pub fn parse_tests(project: &Project) -> Result<Vec<Test>, Vec<Diagnostic>> {
     // Only resolve the entry when bare A/B shapes are present.
     // Type-2-only projects never consult the entry component.
     let entry_target = if has_bare_ab {
-        match resolve_entry(project, "main.main") {
+        match resolve_entry(project, entry_path) {
             Ok((_, namespace, component)) => {
                 if namespace.is_empty() {
                     component.to_string()
@@ -410,8 +412,8 @@ fn same_doc_miss(project: &Project, file: FileId, key: &str) -> Diagnostic {
 /// `v == expected`. For [`Expected::Error`], `passed` is true iff some
 /// diagnostic from the target's compilation has `code == expected.code`
 /// (post-load codes only).
-pub fn run_tests(project: &Project, opts: &Options) -> Vec<TestResult> {
-    let tests = match parse_tests(project) {
+pub fn run_tests(project: &Project, opts: &Options, entry: Option<&str>) -> Vec<TestResult> {
+    let tests = match parse_tests(project, entry) {
         Ok(tests) => tests,
         Err(_) => return Vec::new(),
     };
@@ -540,7 +542,7 @@ mod tests {
     #[test]
     fn type2_b_with_both_result_and_error_is_e010() {
         let p = with_test(project(), 0, "main:\n  result: 1\n  error: \"E002\"\n");
-        let diags = parse_tests(&p).unwrap_err();
+        let diags = parse_tests(&p, None).unwrap_err();
         assert_eq!(diags.len(), 1);
         let d = &diags[0];
         assert_eq!(d.code, E010);
@@ -553,7 +555,7 @@ mod tests {
     #[test]
     fn bare_b_with_both_result_and_error_is_e010() {
         let p = with_test(project(), 0, "result: 1\nerror: \"E002\"\n");
-        let diags = parse_tests(&p).unwrap_err();
+        let diags = parse_tests(&p, None).unwrap_err();
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, E010);
         assert_eq!(
@@ -566,7 +568,7 @@ mod tests {
     fn type2_b_with_non_string_error_is_e010() {
         for src in ["main:\n  error: 5\n", "main:\n  error: [\"E002\"]\n"] {
             let p = with_test(project(), 0, src);
-            let diags = parse_tests(&p).unwrap_err();
+            let diags = parse_tests(&p, None).unwrap_err();
             assert_eq!(diags.len(), 1, "{src}");
             assert_eq!(diags[0].code, E010, "{src}");
             assert_eq!(diags[0].component.as_deref(), Some("main"), "{src}");
@@ -581,7 +583,7 @@ mod tests {
     #[test]
     fn bare_b_with_non_string_error_is_e010() {
         let p = with_test(project(), 0, "error: 5\n");
-        let diags = parse_tests(&p).unwrap_err();
+        let diags = parse_tests(&p, None).unwrap_err();
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, E010);
         assert_eq!(diags[0].component, None);
@@ -592,7 +594,7 @@ mod tests {
         // A list element can never be bare A/B (same anchoring), so a scalar
         // element is malformed; the other element still parses.
         let p = with_test(project(), 0, "- main: 1\n- 2\n");
-        let diags = parse_tests(&p).unwrap_err();
+        let diags = parse_tests(&p, None).unwrap_err();
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, E010);
         assert_eq!(diags[0].component, None);
@@ -615,7 +617,7 @@ mod tests {
     #[test]
     fn bare_a_targets_the_entry_with_no_args() {
         let p = with_test(project(), 0, "42\n");
-        let tests = parse_tests(&p).expect("bare A");
+        let tests = parse_tests(&p, None).expect("bare A");
         assert_eq!(tests.len(), 1);
         assert_eq!(tests[0].target, "main");
         assert_eq!(tests[0].args, TestArgs::None);
@@ -627,20 +629,20 @@ mod tests {
     #[test]
     fn bare_b_value_targets_the_entry() {
         let p = with_test(project(), 0, "result: 5\n");
-        let tests = parse_tests(&p).expect("bare B value");
+        let tests = parse_tests(&p, None).expect("bare B value");
         assert_eq!(tests.len(), 1);
         assert_eq!(tests[0].target, "main");
         assert_eq!(tests[0].expected, Expected::Value(Value::Int(5)));
 
         let p = with_test(project(), 0, "args: [1]\nresult: 5\n");
-        let tests = parse_tests(&p).expect("bare B value with args");
+        let tests = parse_tests(&p, None).expect("bare B value with args");
         assert_eq!(tests[0].args, TestArgs::Positional(vec![Value::Int(1)]));
     }
 
     #[test]
     fn bare_b_error_targets_the_entry() {
         let p = with_test(project(), 0, "error: \"E002\"\n");
-        let tests = parse_tests(&p).expect("bare B error");
+        let tests = parse_tests(&p, None).expect("bare B error");
         assert_eq!(tests.len(), 1);
         assert_eq!(tests[0].target, "main");
         assert_eq!(
@@ -657,7 +659,7 @@ mod tests {
         // list-wrapping escape is what redirects it to a component named
         // `result`.
         let p = with_test(project(), 0, "result: 1\n");
-        let tests = parse_tests(&p).expect("bare B");
+        let tests = parse_tests(&p, None).expect("bare B");
         assert_eq!(tests.len(), 1);
         assert_eq!(tests[0].target, "main");
         assert_eq!(tests[0].expected, Expected::Value(Value::Int(1)));
@@ -666,7 +668,7 @@ mod tests {
     #[test]
     fn type2_map_value_and_error_variants() {
         let p = with_test(project(), 0, "main: 1\n$box: {args: [2], result: 3}\n");
-        let tests = parse_tests(&p).expect("type-2 map");
+        let tests = parse_tests(&p, None).expect("type-2 map");
         assert_eq!(tests.len(), 2);
         assert_eq!(tests[0].target, "main");
         assert_eq!(tests[0].expected, Expected::Value(Value::Int(1)));
@@ -675,7 +677,7 @@ mod tests {
         assert_eq!(tests[1].expected, Expected::Value(Value::Int(3)));
 
         let p = with_test(project(), 0, "main: {error: \"E002\"}\n");
-        let tests = parse_tests(&p).expect("type-2 error variant");
+        let tests = parse_tests(&p, None).expect("type-2 error variant");
         assert_eq!(tests.len(), 1);
         assert_eq!(
             tests[0].expected,
@@ -690,7 +692,7 @@ mod tests {
         // A mapping value without `result`/`error` is an A: the expected value
         // is the mapping itself.
         let p = with_test(project(), 0, "main: {a: 1}\n");
-        let tests = parse_tests(&p).expect("type-2 A");
+        let tests = parse_tests(&p, None).expect("type-2 A");
         assert_eq!(tests.len(), 1);
         assert_eq!(tests[0].expected, Expected::Value(value_of("a: 1\n")));
     }
@@ -700,7 +702,7 @@ mod tests {
         // The `_test` block lives in subdir/t.yml (FileId 2), so its same-doc
         // targets `t`/`x` emit the dotted `subdir.t`/`subdir.x` forms.
         let p = with_test(project(), 2, "t: 1\nx: {args: 2, result: 3}\n");
-        let tests = parse_tests(&p).expect("subdir type-2 map");
+        let tests = parse_tests(&p, None).expect("subdir type-2 map");
         assert_eq!(tests.len(), 2);
         assert_eq!(tests[0].target, "subdir.t");
         assert_eq!(tests[1].target, "subdir.x");
@@ -710,7 +712,7 @@ mod tests {
     #[test]
     fn file_scoped_underscore_target_resolves_bare() {
         let p = with_test(project(), 0, "_x: 1\n");
-        let tests = parse_tests(&p).expect("file-scoped target");
+        let tests = parse_tests(&p, None).expect("file-scoped target");
         assert_eq!(tests.len(), 1);
         assert_eq!(tests[0].target, "_x");
         assert_eq!(tests[0].expected, Expected::Value(Value::Int(1)));
@@ -719,7 +721,7 @@ mod tests {
     #[test]
     fn list_of_type2_maps() {
         let p = with_test(project(), 0, "- main: 1\n- main: 2\n");
-        let tests = parse_tests(&p).expect("list of type-2 maps");
+        let tests = parse_tests(&p, None).expect("list of type-2 maps");
         assert_eq!(tests.len(), 2);
         assert_eq!(tests[0].target, "main");
         assert_eq!(tests[0].expected, Expected::Value(Value::Int(1)));
@@ -731,7 +733,7 @@ mod tests {
         // Wrapped in a list, `result`/`args`/`error` are type-2 target names;
         // unwrapped they would be bare-B keys targeting the entry.
         let p = with_test(project(), 0, "- result: 1\n- args: 2\n- error: 3\n");
-        let tests = parse_tests(&p).expect("list-wrapping escape");
+        let tests = parse_tests(&p, None).expect("list-wrapping escape");
         assert_eq!(tests.len(), 3);
         assert_eq!(tests[0].target, "result");
         assert_eq!(tests[0].expected, Expected::Value(Value::Int(1)));
@@ -762,7 +764,7 @@ mod tests {
         ];
         for (src, expected_args) in cases {
             let p = with_test(project(), 0, src);
-            let tests = parse_tests(&p).expect(src);
+            let tests = parse_tests(&p, None).expect(src);
             assert_eq!(tests.len(), 1, "{src}");
             assert_eq!(tests[0].args, expected_args, "{src}");
         }
@@ -771,7 +773,7 @@ mod tests {
     #[test]
     fn extra_keys_in_a_b_mapping_are_ignored() {
         let p = with_test(project(), 0, "main: {result: 1, extra: 2}\n");
-        let tests = parse_tests(&p).expect("extra keys ignored");
+        let tests = parse_tests(&p, None).expect("extra keys ignored");
         assert_eq!(tests.len(), 1);
         assert_eq!(tests[0].expected, Expected::Value(Value::Int(1)));
     }
@@ -784,7 +786,7 @@ mod tests {
         // hosts the `_test` block; `t` is likewise foreign. All misses are
         // collected (no short-circuit).
         let p = with_test(project(), 0, "x: 1\nt: 2\n");
-        let diags = parse_tests(&p).unwrap_err();
+        let diags = parse_tests(&p, None).unwrap_err();
         assert_eq!(diags.len(), 2);
         for d in &diags {
             assert_eq!(d.code, E002);
@@ -803,7 +805,7 @@ mod tests {
         // `nope` is unknown (E002) and its B is malformed (both result+error,
         // E010) — independent errors, both collected.
         let p = with_test(project(), 0, "nope:\n  result: 1\n  error: \"E002\"\n");
-        let diags = parse_tests(&p).unwrap_err();
+        let diags = parse_tests(&p, None).unwrap_err();
         assert_eq!(diags.len(), 2);
         assert!(diags.iter().any(|d| d.code == E002));
         assert!(diags.iter().any(|d| d.code == E010));
@@ -812,7 +814,7 @@ mod tests {
     #[test]
     fn no_test_blocks_parse_to_empty_without_entry() {
         let p = project();
-        let tests = parse_tests(&p).expect("no _test blocks");
+        let tests = parse_tests(&p, None).expect("no _test blocks");
         assert!(tests.is_empty());
 
         // No tests and no entry file: the entry is never resolved.
@@ -820,7 +822,7 @@ mod tests {
         p.root = PathBuf::from("/proj");
         p.files = vec![PathBuf::from("/proj/a/b.yml")];
         p.namespaces.register("a", def(1, "x")).unwrap();
-        assert!(parse_tests(&p).expect("no tests").is_empty());
+        assert!(parse_tests(&p, None).expect("no tests").is_empty());
     }
 
     #[test]
@@ -832,7 +834,7 @@ mod tests {
         p.files = vec![PathBuf::from("/proj/a/b.yml")];
         p.namespaces.register("a", def(1, "x")).unwrap();
         let p = with_test(p, 1, "5\n");
-        let diags = parse_tests(&p).unwrap_err();
+        let diags = parse_tests(&p, None).unwrap_err();
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, E009);
     }
@@ -847,7 +849,7 @@ mod tests {
         p.files = vec![PathBuf::from("/proj/a/b.yml")];
         p.namespaces.register("a", def(1, "x")).unwrap();
         let p = with_test(p, 1, "x: {result: 7}\n");
-        let tests = parse_tests(&p).expect("type-2 only, no main");
+        let tests = parse_tests(&p, None).expect("type-2 only, no main");
         assert_eq!(tests.len(), 1);
         assert_eq!(tests[0].target, "a.x");
         assert_eq!(tests[0].args, TestArgs::None);
@@ -859,7 +861,7 @@ mod tests {
     #[test]
     fn run_tests_value_match_and_mismatch() {
         let p = with_test(project(), 0, "main: 1\n");
-        let results = run_tests(&p, &Options::default());
+        let results = run_tests(&p, &Options::default(), None);
         assert_eq!(results.len(), 1);
         assert!(results[0].passed);
         assert!(
@@ -868,7 +870,7 @@ mod tests {
         );
 
         let p = with_test(project(), 0, "main: 2\n");
-        let results = run_tests(&p, &Options::default());
+        let results = run_tests(&p, &Options::default(), None);
         assert!(!results[0].passed);
         assert!(matches!(&results[0].actual, Ok(v) if v == &Value::Int(1)));
     }
@@ -876,13 +878,13 @@ mod tests {
     #[test]
     fn run_tests_error_code_match_and_mismatch() {
         let p = with_test(nope_project(), 0, "main: {error: \"E002\"}\n");
-        let results = run_tests(&p, &Options::default());
+        let results = run_tests(&p, &Options::default(), None);
         assert_eq!(results.len(), 1);
         assert!(results[0].passed, "E002 matches the compile diagnostic");
         assert!(results[0].actual.is_err());
 
         let p = with_test(nope_project(), 0, "main: {error: \"E008\"}\n");
-        let results = run_tests(&p, &Options::default());
+        let results = run_tests(&p, &Options::default(), None);
         assert!(!results[0].passed, "E008 does not match");
         assert!(results[0].actual.is_err());
     }
@@ -916,7 +918,7 @@ mod tests {
             )
             .unwrap();
         let p = with_test(p, 0, "main: {args: {a: \"$x\"}, result: \"$x\"}\n");
-        let results = run_tests(&p, &Options::default());
+        let results = run_tests(&p, &Options::default(), None);
         assert_eq!(results.len(), 1);
         assert_eq!(
             results[0].test.args,
@@ -935,7 +937,7 @@ mod tests {
             )
             .unwrap();
         let p = with_test(p, 0, "main: {args: 5, result: 5}\n");
-        let results = run_tests(&p, &Options::default());
+        let results = run_tests(&p, &Options::default(), None);
         assert!(results[0].passed);
     }
 
@@ -944,7 +946,7 @@ mod tests {
         // The caller is required to surface parse_tests' Err first; run_tests
         // re-parses internally and degrades to no results on failure.
         let p = with_test(project(), 0, "main:\n  result: 1\n  error: \"E002\"\n");
-        assert!(parse_tests(&p).is_err());
-        assert!(run_tests(&p, &Options::default()).is_empty());
+        assert!(parse_tests(&p, None).is_err());
+        assert!(run_tests(&p, &Options::default(), None).is_empty());
     }
 }
