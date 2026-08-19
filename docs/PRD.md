@@ -85,6 +85,7 @@ Every diagnostic renders to stderr as `[code] file:line:col (component): message
 | `E012` | compile | Positional argument after a named argument in a call. | `$f(name=1, 2)` → positional arg `2` follows named `name=1` → `E012`. |
 | `E013` | compile | Array/object literal as a direct call argument. Not supported in v1. | `$f([1,2,3])` or `$g({a:1})` → v1 does not support passing inline collection literals as call arguments. |
 | `E015` | load | Meta-key reserved name used as a component or template. A top-level key that is a leading-`$` variant of `_ymx` or `_test`. | `$_ymx:\n  v: 1` or `$$_test: 2` → leading-`$` variants of meta keys are rejected as reserved. |
+| `E016` | compile | Shell execution error (unknown backend, disallowed backend, spawn failure, or executor not provided). | `$sh{echo hi}` with no executor → E016. `$pw{...}` when `allowed_backends: [sh]` → E016. |
 
 ## Multi-file projects
 
@@ -120,6 +121,7 @@ A document may carry three reserved **meta keys** at its top level — `_ymx` (f
 | `format`          | string      | `json`      | `json` or `diagnostics` |
 | `pretty`          | bool        | `false`     | pretty-print JSON output |
 | `plain`           | string enum | `false`     | `false` \| `true` \| `template`; promotes sub-namespace names into the global namespace (`true` = components **and** templates; `template` = templates only). Invalid value → `E010`. See *Component visibility* |
+| `allowed_backends` | list of strings | (all) | Restricts which executor backends may be used (rule 19). If absent, all backends are allowed. If set (e.g. `[sh]`), only those backends are permitted — using a non-listed backend emits E016. |
 
 > `entry` is intentionally **not** a `_ymx` field: the entry determines which document's `_ymx` block is the project's front-matter source, so it is resolved before front matter is read. The entry is therefore CLI-only: `--entry <component>` if provided, else `main`. The CLI receives a file path as the positional argument; the project root is the file's parent directory, and the entry path is derived as `<file_stem>.<component>` (always exactly 2 segments). The entry path is a **file-path address** (`<folder.path>.<file>.<component>`), distinct from the namespace dotted path used by `from` / `$name` resolution: `main.main` → root folder + `main.yml` + component `main`; `b.x` → file `b.yml` in the project root + component `x`. One segment is not a valid entry path (`E009`). The entry *file* must exist (else `E009`). The entry *component* is **not** required to exist at load/option-resolution time — it is only required when something actually compiles it (CLI compile mode, or a bare-A/B `_test` targeting the entry); a missing entry component at that point surfaces as `E002` (unknown component reference), like any other unknown component ref. This lets `_test`-only documents that target other components via type-2 maps omit the entry component entirely.
 
@@ -239,6 +241,8 @@ pub struct Options {            // consumed by `compile`
     pub pretty: bool,           // default false
     pub format: Format,         // default Json
     pub plain: PlainMode,       // default False
+    pub allowed_backends: Option<Vec<String>>,  // None = all backends allowed
+    pub executor: Option<Arc<dyn CommandExecutor>>,  // None = shell execution disabled (E016)
 }
 
 /// A loaded project: the merged component namespace (global + sub-namespaces),
@@ -264,6 +268,24 @@ pub fn compile_component(project: &Project, component: &str, args: &Args, opts: 
 /// front-matter source, and `<folder>.<comp>` is the namespace-qualified
 /// component compiled with no args.
 pub fn compile(project: &Project, opts: &Options) -> Result<Value, Vec<Diagnostic>>;
+
+/// Output of a successful shell command execution.
+pub struct ExecOutput {
+    pub exit_code: i32,
+    pub stdout: String,
+}
+
+/// Error from a failed shell command execution.
+pub enum ExecError {
+    UnknownBackend(String),
+    SpawnFailed(String),
+}
+
+/// Executor for shell commands (`$sh{...}`, `$pw{...}`, etc.).
+/// Implemented by the caller (ymx-lib provides StdExecutor); ymx-core stays I/O-free.
+pub trait CommandExecutor: Send + Sync {
+    fn execute(&self, backend: &str, command: &str) -> Result<ExecOutput, ExecError>;
+}
 ```
 
 ### `ymx-lib` — thin façade
@@ -292,6 +314,7 @@ pub struct CliOverrides {
     pub pretty: Option<bool>,
     pub format: Option<Format>,
     pub plain: Option<PlainMode>,
+    pub allowed_backends: Option<Vec<String>>,
 }
 
 /// Applies precedence CLI > entry-file `_ymx` > engine default and returns the
@@ -363,6 +386,7 @@ pub struct ParsedCli {
 - Structured diagnostics reporting file path, line, column, and component name where an issue occurred, plus an error code.
 - Usable as a CLI tool and as a Rust library (`ymx-lib`).
 - Inline `_test` blocks (see *Project metadata*) drive a tests-first development flow via `ymx-test`.
+- Shell execution builtins (`$sh`, `$pw`) with extensible backend registry and `_ymx.allowed_backends` restriction (rule 19).
 
 **Later**
 
@@ -1083,3 +1107,47 @@ a:
 The first `x$?:` is an error. The correct form for a math-evaluated optional default is `x?$: src`.
 
 > This rule (rule 18) is v2. Rule 17 (`?`) is v1. Non-string `$`-suffix values and wrong modifier order surface as `E010` (invalid syntax).
+
+### 19. Shell execution builtins (`$sh`, `$pw`)
+
+The `$sh{<command>}` and `$pw{<command>}` forms execute a shell command and return its result as `{exit_code: Int, stdout: String}`.
+
+**Value form:** `$sh{<command>}` / `$pw{<command>}` — the command string is interpolated (all scalar types; Array/Object → E011), then executed via the configured `CommandExecutor`. The result is always an object with `exit_code` (Int) and `stdout` (String).
+
+```yml
+content: $sh{cat path/to/file.txt}
+greeting: $pw{Write-Output "Hello World!"}
+```
+
+**Property-key shorthand:** any property key ending with `$<backend>` (e.g. `name$sh:`, `$box$sh:`, `$$$t$pw:`) is sugar for wrapping the value in `$<backend>{...}`. The suffix is stripped from the key. Applies to all property keys — regular components, templates, and chained templates alike.
+
+```yml
+# Property-key shorthand (all equivalent to their value-form counterparts)
+main$sh: cat path/to/file.txt
+# same as
+main: $sh{cat path/to/file.txt}
+
+$box$sh: echo $name
+# same as
+$box: $sh{echo $name}
+```
+
+**Extensibility:** any `$<backend>{<command>}` is recognized. The backend name is passed to the executor; unknown backends → E016.
+
+**Error handling:** non-zero exit codes are returned as part of the result (not an error). E016 is emitted only for spawn failures, missing executor (`opts.executor` is `None`), or disallowed backend (not in `allowed_backends`).
+
+**Interpolation inside `$sh{...}`:** the command string undergoes the same interpolation as regular strings — `$name`, `$0`, `${...}` are resolved before execution. Scalar values render per *Number→string rendering*; Array/Object arguments → E011.
+
+```yml
+file: path/to/file.txt
+lines: $sh{wc -l < $file}
+# $file interpolates to "path/to/file.txt", then the command is executed
+# lines → {"exit_code": 0, "stdout": "      42 path/to/file.txt\n"}
+```
+
+**Restriction via `_ymx.allowed_backends`:** the front-matter field `allowed_backends` (a list of strings) limits which backends may be used. If absent, all backends are allowed. If set, only the listed backends are permitted — using a non-listed backend emits E016.
+
+```yml
+_ymx:
+  allowed_backends: [sh]
+```

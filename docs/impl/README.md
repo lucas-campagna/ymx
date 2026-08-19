@@ -46,6 +46,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.24 | `done` | CLI stdin support (script and args) | ymx-cli | [1.24-stdin-cli.md](1.24-stdin-cli.md) | 1.23 |
 | 1.25 | `done` | `_use` directive (explicit file imports) | ymx-core, ymx-lib | [1.25-use-directive.md](1.25-use-directive.md) | 1.24 |
 | 1.26 | `done` | Fix top-level `$` component-name modifier | ymx-core | [1.26-top-level-component-shorthand.md](1.26-top-level-component-shorthand.md) | 1.6 |
+| 1.27 | `done` | Shell execution builtins (`$sh`, `$pw`) | ymx-core, ymx-config, ymx-lib, ymx-cli | [1.27-shell-exec.md](1.27-shell-exec.md) | 1.26 |
 
 ## Cross-cutting notes
 
