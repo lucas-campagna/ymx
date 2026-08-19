@@ -1,0 +1,12 @@
+# $$double$ chains through $double to component "double"
+double: 3
+
+$double$:
+  $0 * 2
+
+$$double$:
+  $0 + 10
+
+_test:
+  double:
+    result: 16

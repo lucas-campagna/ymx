@@ -468,6 +468,7 @@ mod tests {
             span: SPAN,
             body: Node::Int(1, SPAN),
             math_shorthand: false,
+            trailing_question: false,
         }
     }
 
@@ -478,6 +479,7 @@ mod tests {
             span: SPAN,
             body,
             math_shorthand: false,
+            trailing_question: false,
         }
     }
 

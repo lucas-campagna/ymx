@@ -1,0 +1,20 @@
+test1: $comp1
+test2: $comp1(456)
+test3: $comp2(a=1,b=2)
+test4: $comp3
+test5: $comp4
+
+comp1$?: 123
+comp2$?:
+  x: 1
+  y: 2
+comp3: $0
+$comp3$?: 41
+comp4$?: [1,2,3]
+
+_test:
+  test1: {error: E011}
+  test2: {error: E011}
+  test3: {error: E011}
+  test4: {error: E011}
+  test5: {error: E011}

@@ -31,12 +31,12 @@ use indexmap::IndexMap;
 
 use crate::builtin::{Builtin, BuiltinCtx, BuiltinImpl, MapBuiltin, MergeBuiltin, ReduceBuiltin};
 use crate::callsite;
-use crate::diag::{Diagnostic, FileId, Span, E002, E005, E006, E008, E009, E010};
+use crate::diag::{Diagnostic, FileId, Span, E002, E003, E005, E006, E008, E009, E010, E011};
 use crate::interp;
 use crate::ir::{Args, Value};
 use crate::math::{CallHook, FallbackHook, MathEngine, Scope, V1Engine};
 use crate::namespace::{classify, DefClass, Definition};
-use crate::parse::{key_to_string, Node};
+use crate::parse::{key_to_string, node_to_value, Node};
 use crate::project::{Options, PlainMode, Project};
 
 /// Resolve the entry path `<folder.path>.<file>.<component>` against an
@@ -259,6 +259,26 @@ pub fn resolve_ref<'a>(
                     }
                 }
             }
+            // Also try appending a trailing `?` (the top-level `a?` shorthand
+            // registers as `full_name: "a?"` but is called by the bare name `a`).
+            if !name.ends_with('?') {
+                let with_question = format!("{}?", name);
+                if let Some(def) = project.namespaces.get("", &with_question) {
+                    if !def.full_name.starts_with('$') {
+                        return Ok(def);
+                    }
+                }
+            }
+            // Also try appending a trailing `$?` (the top-level `a$?` shorthand
+            // registers as `full_name: "a$?"` but is called by the bare name `a`).
+            if !name.ends_with("$?") {
+                let with_dollar_question = format!("{}$?", name);
+                if let Some(def) = project.namespaces.get("", &with_dollar_question) {
+                    if !def.full_name.starts_with('$') {
+                        return Ok(def);
+                    }
+                }
+            }
             if plain != PlainMode::False {
                 let mut paths: Vec<&str> = project
                     .namespaces
@@ -278,6 +298,24 @@ pub fn resolve_ref<'a>(
                     if !name.ends_with('$') {
                         let with_dollar = format!("{}$", name);
                         if let Some(def) = project.namespaces.get(path, &with_dollar) {
+                            if !templates_only || def.full_name.starts_with('$') {
+                                return Ok(def);
+                            }
+                        }
+                    }
+                    // Also try the trailing-? variant for sub-namespace lookups.
+                    if !name.ends_with('?') {
+                        let with_question = format!("{}?", name);
+                        if let Some(def) = project.namespaces.get(path, &with_question) {
+                            if !templates_only || def.full_name.starts_with('$') {
+                                return Ok(def);
+                            }
+                        }
+                    }
+                    // Also try the trailing-$? variant for sub-namespace lookups.
+                    if !name.ends_with("$?") {
+                        let with_dollar_question = format!("{}$?", name);
+                        if let Some(def) = project.namespaces.get(path, &with_dollar_question) {
                             if !templates_only || def.full_name.starts_with('$') {
                                 return Ok(def);
                             }
@@ -447,6 +485,43 @@ impl<'a> Resolver<'a> {
         args: &Args,
         chain_initial: Option<&Args>,
     ) -> Result<Value, Diagnostic> {
+        // Rule 20: wrong modifier order `$?` — both `math_shorthand` (trailing
+        // `$`) and `trailing_question` (trailing `?`) set is a type error.
+        if def.math_shorthand && def.trailing_question {
+            return Err(self.def_err(
+                def,
+                E011,
+                format!(
+                    "wrong modifier order on `{}`: `$` (math) and `?` (optional) cannot be combined",
+                    def.full_name,
+                ),
+            ));
+        }
+        // Rule 17: optional component default — when `trailing_question` is
+        // set and the caller provides named args, it's a type error (E011).
+        if def.trailing_question && !args.named_vec().is_empty() {
+            return Err(self.def_err(
+                def,
+                E011,
+                format!(
+                    "optional component `{}` called with named args — expected no args or a single positional arg",
+                    def.full_name,
+                ),
+            ));
+        }
+        // Rule 17: optional component default — when `trailing_question` is
+        // set and the caller provides a positional arg, return the first
+        // positional arg as the override (the default is bypassed).
+        if def.trailing_question && !args.positional_vec().is_empty() {
+            return Ok(args.positional_vec()[0].clone());
+        }
+        // Rule 17: optional component default — when `trailing_question` is
+        // set and no arguments are supplied, return the body as a plain value
+        // without evaluating it or going through the template chain / step 3.
+        if def.trailing_question && args.named_vec().is_empty() && args.positional_vec().is_empty()
+        {
+            return Ok(node_to_value(&def.body));
+        }
         let scope = self.scope_for(def, args);
         // Top-level `a$` / `a?$` shorthand: body is a math source string.
         // Evaluate it as `${<body>}` and use the result directly.
@@ -463,8 +538,80 @@ impl<'a> Resolver<'a> {
             let value = interp::resolve(&segments, &scope, &V1Engine)?;
             return self.finish(def, args, chain_initial, ResolvedBody::Value(value));
         }
-        let body = self.resolve_body(&def.body, &scope, def.file)?;
+        // Rule 17 chain fallback: when body evaluation fails with E003
+        // (missing required argument), check if a `?`-suffixed template
+        // exists in the chain and use its default instead.
+        let body = match self.resolve_body(&def.body, &scope, def.file) {
+            Ok(body) => body,
+            Err(err) if err.code == E003 => {
+                if let Some(default) = self.try_chain_question_default(def, args)? {
+                    return Ok(default);
+                }
+                return Err(err);
+            }
+            Err(err) => return Err(err),
+        };
         self.finish(def, args, chain_initial, body)
+    }
+
+    /// Rule 17 chain fallback: look up a `?`-suffixed template in the chain
+    /// and, if found with `trailing_question`, return its body as a default
+    /// value (without evaluating it). Returns `Ok(None)` if no such template
+    /// exists.
+    fn try_chain_question_default(
+        &self,
+        def: &Definition,
+        _args: &Args,
+    ) -> Result<Option<Value>, Diagnostic> {
+        let ns = self.def_namespace(def);
+        let name = format!("${}", def.full_name);
+        // Look up templates in the chain: `$comp3`, `$comp3$`, `$comp3?`, `$comp3$?`.
+        let tpl = self
+            .lookup_template(&ns, &name, def.file)
+            .or_else(|| {
+                if !name.ends_with('$') {
+                    let with_dollar = format!("{}$", name);
+                    self.lookup_template(&ns, &with_dollar, def.file)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                if !name.ends_with('?') {
+                    let with_question = format!("{}?", name);
+                    self.lookup_template(&ns, &with_question, def.file)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                if !name.ends_with("$?") {
+                    let with_dollar_question = format!("{}$?", name);
+                    self.lookup_template(&ns, &with_dollar_question, def.file)
+                } else {
+                    None
+                }
+            });
+        let Some(tpl) = tpl else {
+            return Ok(None);
+        };
+        if tpl.trailing_question {
+            // Rule 20: wrong modifier order `$?` — both `math_shorthand` and
+            // `trailing_question` is a type error (E011).
+            if tpl.math_shorthand {
+                return Err(self.def_err(
+                    tpl,
+                    E011,
+                    format!(
+                        "wrong modifier order on `{}`: `$` (math) and `?` (optional) cannot be combined",
+                        tpl.full_name,
+                    ),
+                ));
+            }
+            Ok(Some(node_to_value(&tpl.body)))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Rule-11 steps 2–3 on the post-step-1 body. Step 2 (rule 5): the
@@ -612,8 +759,34 @@ impl<'a> Resolver<'a> {
         chain_initial: Option<&Args>,
     ) -> Result<Option<Value>, Diagnostic> {
         let ns = self.def_namespace(def);
-        let name = format!("${}", def.full_name.trim_end_matches('$'));
-        let Some(tpl) = self.lookup_template(&ns, &name, def.file) else {
+        let name = format!("${}", def.full_name);
+        let tpl = self
+            .lookup_template(&ns, &name, def.file)
+            .or_else(|| {
+                if !name.ends_with('$') {
+                    let with_dollar = format!("{}$", name);
+                    self.lookup_template(&ns, &with_dollar, def.file)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                if !name.ends_with('?') {
+                    let with_question = format!("{}?", name);
+                    self.lookup_template(&ns, &with_question, def.file)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                if !name.ends_with("$?") {
+                    let with_dollar_question = format!("{}$?", name);
+                    self.lookup_template(&ns, &with_dollar_question, def.file)
+                } else {
+                    None
+                }
+            });
+        let Some(tpl) = tpl else {
             return Ok(None);
         };
         if matches!(tpl.body, Node::Array(..)) {
@@ -1729,6 +1902,7 @@ mod tests {
             span: SPAN,
             body: Node::Int(1, SPAN),
             math_shorthand: false,
+            trailing_question: false,
         }
     }
 

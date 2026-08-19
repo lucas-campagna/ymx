@@ -56,6 +56,9 @@ pub struct Definition {
     /// `true` for a top-level `a$` / `a?$` shorthand: the body is a math
     /// source string to be evaluated as `${<body>}` when the component resolves.
     pub math_shorthand: bool,
+    /// `true` for a top-level `a?` / `a?$` name: the definition carries a
+    /// trailing `?` modifier (v2 optional/default-merge; E010 in v1).
+    pub trailing_question: bool,
 }
 
 /// Parsed metadata about a regular component/template name.
@@ -73,6 +76,8 @@ pub struct ComponentMeta {
     /// `true` iff the name had a trailing `$` (or `?$`) that was stripped.
     /// The body is a math source string to be evaluated as `${<body>}`.
     pub trailing_dollar: bool,
+    /// `true` iff the name had a trailing `?` (or `?$`) that was stripped.
+    pub trailing_question: bool,
     /// Span of the name (for diagnostics).
     pub span: Span,
 }
@@ -174,14 +179,21 @@ pub fn classify(full_name: &str, span: Span) -> DefClass {
     let dollar_count = idx as u32;
     let after_leading = &full_name[idx..];
 
-    // Strip trailing `$` or `?$` before effective-id validation.
-    let (effective_id, trailing_dollar) = if let Some(stripped) = after_leading.strip_suffix("?$") {
-        (stripped, true)
-    } else if let Some(stripped) = after_leading.strip_suffix('$') {
-        (stripped, true)
-    } else {
-        (after_leading, false)
-    };
+    // Strip trailing `?$`, `$?`, `$`, or `?` before effective-id validation.
+    // `?$` is the correct v2 order (optional + math); `$?` is the wrong order
+    // (rule 20) — both set trailing_dollar + trailing_question.
+    let (effective_id, trailing_dollar, trailing_question) =
+        if let Some(stripped) = after_leading.strip_suffix("?$") {
+            (stripped, true, true)
+        } else if let Some(stripped) = after_leading.strip_suffix("$?") {
+            (stripped, true, true)
+        } else if let Some(stripped) = after_leading.strip_suffix('$') {
+            (stripped, true, false)
+        } else if let Some(stripped) = after_leading.strip_suffix('?') {
+            (stripped, false, true)
+        } else {
+            (after_leading, false, false)
+        };
 
     if !is_valid_effective_id(effective_id) {
         return DefClass::InvalidName(span);
@@ -194,6 +206,7 @@ pub fn classify(full_name: &str, span: Span) -> DefClass {
         effective_id: effective_id.clone(),
         file_scoped,
         trailing_dollar,
+        trailing_question,
         span,
     };
     match effective_id.as_str() {
@@ -495,6 +508,7 @@ pub fn extract_document(file: FileId, body: &Node) -> DocExtract {
                     span: meta.span,
                     body: value.clone(),
                     math_shorthand: meta.trailing_dollar,
+                    trailing_question: meta.trailing_question,
                 };
                 if meta.file_scoped {
                     out.file_scoped_defs.push(def);
@@ -788,6 +802,7 @@ mod tests {
             span: Span { line, col: 1 },
             body: Node::Null(Span { line, col: 1 }),
             math_shorthand: false,
+            trailing_question: false,
         }
     }
 
