@@ -21,8 +21,52 @@ use ymx_core::parse::parse_document;
 
 pub use ymx_core;
 pub use ymx_core::diag::Diagnostic;
+pub use ymx_core::exec::{CommandExecutor, ExecError, ExecOutput};
 pub use ymx_core::ir::Value;
 pub use ymx_core::project::{Format, Options, Project};
+
+use std::process::Command;
+
+/// Default command executor that shells out to the platform's shell.
+///
+/// - `"sh"` → `sh -c <command>`
+/// - `"pw"` → `pwsh -c <command>` (or `powershell -Command` on Windows)
+/// - anything else → [`ExecError::UnknownBackend`]
+#[derive(Debug)]
+pub struct StdExecutor;
+
+impl CommandExecutor for StdExecutor {
+    fn execute(&self, backend: &str, command: &str) -> Result<ExecOutput, ExecError> {
+        let mut cmd = match backend {
+            "sh" => {
+                let mut c = Command::new("sh");
+                c.arg("-c").arg(command);
+                c
+            }
+            "pw" => {
+                let mut c = if cfg!(windows) {
+                    Command::new("powershell")
+                } else {
+                    Command::new("pwsh")
+                };
+                if cfg!(windows) {
+                    c.arg("-Command").arg(command);
+                } else {
+                    c.arg("-c").arg(command);
+                }
+                c
+            }
+            other => return Err(ExecError::UnknownBackend(other.to_string())),
+        };
+
+        let output = cmd.output().map_err(|e| ExecError::SpawnFailed(e.to_string()))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        Ok(ExecOutput {
+            exit_code: output.status.code().unwrap_or(-1),
+            stdout,
+        })
+    }
+}
 
 /// The three forms of `_use` values (parsed from `MetaValue.value`).
 #[derive(Debug, Clone)]
@@ -1124,6 +1168,35 @@ mod tests {
         assert_eq!(err.len(), 1);
         assert_eq!(err[0].code, E001);
     }
+
+    // ---- StdExecutor tests ----
+
+    #[test]
+    fn std_executor_sh_echoes_output() {
+        let exec = StdExecutor;
+        let result = exec.execute("sh", "echo hi").expect("sh executes");
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "hi\n");
+    }
+
+    #[test]
+    fn std_executor_unknown_backend_is_err() {
+        let exec = StdExecutor;
+        let err = exec.execute("ruby", "puts 1").expect_err("unknown backend");
+        match err {
+            ExecError::UnknownBackend(name) => assert_eq!(name, "ruby"),
+            other => panic!("expected UnknownBackend, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn std_executor_nonzero_exit_code() {
+        let exec = StdExecutor;
+        let result = exec.execute("sh", "exit 1").expect("spawns ok");
+        assert_eq!(result.exit_code, 1);
+    }
+
+    // ---- meta value tests ----
 
     #[test]
     fn meta_values_are_uninterpreted_verbatim() {
