@@ -10,7 +10,8 @@
 //!
 //! - [`builtin`] — `$map`, `$reduce`, `$merge` special-form implementations
 //! - [`callsite`] — inline call-site (`$name(...)`) parsing and resolution
-//! - [`diag`] — [`Diagnostic`] type and error-code constants (`E001`…`E013`, `E015`)
+//! - [`diag`] — [`Diagnostic`] type and error-code constants (`E001`…`E013`, `E015`, `E016`)
+//! - [`exec`] — [`CommandExecutor`] trait and execution types (`ExecOutput`, `ExecError`)
 //! - [`interp`] — interpolation engine (`$name`, `$N`, `${...}`, escapes)
 //! - [`ir`] — [`Value`] IR type (the compiler's internal output representation)
 //! - [`math`] — math expression evaluator (`${...}`)
@@ -28,6 +29,7 @@
 pub mod builtin;
 pub(crate) mod callsite;
 pub mod diag;
+pub mod exec;
 pub mod interp;
 pub mod ir;
 pub mod math;

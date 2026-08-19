@@ -4,8 +4,10 @@
 //! re-exported by `ymx-lib`.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::diag::FileId;
+use crate::exec::CommandExecutor;
 use crate::ir::Value;
 use crate::namespace::{Definition, FileScopeStore, NamespaceStore};
 
@@ -41,9 +43,14 @@ pub enum PlainMode {
 /// Field defaults (PRD / AGENTS invariants): `entry = "main.main"` (a
 /// file-path entry address, not a bare name), `from_keyword = "from"`,
 /// `default_keyword = "default"`, `max_depth = 256`, `pretty = false`,
-/// `format = Format::Json`, `plain = PlainMode::False`. Effective value
+/// `format = Format::Json`, `plain = PlainMode::False`,
+/// `allowed_backends = None`, `executor = None`. Effective value
 /// precedence is CLI flag > entry-file `_ymx` > engine default.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// The `executor` field is not compared in `PartialEq` because trait
+/// objects are not comparable. Two `Options` that differ only in
+/// `executor` are considered equal.
+#[derive(Debug, Clone)]
 pub struct Options {
     pub entry: String,
     pub from_keyword: String,
@@ -52,6 +59,26 @@ pub struct Options {
     pub pretty: bool,
     pub format: Format,
     pub plain: PlainMode,
+    /// Restrict which backends `$<backend>{...}` may use.
+    /// `None` means all backends are allowed.
+    pub allowed_backends: Option<Vec<String>>,
+    /// Pluggable command executor. `None` means shell execution is
+    /// disabled (`$<backend>{...}` raises E016).
+    pub executor: Option<Arc<dyn CommandExecutor>>,
+}
+
+impl PartialEq for Options {
+    fn eq(&self, other: &Self) -> bool {
+        self.entry == other.entry
+            && self.from_keyword == other.from_keyword
+            && self.default_keyword == other.default_keyword
+            && self.max_depth == other.max_depth
+            && self.pretty == other.pretty
+            && self.format == other.format
+            && self.plain == other.plain
+            && self.allowed_backends == other.allowed_backends
+        // `executor` is intentionally excluded: dyn CommandExecutor is not PartialEq.
+    }
 }
 
 impl Default for Options {
@@ -64,6 +91,8 @@ impl Default for Options {
             pretty: false,
             format: Format::Json,
             plain: PlainMode::False,
+            allowed_backends: None,
+            executor: None,
         }
     }
 }
