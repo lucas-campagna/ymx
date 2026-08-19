@@ -612,7 +612,7 @@ impl<'a> Resolver<'a> {
         chain_initial: Option<&Args>,
     ) -> Result<Option<Value>, Diagnostic> {
         let ns = self.def_namespace(def);
-        let name = format!("${}", def.full_name);
+        let name = format!("${}", def.full_name.trim_end_matches('$'));
         let Some(tpl) = self.lookup_template(&ns, &name, def.file) else {
             return Ok(None);
         };
