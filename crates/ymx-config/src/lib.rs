@@ -34,6 +34,8 @@ pub struct CliOverrides {
     pub format: Option<Format>,
     /// Plain mode override (set via `_ymx` front matter, not CLI).
     pub plain: Option<PlainMode>,
+    /// `--allowed-backends <list>` override (default `None` = all allowed).
+    pub allowed_backends: Option<Vec<String>>,
 }
 
 impl CliOverrides {
@@ -46,6 +48,7 @@ impl CliOverrides {
             pretty: None,
             format: None,
             plain: None,
+            allowed_backends: None,
         }
     }
 }
@@ -103,6 +106,7 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
     let mut pretty: Option<bool> = None;
     let mut format: Option<Format> = None;
     let mut plain: Option<PlainMode> = None;
+    let mut allowed_backends: Option<Vec<String>> = None;
 
     if let Some((_, value)) = project.raw_meta_ymx.iter().find(|(fid, _)| *fid == file_id) {
         let entry_file = project.files[file_id.0 as usize].clone();
@@ -172,6 +176,36 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
                                 "expected one of \"false\" | \"true\" | \"template\" (a string)",
                             )),
                         },
+                        "allowed_backends" => match field_value {
+                            Value::Array(items) => {
+                                let mut backends = Vec::with_capacity(items.len());
+                                let mut valid = true;
+                                for item in items {
+                                    match item {
+                                        Value::String(s) if !s.is_empty() => {
+                                            backends.push(s.clone());
+                                        }
+                                        _ => {
+                                            valid = false;
+                                            diags.push(invalid_field(
+                                                &entry_file,
+                                                "allowed_backends",
+                                                "expected a list of non-empty strings",
+                                            ));
+                                            break;
+                                        }
+                                    }
+                                }
+                                if valid {
+                                    allowed_backends = Some(backends);
+                                }
+                            }
+                            _ => diags.push(invalid_field(
+                                &entry_file,
+                                "allowed_backends",
+                                "expected a list of strings",
+                            )),
+                        },
                         _ => diags.push(Diagnostic {
                             file: Some(entry_file.clone()),
                             line: 1,
@@ -202,6 +236,7 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
     opts.format = cli.format.clone().or(format).unwrap_or(Format::Json);
     let effective_plain = cli.plain.clone().or(plain).unwrap_or(PlainMode::False);
     opts.plain = effective_plain.clone();
+    opts.allowed_backends = cli.allowed_backends.clone().or(allowed_backends);
 
     // Promotion clash check: under the effective `plain`, a sub-namespace name
     // that would be promoted must not collide with an existing global
@@ -699,5 +734,121 @@ mod tests {
         assert_eq!(diags.len(), 4, "1 E010 + 3 E004");
         assert_eq!(diags.iter().filter(|d| d.code == E010).count(), 1);
         assert_eq!(diags.iter().filter(|d| d.code == E004).count(), 3);
+    }
+
+    #[test]
+    fn allowed_backends_valid_list() {
+        let p = with_ymx(project(), 0, "allowed_backends: [sh]\n");
+        let opts = extract_options(&p, &CliOverrides::default_for_tests())
+            .expect("valid allowed_backends");
+        assert_eq!(opts.allowed_backends, Some(vec!["sh".to_string()]));
+    }
+
+    #[test]
+    fn allowed_backends_multiple_entries() {
+        let p = with_ymx(project(), 0, "allowed_backends: [sh, python, ruby]\n");
+        let opts = extract_options(&p, &CliOverrides::default_for_tests())
+            .expect("valid allowed_backends");
+        assert_eq!(
+            opts.allowed_backends,
+            Some(vec![
+                "sh".to_string(),
+                "python".to_string(),
+                "ruby".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn allowed_backends_absent_is_none() {
+        let p = with_ymx(project(), 0, "max_depth: 10\n");
+        let opts = extract_options(&p, &CliOverrides::default_for_tests())
+            .expect("absent allowed_backends");
+        assert_eq!(opts.allowed_backends, None);
+    }
+
+    #[test]
+    fn allowed_backends_empty_list() {
+        let p = with_ymx(project(), 0, "allowed_backends: []\n");
+        let opts = extract_options(&p, &CliOverrides::default_for_tests())
+            .expect("empty list is valid");
+        assert_eq!(opts.allowed_backends, Some(vec![]));
+    }
+
+    #[test]
+    fn allowed_backends_rejects_non_list() {
+        for src in [
+            "allowed_backends: sh\n",
+            "allowed_backends: 5\n",
+            "allowed_backends: true\n",
+        ] {
+            let p = with_ymx(project(), 0, src);
+            let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+            assert_eq!(diags.len(), 1, "{src}");
+            assert_eq!(diags[0].code, E010, "{src}");
+            assert_eq!(
+                diags[0].component.as_deref(),
+                Some("allowed_backends"),
+                "{src}"
+            );
+        }
+    }
+
+    #[test]
+    fn allowed_backends_rejects_non_string_elements() {
+        for src in ["allowed_backends: [5]\n", "allowed_backends: [true]\n"] {
+            let p = with_ymx(project(), 0, src);
+            let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+            assert_eq!(diags.len(), 1, "{src}");
+            assert_eq!(diags[0].code, E010, "{src}");
+            assert_eq!(
+                diags[0].component.as_deref(),
+                Some("allowed_backends"),
+                "{src}"
+            );
+        }
+    }
+
+    #[test]
+    fn allowed_backends_rejects_empty_string_element() {
+        let p = with_ymx(project(), 0, "allowed_backends: [\"\"]\n");
+        let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, E010);
+        assert_eq!(diags[0].component.as_deref(), Some("allowed_backends"));
+    }
+
+    #[test]
+    fn cli_allowed_backends_overrides_entry() {
+        let p = with_ymx(project(), 0, "allowed_backends: [python]\n");
+        let cli = CliOverrides {
+            allowed_backends: Some(vec!["ruby".to_string()]),
+            ..CliOverrides::default_for_tests()
+        };
+        let opts = extract_options(&p, &cli).expect("CLI beats entry");
+        assert_eq!(opts.allowed_backends, Some(vec!["ruby".to_string()]));
+    }
+
+    #[test]
+    fn cli_allowed_backends_overrides_absent_entry() {
+        let cli = CliOverrides {
+            allowed_backends: Some(vec!["sh".to_string()]),
+            ..CliOverrides::default_for_tests()
+        };
+        let opts = extract_options(&project(), &cli).expect("CLI over absent");
+        assert_eq!(opts.allowed_backends, Some(vec!["sh".to_string()]));
+    }
+
+    #[test]
+    fn allowed_backends_collected_alongside_other_errors() {
+        let p = with_ymx(project(), 0, "allowed_backends: [5]\nfoo: 1\n");
+        let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
+        assert_eq!(diags.len(), 2, "1 E010 for allowed_backends + 1 E010 for foo");
+        let components: Vec<Option<&str>> = diags.iter().map(|d| d.component.as_deref()).collect();
+        assert_eq!(
+            components,
+            [Some("allowed_backends"), Some("foo")],
+            "errors collected in insertion order"
+        );
     }
 }

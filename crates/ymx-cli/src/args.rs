@@ -86,6 +86,7 @@ impl ParsedCli {
             pretty: self.pretty,
             format: self.format.clone(),
             plain: None,
+            allowed_backends: None,
         }
     }
 }

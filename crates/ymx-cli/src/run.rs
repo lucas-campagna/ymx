@@ -252,6 +252,7 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
             pretty: cli.pretty,
             format: cli.format.clone(),
             plain: None,
+            allowed_backends: None,
         }
     } else {
         cli.overrides()
