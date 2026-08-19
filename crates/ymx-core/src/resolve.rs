@@ -31,9 +31,9 @@ use indexmap::IndexMap;
 
 use crate::builtin::{Builtin, BuiltinCtx, BuiltinImpl, MapBuiltin, MergeBuiltin, ReduceBuiltin};
 use crate::callsite;
-use crate::diag::{Diagnostic, FileId, Span, E002, E003, E005, E006, E008, E009, E010, E011};
+use crate::diag::{Diagnostic, FileId, Span, E002, E003, E005, E006, E008, E009, E010, E011, E016};
 use crate::interp;
-use crate::ir::{Args, Value};
+use crate::ir::{render_value, Args, Value};
 use crate::math::{CallHook, FallbackHook, MathEngine, Scope, V1Engine};
 use crate::namespace::{classify, DefClass, Definition};
 use crate::parse::{key_to_string, node_to_value, Node};
@@ -630,18 +630,25 @@ impl<'a> Resolver<'a> {
     ) -> Result<Value, Diagnostic> {
         let initial = chain_initial.unwrap_or(args);
         let output = self.output(&body);
+        // Intercept exec markers created by the property-key shorthand.
+        let output = self.exec_markers(output, def.span, def.file)?;
         // Step 2: the template chain (rule 5).
         let chained = self.chain_link(def, initial, &output, chain_initial)?;
         // Step 3: `from` / shortcut dispatch (rules 6/8) on the post-chain
         // property set.
         match chained {
             Some(result) => self.step3(&result, def.file, Some(&def.full_name)),
-            None => match &body {
-                ResolvedBody::Object(props) => {
-                    self.dispatch_from(props, def.file, Some(&def.full_name))
+            None => {
+                // Use the original body for dispatch_from (which needs the
+                // PropertySet for from/shortcut), but use the exec-marker-
+                // resolved output for non-object bodies.
+                match &body {
+                    ResolvedBody::Object(props) => {
+                        self.dispatch_from(props, def.file, Some(&def.full_name))
+                    }
+                    ResolvedBody::Value(_) => self.step3(&output, def.file, Some(&def.full_name)),
                 }
-                ResolvedBody::Value(v) => self.step3(v, def.file, Some(&def.full_name)),
-            },
+            }
         }
     }
 
@@ -1252,6 +1259,35 @@ impl<'a> Resolver<'a> {
                             .to_string(),
                     ));
                 }
+                crate::parse::Key::String(s) if has_executor_suffix(s) => {
+                    // `$<backend>` property-key shorthand (rule 19):
+                    // `key$sh: <cmd>` ≡ `key: $sh{<cmd>}` — strip the
+                    // `$<backend>` suffix and create an exec marker directly.
+                    let (base, backend) = split_executor_suffix(s);
+                    let raw = self.raw_value_string(&entry.value, scope)?;
+                    let span = entry.value.span();
+                    // Interpolate the command string so `$name` etc. resolve.
+                    let segments = interp::scan(&raw, span)?;
+                    let interpolated = interp::resolve(&segments, scope, &V1Engine)?;
+                    let cmd_str = match interpolated {
+                        Value::String(s) => s,
+                        other => render_value(&other).map_err(|_| {
+                            ctx_err(
+                                scope,
+                                E011,
+                                "exec command must resolve to a string".to_string(),
+                            )
+                        })?,
+                    };
+                    let mut m = IndexMap::new();
+                    m.insert(
+                        "__exec_backend".to_string(),
+                        Value::string(backend.to_string()),
+                    );
+                    m.insert("__exec_command".to_string(), Value::string(cmd_str));
+                    set.named.insert(base.to_string(), Value::Object(m));
+                    set.order.push(PropKey::Named(base.to_string()));
+                }
                 _ => {
                     let name = key_to_string(&entry.key);
                     set.order.push(PropKey::Named(name));
@@ -1416,6 +1452,28 @@ impl<'a> Resolver<'a> {
         matches!(key, crate::parse::Key::String(s) if s == &self.opts.from_keyword)
     }
 
+    /// Extract the raw text representation of a node for use in executor
+    /// shorthand wrapping. Strings pass through; scalars render via
+    /// `render_value`; arrays/objects are an error (E011).
+    fn raw_value_string(&self, node: &Node, scope: &Scope<'_>) -> Result<String, Diagnostic> {
+        match node {
+            Node::String(s, _) => Ok(s.clone()),
+            Node::Int(i, _) => Ok(i.to_string()),
+            Node::Float(f, _) => Ok(crate::ir::render_f64(*f)),
+            Node::Bool(b, _) => Ok(b.to_string()),
+            Node::Null(_) => Ok("null".to_string()),
+            Node::Array(_, span) | Node::Object(_, span) => Err(Diagnostic {
+                file: scope.file.clone(),
+                line: span.line,
+                col: span.col,
+                component: scope.component.clone(),
+                code: E011,
+                message: "executor command must be a scalar value (array/object not allowed)"
+                    .to_string(),
+            }),
+        }
+    }
+
     /// Validates property-key modifiers. The `$` modifier (rule 18) and `?`
     /// modifier (rule 17) are validated here but handled in
     /// [`resolve_property_set`].
@@ -1527,7 +1585,10 @@ impl<'a> Resolver<'a> {
             }
             None => match self.shortcut(&props.named, &props.slots, file, component)? {
                 Some(result) => Ok(result),
-                None => Ok(props.to_object()),
+                None => {
+                    let output = props.to_object();
+                    self.exec_markers(output, Span { line: 0, col: 0 }, file)
+                }
             },
         }
     }
@@ -1571,7 +1632,8 @@ impl<'a> Resolver<'a> {
     }
 
     /// Resolve a string scalar: a whole-string `$name(...)` is an inline
-    /// call-site (rule 3); anything else goes through interpolation.
+    /// call-site (rule 3); a whole-string `$sh{...}` is an executor call
+    /// (rule 19); anything else goes through interpolation.
     fn resolve_string(
         &self,
         s: &str,
@@ -1583,9 +1645,123 @@ impl<'a> Resolver<'a> {
             Ok(Some(call)) => self.resolve_call(&call, span, scope, file),
             Ok(None) => {
                 let segments = interp::scan(s, span)?;
-                interp::resolve(&segments, scope, &V1Engine)
+                let value = interp::resolve(&segments, scope, &V1Engine)?;
+                self.maybe_exec(value, span, file)
             }
             Err((code, message)) => Err(ctx_err(scope, code, message)),
+        }
+    }
+
+    /// If `value` is an executor-call marker (`__exec_backend` /
+    /// `__exec_command`), execute it; otherwise pass through.
+    fn maybe_exec(&self, value: Value, span: Span, file: FileId) -> Result<Value, Diagnostic> {
+        let Value::Object(m) = &value else {
+            return Ok(value);
+        };
+        let Some(Value::String(backend)) = m.get("__exec_backend") else {
+            return Ok(value);
+        };
+        let Some(Value::String(command)) = m.get("__exec_command") else {
+            return Ok(value);
+        };
+        // Task 4: execute the command via the pluggable executor.
+        let backend = backend.clone();
+        let command = command.clone();
+        self.execute_command(&backend, &command, span, file)
+    }
+
+    /// Recursively scan a Value for exec markers and execute them.
+    /// Used for exec markers created by the property-key shorthand.
+    fn exec_markers(&self, value: Value, span: Span, file: FileId) -> Result<Value, Diagnostic> {
+        match value {
+            Value::Object(m) => {
+                if m.len() == 2 {
+                    if let (Some(Value::String(backend)), Some(Value::String(command))) =
+                        (m.get("__exec_backend"), m.get("__exec_command"))
+                    {
+                        return self.execute_command(backend, command, span, file);
+                    }
+                }
+                let mut out = IndexMap::with_capacity(m.len());
+                for (k, v) in m {
+                    out.insert(k, self.exec_markers(v, span, file)?);
+                }
+                Ok(Value::Object(out))
+            }
+            Value::Array(items) => {
+                let out = items
+                    .into_iter()
+                    .map(|v| self.exec_markers(v, span, file))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Value::Array(out))
+            }
+            other => Ok(other),
+        }
+    }
+
+    /// Execute a shell command via the pluggable [`CommandExecutor`].
+    ///
+    /// - If `opts.executor` is `None` → E016 (executor not provided).
+    /// - If `opts.allowed_backends` is `Some` and `backend` is not in the
+    ///   list → E016 (backend not allowed).
+    /// - On `ExecError::UnknownBackend` or `ExecError::SpawnFailed` → E016.
+    /// - On success → `Value::Object({ "exit_code": Int, "stdout": String })`.
+    fn execute_command(
+        &self,
+        backend: &str,
+        command: &str,
+        span: Span,
+        file: FileId,
+    ) -> Result<Value, Diagnostic> {
+        use crate::exec::ExecError;
+
+        let Some(executor) = &self.opts.executor else {
+            return Err(Diagnostic {
+                file: Some(self.project.files[file.0 as usize].clone()),
+                line: span.line,
+                col: span.col,
+                component: None,
+                code: E016,
+                message: "shell execution disabled (no executor provided)".to_string(),
+            });
+        };
+
+        if let Some(ref allowed) = self.opts.allowed_backends {
+            if !allowed.iter().any(|a| a == backend) {
+                return Err(Diagnostic {
+                    file: Some(self.project.files[file.0 as usize].clone()),
+                    line: span.line,
+                    col: span.col,
+                    component: None,
+                    code: E016,
+                    message: format!("backend '{backend}' is not allowed"),
+                });
+            }
+        }
+
+        match executor.execute(backend, command) {
+            Ok(output) => {
+                let mut m = IndexMap::new();
+                m.insert("exit_code".to_string(), Value::Int(output.exit_code as i64));
+                m.insert("stdout".to_string(), Value::string(output.stdout));
+                Ok(Value::Object(m))
+            }
+            Err(ExecError::UnknownBackend(name)) => Err(Diagnostic {
+                file: Some(self.project.files[file.0 as usize].clone()),
+                line: span.line,
+                col: span.col,
+                component: None,
+                code: E016,
+                message: format!("unknown backend '{name}'"),
+            }),
+            Err(ExecError::SpawnFailed(reason)) => Err(Diagnostic {
+                file: Some(self.project.files[file.0 as usize].clone()),
+                line: span.line,
+                col: span.col,
+                component: None,
+                code: E016,
+                message: format!("shell execution failed: {reason}"),
+            }),
         }
     }
 
@@ -1843,6 +2019,33 @@ fn ctx_err(scope: &Scope<'_>, code: &'static str, message: String) -> Diagnostic
         code,
         message,
     }
+}
+
+/// True when `s` ends with `$<valid_identifier>` (rule 19 executor shorthand).
+/// The part before the `$` must be non-empty.
+fn has_executor_suffix(s: &str) -> bool {
+    let Some(dollar_pos) = s.rfind('$') else {
+        return false;
+    };
+    if dollar_pos == 0 {
+        return false; // bare `$backend` — no property name
+    }
+    let backend = &s[dollar_pos + 1..];
+    if backend.is_empty() {
+        return false;
+    }
+    let mut chars = backend.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Split `key$backend` into `(key, backend)`.
+fn split_executor_suffix(s: &str) -> (&str, &str) {
+    let dollar_pos = s.rfind('$').expect("has_executor_suffix guarantees $");
+    (&s[..dollar_pos], &s[dollar_pos + 1..])
 }
 
 /// Build [`Args`] from (named, positional) parts, choosing the minimal
@@ -4092,5 +4295,195 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, $nums)\n",
         )]);
         // Step 1: 1*2=2, Step 2: 2*2=4, Step 3: 3*2=6 (returns last step)
         assert_eq!(compile_ok(&p, "result", &Args::None), Value::int(6));
+    }
+
+    // ---- Rule 19: executor call tests ----
+
+    use crate::exec::{ExecError, ExecOutput};
+    use std::sync::Arc;
+
+    /// A mock executor that echoes the command as stdout with exit code 0,
+    /// unless the command is "fail" (returns exit 1) or "error" (returns
+    /// SpawnFailed).
+    #[derive(Debug)]
+    struct MockExecutor;
+
+    impl crate::exec::CommandExecutor for MockExecutor {
+        fn execute(&self, _backend: &str, command: &str) -> Result<ExecOutput, ExecError> {
+            match command {
+                "fail" => Ok(ExecOutput {
+                    exit_code: 1,
+                    stdout: String::new(),
+                }),
+                "error" => Err(ExecError::SpawnFailed("mock error".to_string())),
+                _ => Ok(ExecOutput {
+                    exit_code: 0,
+                    stdout: format!("{command}\n"),
+                }),
+            }
+        }
+    }
+
+    fn opts_with_exec() -> Options {
+        Options {
+            executor: Some(Arc::new(MockExecutor)),
+            ..Options::default()
+        }
+    }
+
+    #[test]
+    fn executor_call_basic() {
+        let p = project_with(&[("main.yml", "main: $sh{echo hi}\n")]);
+        let opts = opts_with_exec();
+        let val = compile(&p, &opts).unwrap();
+        let mut expected = IndexMap::new();
+        expected.insert("exit_code".to_string(), Value::Int(0));
+        expected.insert("stdout".to_string(), Value::string("echo hi\n"));
+        assert_eq!(val, Value::Object(expected));
+    }
+
+    #[test]
+    fn executor_call_nonzero_exit() {
+        let p = project_with(&[("main.yml", "main: $sh{fail}\n")]);
+        let opts = opts_with_exec();
+        let val = compile(&p, &opts).unwrap();
+        let mut expected = IndexMap::new();
+        expected.insert("exit_code".to_string(), Value::Int(1));
+        expected.insert("stdout".to_string(), Value::string(""));
+        assert_eq!(val, Value::Object(expected));
+    }
+
+    #[test]
+    fn executor_call_no_executor_is_e016() {
+        let p = project_with(&[("main.yml", "main: $sh{echo hi}\n")]);
+        let opts = Options::default(); // executor = None
+        let err = compile(&p, &opts).unwrap_err();
+        assert_eq!(err[0].code, E016);
+        assert!(err[0].message.contains("no executor"), "{}", err[0].message);
+    }
+
+    #[test]
+    fn executor_call_spawn_failed_is_e016() {
+        let p = project_with(&[("main.yml", "main: $sh{error}\n")]);
+        let opts = opts_with_exec();
+        let err = compile(&p, &opts).unwrap_err();
+        assert_eq!(err[0].code, E016);
+        assert!(
+            err[0].message.contains("shell execution failed"),
+            "{}",
+            err[0].message
+        );
+    }
+
+    #[test]
+    fn executor_call_unknown_backend_is_e016() {
+        use crate::exec::ExecError as EE;
+        use std::sync::Arc;
+
+        #[derive(Debug)]
+        struct UnknownBkExec;
+        impl crate::exec::CommandExecutor for UnknownBkExec {
+            fn execute(&self, backend: &str, _command: &str) -> Result<ExecOutput, ExecError> {
+                Err(EE::UnknownBackend(backend.to_string()))
+            }
+        }
+
+        let p = project_with(&[("main.yml", "main: $sh{echo hi}\n")]);
+        let opts = Options {
+            executor: Some(Arc::new(UnknownBkExec)),
+            ..Options::default()
+        };
+        let err = compile(&p, &opts).unwrap_err();
+        assert_eq!(err[0].code, E016);
+        assert!(
+            err[0].message.contains("unknown backend"),
+            "{}",
+            err[0].message
+        );
+    }
+
+    #[test]
+    fn executor_call_disallowed_backend_is_e016() {
+        let p = project_with(&[("main.yml", "main: $pw{echo hi}\n")]);
+        let opts = Options {
+            executor: Some(Arc::new(MockExecutor)),
+            allowed_backends: Some(vec!["sh".to_string()]),
+            ..Options::default()
+        };
+        let err = compile(&p, &opts).unwrap_err();
+        assert_eq!(err[0].code, E016);
+        assert!(err[0].message.contains("not allowed"), "{}", err[0].message);
+    }
+
+    #[test]
+    fn executor_call_allowed_backend() {
+        let p = project_with(&[("main.yml", "main: $sh{echo hi}\n")]);
+        let opts = Options {
+            executor: Some(Arc::new(MockExecutor)),
+            allowed_backends: Some(vec!["sh".to_string()]),
+            ..Options::default()
+        };
+        let val = compile(&p, &opts).unwrap();
+        let mut expected = IndexMap::new();
+        expected.insert("exit_code".to_string(), Value::Int(0));
+        expected.insert("stdout".to_string(), Value::string("echo hi\n"));
+        assert_eq!(val, Value::Object(expected));
+    }
+
+    #[test]
+    fn property_key_shorthand_executor() {
+        let p = project_with(&[("main.yml", "main:\n  x$sh: echo hi\n")]);
+        let opts = opts_with_exec();
+        let val = compile(&p, &opts).unwrap();
+        let mut expected = IndexMap::new();
+        let mut exec_result = IndexMap::new();
+        exec_result.insert("exit_code".to_string(), Value::Int(0));
+        exec_result.insert("stdout".to_string(), Value::string("echo hi\n"));
+        expected.insert("x".to_string(), Value::Object(exec_result));
+        assert_eq!(val, Value::Object(expected));
+    }
+
+    #[test]
+    fn property_key_shorthand_with_interpolation() {
+        let p = project_with(&[("main.yml", "name: world\nmain:\n  x$sh: echo $name\n")]);
+        let opts = opts_with_exec();
+        let val = compile(&p, &opts).unwrap();
+        let mut expected = IndexMap::new();
+        let mut exec_result = IndexMap::new();
+        exec_result.insert("exit_code".to_string(), Value::Int(0));
+        exec_result.insert("stdout".to_string(), Value::string("echo world\n"));
+        expected.insert("x".to_string(), Value::Object(exec_result));
+        assert_eq!(val, Value::Object(expected));
+    }
+
+    #[test]
+    fn template_key_shorthand_executor() {
+        // $box has a template $box, and inside it $x$sh: echo hi
+        // is equivalent to $x: $sh{echo hi}
+        let p = project_with(&[("main.yml", "$box:\n  x$sh: echo hi\nmain: 1\n")]);
+        let opts = opts_with_exec();
+        let val = compile_component(&p, "$box", &Args::None, &opts).unwrap();
+        let mut expected = IndexMap::new();
+        let mut exec_result = IndexMap::new();
+        exec_result.insert("exit_code".to_string(), Value::Int(0));
+        exec_result.insert("stdout".to_string(), Value::string("echo hi\n"));
+        expected.insert("x".to_string(), Value::Object(exec_result));
+        assert_eq!(val, Value::Object(expected));
+    }
+
+    #[test]
+    fn executor_call_preserves_named_args() {
+        // Properties alongside the executor shorthand are passed as named args.
+        let p = project_with(&[("main.yml", "main:\n  cmd: echo hi\n  x$sh: echo test\n")]);
+        let opts = opts_with_exec();
+        let val = compile(&p, &opts).unwrap();
+        // The object should have the exec result under "x" and "cmd" as-is.
+        let mut expected = IndexMap::new();
+        expected.insert("cmd".to_string(), Value::string("echo hi"));
+        let mut exec_result = IndexMap::new();
+        exec_result.insert("exit_code".to_string(), Value::Int(0));
+        exec_result.insert("stdout".to_string(), Value::string("echo test\n"));
+        expected.insert("x".to_string(), Value::Object(exec_result));
+        assert_eq!(val, Value::Object(expected));
     }
 }

@@ -15,6 +15,8 @@ use crate::diag::{Diagnostic, Span, E003, E010, E011};
 use crate::ir::{render_value, NoStringRender, Value};
 use crate::math::{MathEngine, Scope};
 
+use indexmap::IndexMap;
+
 /// One piece of an interpolated string.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Segment {
@@ -24,6 +26,12 @@ pub enum Segment {
     Arg { name: String, span: Span },
     /// A `${...}` math expression; `src` is the raw text between the braces.
     Math { src: String, span: Span },
+    /// A `$<backend>{<command>}` executor call (rule 19).
+    Exec {
+        backend: String,
+        command: String,
+        span: Span,
+    },
 }
 
 /// Scan a YAML string scalar into interpolation [`Segment`]s.
@@ -103,10 +111,37 @@ pub fn scan(src: &str, base: Span) -> Result<Vec<Segment>, Diagnostic> {
                                 break;
                             }
                         }
-                        segments.push(Segment::Arg {
-                            name,
-                            span: span_at(base, src, start),
-                        });
+                        // Check for `$<backend>{<command>}` executor call.
+                        if chars.peek().map(|(_, c)| *c) == Some('{') {
+                            chars.next(); // consume '{'
+                            let mut cmd = String::new();
+                            let mut closed = false;
+                            for (_, mc) in chars.by_ref() {
+                                if mc == '}' {
+                                    closed = true;
+                                    break;
+                                }
+                                cmd.push(mc);
+                            }
+                            if !closed {
+                                return Err(e010(
+                                    span_at(base, src, start),
+                                    format!(
+                                        "unterminated `${{{name}{{...}}}}` executor call in string"
+                                    ),
+                                ));
+                            }
+                            segments.push(Segment::Exec {
+                                backend: name,
+                                command: cmd,
+                                span: span_at(base, src, start),
+                            });
+                        } else {
+                            segments.push(Segment::Arg {
+                                name,
+                                span: span_at(base, src, start),
+                            });
+                        }
                     }
                     Some((_, c)) if c.is_ascii_digit() => {
                         let start = idx;
@@ -166,6 +201,43 @@ pub fn resolve(
         [Segment::Text(t)] => Ok(Value::string(t.clone())),
         [Segment::Arg { name, span }] => resolve_arg(name, *span, scope),
         [Segment::Math { src, .. }] => engine.eval(src, scope),
+        [Segment::Exec {
+            backend,
+            command,
+            span,
+        }] => {
+            // Resolve interpolation inside the command string, then return
+            // an executor-call marker. The actual execution happens in the
+            // resolver (Task 4) — here we just parse and interpolate.
+            let cmd_segments = scan(command, *span)?;
+            let cmd_value = resolve(&cmd_segments, scope, engine)?;
+            let cmd_string = match &cmd_value {
+                Value::String(s) => s.clone(),
+                other => {
+                    return Err(ctx_err(
+                        scope,
+                        *span,
+                        E011,
+                        format!(
+                            "executor command must resolve to a string, got {}",
+                            match other {
+                                Value::Null => "null",
+                                Value::Bool(_) => "bool",
+                                Value::Int(_) => "int",
+                                Value::Float(_) => "float",
+                                Value::String(_) => "string",
+                                Value::Array(_) => "array",
+                                Value::Object(_) => "object",
+                            }
+                        ),
+                    ));
+                }
+            };
+            Ok(Value::object(IndexMap::from([
+                ("__exec_backend".to_string(), Value::string(backend.clone())),
+                ("__exec_command".to_string(), Value::string(cmd_string)),
+            ])))
+        }
         _ => {
             let mut out = String::new();
             for seg in segments {
@@ -178,6 +250,43 @@ pub fn resolve(
                     Segment::Math { src, span } => {
                         let v = engine.eval(src, scope)?;
                         out.push_str(&render_into_text(&v, scope, *span)?);
+                    }
+                    Segment::Exec {
+                        backend,
+                        command,
+                        span,
+                    } => {
+                        // In surrounding text context, resolve the command
+                        // and return the exec marker as text-rendered JSON.
+                        let cmd_segments = scan(command, *span)?;
+                        let cmd_value = resolve(&cmd_segments, scope, engine)?;
+                        let cmd_string = match &cmd_value {
+                            Value::String(s) => s.clone(),
+                            other => {
+                                return Err(ctx_err(
+                                    scope,
+                                    *span,
+                                    E011,
+                                    format!(
+                                        "executor command must resolve to a string, got {}",
+                                        match other {
+                                            Value::Null => "null",
+                                            Value::Bool(_) => "bool",
+                                            Value::Int(_) => "int",
+                                            Value::Float(_) => "float",
+                                            Value::String(_) => "string",
+                                            Value::Array(_) => "array",
+                                            Value::Object(_) => "object",
+                                        }
+                                    ),
+                                ));
+                            }
+                        };
+                        let marker = Value::object(IndexMap::from([
+                            ("__exec_backend".to_string(), Value::string(backend.clone())),
+                            ("__exec_command".to_string(), Value::string(cmd_string)),
+                        ]));
+                        out.push_str(&render_into_text(&marker, scope, *span)?);
                     }
                 }
             }
@@ -780,6 +889,112 @@ mod tests {
                 name: "z".to_string(),
                 span: Span { line: 2, col: 3 },
             }
+        );
+    }
+
+    #[test]
+    fn executor_call_scans_correctly() {
+        let segs = scan("$sh{echo hi}", SPAN).unwrap();
+        assert_eq!(
+            segs,
+            vec![Segment::Exec {
+                backend: "sh".to_string(),
+                command: "echo hi".to_string(),
+                span: SPAN,
+            }]
+        );
+    }
+
+    #[test]
+    fn executor_call_pw_scans_correctly() {
+        let segs = scan("$pw{Get-Content x}", SPAN).unwrap();
+        assert_eq!(
+            segs,
+            vec![Segment::Exec {
+                backend: "pw".to_string(),
+                command: "Get-Content x".to_string(),
+                span: SPAN,
+            }]
+        );
+    }
+
+    #[test]
+    fn executor_call_with_interpolation_in_command() {
+        let segs = scan("$sh{echo $name}", SPAN).unwrap();
+        assert_eq!(
+            segs,
+            vec![Segment::Exec {
+                backend: "sh".to_string(),
+                command: "echo $name".to_string(),
+                span: SPAN,
+            }]
+        );
+    }
+
+    #[test]
+    fn executor_call_with_surrounding_text() {
+        let segs = scan("v=$sh{echo hi}!", SPAN).unwrap();
+        assert_eq!(segs[0], Segment::Text("v=".to_string()));
+        assert_eq!(
+            segs[1],
+            Segment::Exec {
+                backend: "sh".to_string(),
+                command: "echo hi".to_string(),
+                span: Span { line: 1, col: 3 },
+            }
+        );
+        assert_eq!(segs[2], Segment::Text("!".to_string()));
+    }
+
+    #[test]
+    fn math_takes_precedence_over_executor() {
+        // `${sh{...}}` — math containing executor call — is NOT confused
+        // with `$sh{...}`. The `${` takes precedence: the scanner enters
+        // math mode and reads until the first `}`, so `${sh{echo hi}}`
+        // produces Math{src:"sh{echo hi"} + Text("}").
+        let segs = scan("${sh{echo hi}}", SPAN).unwrap();
+        assert_eq!(
+            segs,
+            vec![
+                Segment::Math {
+                    src: "sh{echo hi".to_string(),
+                    span: SPAN,
+                },
+                Segment::Text("}".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn executor_call_with_underscore_backend() {
+        let segs = scan("$_sh{echo hi}", SPAN).unwrap();
+        assert_eq!(
+            segs,
+            vec![Segment::Exec {
+                backend: "_sh".to_string(),
+                command: "echo hi".to_string(),
+                span: SPAN,
+            }]
+        );
+    }
+
+    #[test]
+    fn executor_call_unterminated_is_e010() {
+        let err = scan("$sh{echo hi", SPAN).unwrap_err();
+        assert_eq!(err.code, E010);
+        assert!(err.message.contains("unterminated"), "{}", err.message);
+    }
+
+    #[test]
+    fn executor_call_empty_command() {
+        let segs = scan("$sh{}", SPAN).unwrap();
+        assert_eq!(
+            segs,
+            vec![Segment::Exec {
+                backend: "sh".to_string(),
+                command: "".to_string(),
+                span: SPAN,
+            }]
         );
     }
 }

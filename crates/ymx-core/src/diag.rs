@@ -25,6 +25,7 @@
 //! | `E012` | compile | Positional arg after named arg |
 //! | `E013` | compile | Array/object literal as a direct call arg |
 //! | `E015` | load    | Meta-key reserved name |
+//! | `E016` | compile | Shell execution error |
 //!
 //! `E014` is intentionally absent — `E003` (missing required argument) covers
 //! that case.
@@ -45,6 +46,7 @@ pub const E011: &str = "E011";
 pub const E012: &str = "E012";
 pub const E013: &str = "E013";
 pub const E015: &str = "E015";
+pub const E016: &str = "E016";
 
 /// Index into [`Project::files`](crate::project::Project::files).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
