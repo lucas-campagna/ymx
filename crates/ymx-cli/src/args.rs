@@ -228,6 +228,11 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
             // --test with no positional: use "." as project dir; no stdin involved.
             stdin_is_script = false;
             path = PathBuf::from(".");
+        } else if code.is_some() {
+            // -c provided the script content; no stdin needed for the script.
+            // stdin may still provide call arguments (handled by run.rs).
+            stdin_is_script = false;
+            path = PathBuf::from("."); // sentinel; run.rs handles -c mode
         } else {
             // Non-test with no positional: stdin is the script.
             if std::io::stdin().is_terminal() {
@@ -245,10 +250,13 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         path = positionals.pop().unwrap();
     }
 
-    // Determine test_dir: set when --test is given and the path is a directory.
-    // When stdin_is_script is true the actual project path is a temp file created
-    // at run time, so test_dir must be None even if the sentinel path is ".".
-    let test_dir = if !stdin_is_script && path.is_dir() {
+    // Determine test_dir: set ONLY when --test is given and the path is a
+    // directory. Without the `test` guard, the sentinel "." used by -c-only
+    // mode would match `is_dir()` and incorrectly trigger recursive tests.
+    // When stdin_is_script is true the actual project path is a temp file
+    // created at run time, so test_dir must be None even if the sentinel
+    // path is ".".
+    let test_dir = if test && !stdin_is_script && path.is_dir() {
         Some(path.clone())
     } else {
         None
