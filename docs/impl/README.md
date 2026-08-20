@@ -49,7 +49,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.27 | `done` | Shell execution builtins (`$sh`, `$pw`) | ymx-core, ymx-config, ymx-lib, ymx-cli | [1.27-shell-exec.md](1.27-shell-exec.md) | 1.26 |
 | 1.28 | `done` | CLI inline code flag (`-c`) | ymx-core, ymx-lib, ymx-cli | [1.28-cli-inline-code.md](1.28-cli-inline-code.md) | 1.27 |
 | 1.29 | `done` | Remove bare $name component fallback | ymx-core | [1.29-remove-bare-name-fallback.md](1.29-remove-bare-name-fallback.md) | 1.28 |
-| 1.30 | `planned` | Escape expansion in -c and stdin-as-script | ymx-cli | [1.30-escape-expansion.md](1.30-escape-expansion.md) | 1.29 |
+| 1.30 | `done` | Escape expansion in -c and stdin-as-script | ymx-cli | [1.30-escape-expansion.md](1.30-escape-expansion.md) | 1.29 |
 
 ## Cross-cutting notes
 
