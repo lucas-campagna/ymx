@@ -47,7 +47,7 @@ use ymx_config::{extract_options, CliOverrides};
 use ymx_lib::ymx_core::ir::Args;
 use ymx_lib::ymx_core::project::{Format, Options, Project};
 use ymx_lib::ymx_core::resolve::{compile, compile_component};
-use ymx_lib::{load_project, Diagnostic, StdExecutor, Value};
+use ymx_lib::{load_project, load_project_with_override, Diagnostic, StdExecutor, Value};
 use ymx_test::{parse_tests, run_tests, Expected, TestResult};
 
 use crate::args::ParsedCli;
@@ -202,12 +202,43 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
         return run_recursive_tests(test_dir);
     }
 
-    // Handle stdin-as-script mode: read stdin as the YAML document.
+    // Handle -c/--code inline script mode and stdin-as-script mode.
     // _temp_dir is kept alive for the entire function so Drop runs on return/panic.
     let _temp_dir: Option<TempProjDir>;
     let effective_path: PathBuf;
+    let use_override_load: bool;
 
-    if cli.stdin_is_script {
+    if let Some(ref code) = cli.code {
+        if cli.stdin_is_script {
+            // Mode 3: -c only, stdin will provide args later.
+            let temp = TempProjDir::new();
+            let script_path = temp.path().join("main.yml");
+            if let Err(e) = std::fs::write(&script_path, code) {
+                eprintln!("ymx: failed to write temp script: {e}");
+                return RunOutcome::Diagnostic;
+            }
+            _temp_dir = Some(temp);
+            effective_path = script_path;
+            use_override_load = false;
+        } else if cli.path.exists() && cli.path.is_file() {
+            // Mode 2 or 4: file + -c — load file then overlay -c components.
+            _temp_dir = None;
+            effective_path = cli.path.clone();
+            use_override_load = true;
+        } else {
+            // Mode 1: -c only, no file (or path doesn't exist).
+            let temp = TempProjDir::new();
+            let script_path = temp.path().join("main.yml");
+            if let Err(e) = std::fs::write(&script_path, code) {
+                eprintln!("ymx: failed to write temp script: {e}");
+                return RunOutcome::Diagnostic;
+            }
+            _temp_dir = Some(temp);
+            effective_path = script_path;
+            use_override_load = false;
+        }
+    } else if cli.stdin_is_script {
+        // Original stdin-as-script mode: read stdin as the YAML document.
         let raw = match std::io::read_to_string(std::io::stdin()) {
             Ok(s) => s,
             Err(e) => {
@@ -228,9 +259,11 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
         // Keep temp_dir alive for the duration of the function.
         _temp_dir = Some(temp);
         effective_path = script_path;
+        use_override_load = false;
     } else {
         _temp_dir = None;
         effective_path = cli.path.clone();
+        use_override_load = false;
     }
 
     // Use effective_path for project_root (the entry file's directory).
@@ -239,14 +272,22 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let project = match load_project(&effective_path) {
-        Ok(project) => project,
-        Err(diags) => return render_diags_load_error(&diags),
+    // Load project — with or without -c override.
+    let project = if use_override_load {
+        match load_project_with_override(&effective_path, cli.code.as_deref()) {
+            Ok(project) => project,
+            Err(diags) => return render_diags_load_error(&diags),
+        }
+    } else {
+        match load_project(&effective_path) {
+            Ok(project) => project,
+            Err(diags) => return render_diags_load_error(&diags),
+        }
     };
 
-    // For stdin-is-script mode, effective_path is a temp main.yml, so use "main.main".
-    // For normal mode, use cli.overrides() which derives from cli.path.
-    let overrides = if cli.stdin_is_script {
+    // For temp-file modes (stdin-is-script or -c-only), effective_path is a
+    // temp main.yml, so use "main.main". For file-based modes, use cli.overrides().
+    let overrides = if _temp_dir.is_some() {
         CliOverrides {
             entry: Some("main.main".to_string()),
             max_depth: cli.max_depth,
@@ -278,7 +319,9 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
 
     // Args-from-stdin mode: if stdin has data (non-tty), read and use it as args.
     // If stdin is a tty, just compile without args.
-    if !cli.stdin_is_script && !std::io::stdin().is_terminal() {
+    // When -c is present, stdin always provides args (even when no positional was given,
+    // which set stdin_is_script=true in the args parser).
+    if !std::io::stdin().is_terminal() && (cli.code.is_some() || !cli.stdin_is_script) {
         let stdin_content = match std::io::read_to_string(std::io::stdin()) {
             Ok(s) if !s.is_empty() => Some(s),
             Ok(_) => None, // empty stdin → no args
@@ -783,6 +826,7 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
+            code: None,
         }
     }
 
@@ -806,6 +850,7 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
+            code: None,
         }
     }
 
@@ -823,6 +868,7 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
+            code: None,
         }
     }
 
