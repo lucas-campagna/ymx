@@ -354,30 +354,30 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
         };
 
         if let Some(raw) = stdin_content {
-            // Try JSON first, then YAML fallback.
+            // Try JSON first (raw), then YAML (raw), then YAML (expanded escapes).
+            // JSON already handles \n/\t natively, so no expansion needed there.
+            // YAML needs expansion for shell convenience (e.g. echo 'x: 1\ny: 2' | ymx ...).
             let value: Value = match serde_json::from_str::<serde_json::Value>(&raw) {
                 Ok(json_v) => serde_json_value_to_value(&json_v),
                 Err(_) => {
-                    // Retry as YAML.
-                    let docs = match YamlLoader::load_from_str(&raw) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            eprintln!("ymx: stdin args: could not parse as JSON or YAML: {e}");
-                            return RunOutcome::Diagnostic;
-                        }
+                    // Try YAML with raw content first.
+                    let parse_yaml = |s: &str| -> Option<Value> {
+                        let docs = YamlLoader::load_from_str(s).ok()?;
+                        let doc = docs.first()?;
+                        yaml_to_value(doc)
                     };
-                    let doc = match docs.first() {
-                        Some(d) => d,
-                        None => {
-                            eprintln!("ymx: stdin args: empty YAML document");
-                            return RunOutcome::Diagnostic;
-                        }
-                    };
-                    match yaml_to_value(doc) {
+                    match parse_yaml(&raw) {
                         Some(v) => v,
                         None => {
-                            eprintln!("ymx: stdin args: could not convert YAML to value");
-                            return RunOutcome::Diagnostic;
+                            // Retry YAML with expanded escapes.
+                            let expanded = expand_escapes(&raw);
+                            match parse_yaml(&expanded) {
+                                Some(v) => v,
+                                None => {
+                                    eprintln!("ymx: stdin args: could not parse as JSON or YAML");
+                                    return RunOutcome::Diagnostic;
+                                }
+                            }
                         }
                     }
                 }

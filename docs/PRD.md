@@ -187,6 +187,8 @@ ymx [path] [flags]
   - `Value::Scalar` (number / string / bool / null) → `Args::Positional([value])` — binds to `$0`
   The CLI calls `compile_component(project, "<entry>", &args, &opts)` instead of `compile`. If stdin is a terminal (tty) and `path` is given, the CLI exits 2 with a usage error.
 
+  > Escape expansion (`\n`, `\t`, `\\`) is applied to stdin content as a YAML fallback: if the raw content fails to parse as YAML, the expanded version is tried. JSON is attempted first (raw) and already handles these escapes natively.
+
 `-`**`--test` is unaffected by stdin modes**; it requires a `path` argument and does not read stdin in either case.
 
 **Inline code (`-c`).** The `-c` flag provides inline component definitions as a YAML or JSON string. When combined with a file, `-c` components override matching names from the file (complete replacement, not property-level merge). When used alone, `-c` is the entire script. Stdin can still provide call arguments when a file is present.
