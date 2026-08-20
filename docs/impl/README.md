@@ -1,7 +1,7 @@
 ---
 version: "1.x"
 title: "YMX v1 implementation plan"
-short: "Index of versioned implementation milestones (1.1 – 1.23)"
+short: "Index of versioned implementation milestones (1.1 – 1.28)"
 description: |
   Tracks the build of YMX v1 per docs/PRD.md: the rules-1–18 resolver, JSON
   output, CLI + library, inline `_test`, file-path entry addressing, and
@@ -47,6 +47,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.25 | `done` | `_use` directive (explicit file imports) | ymx-core, ymx-lib | [1.25-use-directive.md](1.25-use-directive.md) | 1.24 |
 | 1.26 | `done` | Fix top-level `$` component-name modifier | ymx-core | [1.26-top-level-component-shorthand.md](1.26-top-level-component-shorthand.md) | 1.6 |
 | 1.27 | `done` | Shell execution builtins (`$sh`, `$pw`) | ymx-core, ymx-config, ymx-lib, ymx-cli | [1.27-shell-exec.md](1.27-shell-exec.md) | 1.26 |
+| 1.28 | `done` | CLI inline code flag (`-c`) | ymx-core, ymx-lib, ymx-cli | [1.28-cli-inline-code.md](1.28-cli-inline-code.md) | 1.27 |
 
 ## Cross-cutting notes
 
