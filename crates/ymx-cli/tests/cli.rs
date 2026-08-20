@@ -539,7 +539,7 @@ fn code_only_math() {
 
 #[test]
 fn code_only_component_call() {
-    let out = ymx(&["-c", "greet: \"hi\"\nmain: $greet"]);
+    let out = ymx(&["-c", "greet: \"hi\"\nmain: ${greet()}"]);
     assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
     assert_eq!(stdout(&out.0), "\"hi\"");
 }
@@ -547,7 +547,7 @@ fn code_only_component_call() {
 #[test]
 fn code_with_file_override() {
     let dir = TempDir::new();
-    dir.write("a.yml", "comp: 1\nmain: $comp");
+    dir.write("a.yml", "comp: 1\nmain: ${comp()}");
     let out = ymx(&[dir.path().join("a.yml").to_str().unwrap(), "-c", "comp: 99"]);
     assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
     assert_eq!(stdout(&out.0), "99");
@@ -560,7 +560,7 @@ fn code_with_file_add_component() {
     let out = ymx(&[
         dir.path().join("a.yml").to_str().unwrap(),
         "-c",
-        "y: 20\nmain: $y",
+        "y: 20\nmain: ${y()}",
     ]);
     assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
     assert_eq!(stdout(&out.0), "20");
@@ -573,7 +573,7 @@ fn code_with_file_math() {
     let out = ymx(&[
         dir.path().join("a.yml").to_str().unwrap(),
         "-c",
-        "main: $base",
+        "main: ${base()}",
     ]);
     assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
     assert_eq!(stdout(&out.0), "5");
@@ -586,7 +586,7 @@ fn code_with_file_json_override() {
     let out = ymx(&[
         dir.path().join("a.yml").to_str().unwrap(),
         "-c",
-        "{\"comp\": 42, \"main\": \"$comp\"}",
+        "{\"comp\": 42, \"main\": \"${comp()}\"}",
     ]);
     assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
     assert_eq!(stdout(&out.0), "42");

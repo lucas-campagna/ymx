@@ -8,8 +8,8 @@
 //! while the entry pinpoints one file (the front-matter source) plus one
 //! component for compilation.
 //!
-//! [`resolve_ref`] is the namespace lookup primitive used by `from`, bare
-//! `$name` fallback, and builtins (milestone 1.6). Both functions are pure —
+//! [`resolve_ref`] is the namespace lookup primitive used by `from` and
+//! builtins (milestone 1.6). Both functions are pure —
 //! no I/O — because everything they need already lives in [`Project`] (root,
 //! files, stores).
 //!
@@ -34,7 +34,7 @@ use crate::callsite;
 use crate::diag::{Diagnostic, FileId, Span, E002, E003, E005, E006, E008, E009, E010, E011, E016};
 use crate::interp;
 use crate::ir::{render_value, Args, Value};
-use crate::math::{CallHook, FallbackHook, MathEngine, Scope, V1Engine};
+use crate::math::{CallHook, MathEngine, Scope, V1Engine};
 use crate::namespace::{classify, DefClass, Definition};
 use crate::parse::{key_to_string, node_to_value, Node};
 use crate::project::{Options, PlainMode, Project};
@@ -180,9 +180,8 @@ pub enum LookupMiss {
     FileScopeViolation { owner: FileId },
 }
 
-/// Resolve a namespace-qualified reference (used by `from`, bare `$name`
-/// fallback, and builtins in milestone 1.6) against an already-loaded
-/// [`Project`].
+/// Resolve a namespace-qualified reference (used by `from` and builtins in
+/// milestone 1.6) against an already-loaded [`Project`].
 ///
 /// `name` is the reference as written: a bare name (`main`, `$box`, `_x`) or a
 /// dotted namespace address (`subdir.comp`, `subdir.$tbox`). `from_file` is
@@ -496,18 +495,18 @@ impl<'a> Resolver<'a> {
 
     /// Resolve `def` as a normal component call with `args`. Milestone 1.6
     /// task 3: the rule-11 pipeline is step 1 (property resolution incl. the
-    /// rule-4 slots, the rule-2 fallback, and rule-3 inline call-sites)
+    /// rule-4 slots and rule-3 inline call-sites)
     /// followed by the output conversion; the template chain (task 5) and
     /// `from`/shortcut dispatch (tasks 6–7) slot in around it.
     ///
     /// Invariant #6 (task 9): every recursive operation — an inline
-    /// `$comp(...)` call, a math `comp(...)` call, a bare-`$name` component
-    /// fallback, a template step, or a `from` dispatch — checks the depth
+    /// `$comp(...)` call, a math `comp(...)` call, a template step, or a
+    /// `from` dispatch — checks the depth
     /// counter **before** incrementing: at `depth == max_depth` the operation
     /// aborts with `E008`; otherwise the counter is bumped for the duration
     /// of the operation and restored on the way out, so at most `max_depth`
     /// recursive operations are allowed per compilation (default 256). All
-    /// five operations invoke a component call, so the guard lives here; the
+    /// four operations invoke a component call, so the guard lives here; the
     /// top-level `compile` / `compile_component` entries use the unguarded
     /// [`Resolver::call_root`] and do not consume a slot.
     fn call(
@@ -1108,13 +1107,8 @@ impl<'a> Resolver<'a> {
 
     /// The evaluation scope for `def` called with `args`: named/positional
     /// arguments bound per rules 2/4, the definition's host-file path and key
-    /// span as diagnostic context, and the rule-2 bare-`$name` fallback hook
-    /// (looks up the regular component `name` from `def`'s file and calls it
-    /// with no args; `_`-prefixed names resolve file-scoped).
+    /// span as diagnostic context.
     fn scope_for<'s>(&'s self, def: &Definition, args: &Args) -> Scope<'s> {
-        let file = def.file;
-        let fallback: FallbackHook<'s> =
-            Rc::new(move |name: &str| self.lookup_component(file, name));
         let call: CallHook<'s> = {
             let file = def.file;
             let span = def.span;
@@ -1151,17 +1145,6 @@ impl<'a> Resolver<'a> {
             positional: args.positional_vec(),
             last: None,
             call: Some(call),
-            fallback: Some(fallback),
-        }
-    }
-
-    /// Rule-2 fallback (b): a regular component `name` reachable from `file`
-    /// is called with no args. `NotFound` / file-scope violations yield
-    /// `Ok(None)` so the caller reports the plain `E003`.
-    fn lookup_component(&self, file: FileId, name: &str) -> Result<Option<Value>, Diagnostic> {
-        match resolve_ref(self.project, name, file, self.opts.plain.clone()) {
-            Ok(def) => Ok(Some(self.call(def, &Args::None, None)?)),
-            Err(LookupMiss::NotFound | LookupMiss::FileScopeViolation { .. }) => Ok(None),
         }
     }
 
@@ -1170,7 +1153,7 @@ impl<'a> Resolver<'a> {
     /// [`PropertySet`] where non-negative integer keys denote positional
     /// slots (rule 4); every other node resolves as a plain value (arrays,
     /// scalars, interpolated strings, nested objects). `file` is the
-    /// referencing document for name lookups (call-sites, fallback).
+    /// referencing document for name lookups (call-sites).
     fn resolve_body(
         &self,
         node: &Node,
@@ -1503,8 +1486,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// Resolve one value node against `scope`. String scalars go through the
-    /// shared scanner/interpolator: `$name` / `$N` / `${...}`, with the rule-2
-    /// component fallback after a named-argument miss — unless the whole
+    /// shared scanner/interpolator: `$name` / `$N` / `${...}`, unless the whole
     /// string is an inline call-site `$name(...)` (rule 3), which calls the
     /// component directly. `file` is the referencing document for name
     /// lookups.
@@ -1878,15 +1860,13 @@ impl<'a> Resolver<'a> {
         if let Some(builtin) = Builtin::from_name(&call.name) {
             // Builtins do NOT evaluate args eagerly — each builtin decides
             // which args to evaluate. Build the builtin context with hooks
-            // into this resolver for nested calls and fallback lookups.
+            // into this resolver for nested calls.
             let resolver_cell = Rc::new(RefCell::new(self));
-            let resolver_cell2 = resolver_cell.clone();
 
             let file_path = self.project.files[file.0 as usize].clone();
             let project = self.project;
             let opts = self.opts;
             let plain = self.opts.plain.clone();
-            let plain2 = plain.clone();
             let call_span = span;
             let call_name = call.name.clone();
 
@@ -1922,16 +1902,6 @@ impl<'a> Resolver<'a> {
                 }
             });
 
-            let fallback_hook: FallbackHook<'_> = Rc::new(move |name: &str| {
-                let resolver = resolver_cell2.borrow();
-                // Mirrors Resolver::lookup_component: NotFound and FileScopeViolation
-                // both return Ok(None) so the caller reports the plain E003.
-                match resolve_ref(resolver.project, name, file, plain2.clone()) {
-                    Ok(def) => Ok(Some(resolver.call(def, &Args::None, None)?)),
-                    Err(LookupMiss::NotFound | LookupMiss::FileScopeViolation { .. }) => Ok(None),
-                }
-            });
-
             let ctx = BuiltinCtx {
                 file: Some(file_path),
                 component: Some(call.name.clone()),
@@ -1940,7 +1910,6 @@ impl<'a> Resolver<'a> {
                 opts,
                 depth: self.depth.get(),
                 call: call_hook,
-                fallback: fallback_hook,
             };
 
             return match builtin {
@@ -1961,8 +1930,8 @@ impl<'a> Resolver<'a> {
         self.call_by_name(file, &call.name, &args, span)
     }
 
-    /// Evaluate a call-site argument list against `scope` (the rule-2
-    /// fallback and math apply inside argument values).
+    /// Evaluate a call-site argument list against `scope` (math apply
+    /// inside argument values).
     fn resolve_call_args(
         &self,
         args: &[callsite::ParsedArg],
@@ -1983,8 +1952,8 @@ impl<'a> Resolver<'a> {
     }
 
     /// Resolve one parsed argument value. `$name` / `$N` references and
-    /// `${...}` expressions re-enter the scanner/interpolator (so the rule-2
-    /// fallback and math apply); nested call-sites recurse.
+    /// `${...}` expressions re-enter the scanner/interpolator (so math
+    /// applies); nested call-sites recurse.
     fn resolve_parsed_value(
         &self,
         value: &callsite::ParsedValue,
@@ -2700,65 +2669,58 @@ mod tests {
     // ---- Milestone 1.6 task 2: arg binding, rule-2 fallback, rule-4 slots ----
 
     #[test]
-    fn bare_dollar_name_fallback_order() {
+    fn bare_dollar_name_resolves_named_arg_only() {
         let p = project_with(&[(
             "main.yml",
             "x: 5\ncaller: \"got $x\"\nmissing: \"$nope\"\nargs_user: \"hi $0\"\ngreeter: \"$args_user\"\n",
         )]);
-        // (b) no named arg in scope -> regular component called with no args.
-        assert_eq!(
-            compile_ok(&p, "caller", &Args::None),
-            Value::string("got 5")
-        );
-        // (a) named arg in scope wins over the component.
+        // (a) named arg in scope wins.
         assert_eq!(
             compile_ok(&p, "caller", &named(&[("x", Value::string("arg"))])),
             Value::string("got arg")
         );
+        // (b) no named arg in scope -> E003 (no component fallback).
+        let d = compile_err(&p, "caller", &Args::None);
+        assert_eq!(d.code, E003);
+        assert!(d.message.contains("x"), "{}", d.message);
         // (c) neither -> E003.
         let d = compile_err(&p, "missing", &Args::None);
         assert_eq!(d.code, E003);
         assert!(d.message.contains("nope"), "{}", d.message);
-        // The fallback call passes no args: `args_user` needs `$0`, so the
-        // error surfaces from inside the callee (even when the caller itself
-        // was invoked with positional args — the fallback is always no-args).
+        // `$args_user` is a named arg reference, not a component fallback.
         let d = compile_err(&p, "greeter", &Args::None);
         assert_eq!(d.code, E003);
-        assert!(d.message.contains("$0"), "{}", d.message);
-        let d = compile_err(&p, "greeter", &Args::Positional(vec![Value::string("bob")]));
-        assert_eq!(d.code, E003);
+        assert!(d.message.contains("args_user"), "{}", d.message);
     }
 
     #[test]
-    fn bare_dollar_name_fallback_consults_own_scope_only() {
-        let p = project_with(&[("main.yml", "main: \"n=$x\"\n"), ("a/b.yml", "x: 7\n")]);
-        // The fallback resolves from the referencing component's file: the
-        // sub-namespace `x` is NOT visible from main.yml.
+    fn bare_dollar_name_does_not_fall_back_to_component() {
+        let p = project_with(&[("main.yml", "x: 7\nmain: \"n=$x\"\n")]);
+        // With the component fallback removed, bare `$x` is E003 (no named arg).
         let d = compile_err(&p, "main", &Args::None);
         assert_eq!(d.code, E003);
-        // But `subdir.x`-style qualified names work via math, not bare `$name`.
-        let opts = Options {
-            plain: PlainMode::All,
-            ..Options::default()
-        };
+        // `${x()}` (math call) works to call a component.
+        let p = project_with(&[("main.yml", "x: 7\nmain: \"n=${x()}\"\n")]);
         assert_eq!(
-            compile_component(&p, "main", &Args::None, &opts).unwrap(),
+            compile_ok(&p, "main", &Args::None),
             Value::string("n=7"),
-            "PlainMode::All promotes the sub-namespace component"
+            "math call invokes the component"
         );
     }
 
     #[test]
-    fn bare_dollar_name_fallback_resolves_file_scoped() {
+    fn bare_dollar_name_file_scoped_named_arg() {
+        // Named args bound by the caller take precedence; no component fallback.
         let p = project_with(&[("main.yml", "_secret: 41\nmain: \"v=$_secret\"\n")]);
-        assert_eq!(compile_ok(&p, "main", &Args::None), Value::string("v=41"));
-        // A file-scoped name from another file is not visible.
-        let p = project_with(&[
-            ("main.yml", "main: \"v=$_secret\"\n"),
-            ("a/b.yml", "_secret: 41\nb: 1\n"),
-        ]);
+        // `_secret` is a component, but bare `$_secret` is a named arg reference.
+        // Without a named arg `_secret` in scope, it's E003.
         let d = compile_err(&p, "main", &Args::None);
         assert_eq!(d.code, E003);
+        // But passing `_secret` as a named arg works.
+        assert_eq!(
+            compile_ok(&p, "main", &named(&[("_secret", Value::int(99))])),
+            Value::string("v=99")
+        );
     }
 
     #[test]
@@ -2960,7 +2922,7 @@ mod tests {
     fn inline_call_site_nested_calls_refs_and_math() {
         let p = project_with(&[(
             "main.yml",
-            "id: $0\nsix: 6\nfive: 5\nmain: [\"$id($id($five()))\", \"$id(${1+2})\", \"$id($0)\", \"$id($n)\", \"$id($six)\"]\n",
+            "id: $0\nsix: 6\nfive: 5\nmain: [\"$id($id($five()))\", \"$id(${1+2})\", \"$id($0)\", \"$id($n)\", \"$id($six())\"]\n",
         )]);
         assert_eq!(
             compile_ok(
@@ -4120,18 +4082,24 @@ mod tests {
     }
 
     #[test]
-    fn depth_cap_applies_to_bare_name_fallback() {
+    fn bare_dollar_name_is_e003_without_component_fallback() {
         let opts = Options {
             max_depth: 1,
             ..Options::default()
         };
+        // Bare `$b` without parens is a named arg reference, not a component fallback.
         let p = project_with(&[("main.yml", "a: \"$b\"\nb: \"v=1\"\n")]);
+        let d = compile_err_with(&p, "a", &Args::None, &opts);
+        assert_eq!(d.code, E003);
+        assert!(d.message.contains("b"), "{}", d.message);
+        // `$b()` with parens is an inline call and still works.
+        let p = project_with(&[("main.yml", "a: \"$b()\"\nb: \"v=1\"\n")]);
         assert_eq!(
             compile_component(&p, "a", &Args::None, &opts).unwrap(),
             Value::string("v=1"),
-            "the bare-`$name` fallback is the first recursive op"
+            "the first recursive op is allowed"
         );
-        let p = project_with(&[("main.yml", "a: \"$b\"\nb: \"$c\"\nc: \"v=1\"\n")]);
+        let p = project_with(&[("main.yml", "a: \"$b()\"\nb: \"$c()\"\nc: \"v=1\"\n")]);
         let d = compile_err_with(&p, "a", &Args::None, &opts);
         assert_eq!(d.code, E008);
         assert_eq!(d.component.as_deref(), Some("c"));
@@ -4240,7 +4208,7 @@ mod tests {
         let p = project_with(&[(
             "main.yml",
             "\
-a1: [1, 2]\na2: [3]\na: $merge($a1, $a2)\n",
+a1: [1, 2]\na2: [3]\na: $merge(${a1()}, ${a2()})\n",
         )]);
         assert_eq!(
             compile_ok(&p, "a", &Args::None),
@@ -4255,7 +4223,7 @@ a1: [1, 2]\na2: [3]\na: $merge($a1, $a2)\n",
         let p = project_with(&[(
             "main.yml",
             "\
-obj1:\n  a: 1\n  b: 2\nobj2:\n  a: 3\n  c: 4\nx: $merge($obj1, $obj2)\n",
+obj1:\n  a: 1\n  b: 2\nobj2:\n  a: 3\n  c: 4\nx: $merge(${obj1()}, ${obj2()})\n",
         )]);
         let result = compile_ok(&p, "x", &Args::None);
         println!("x: {:?}", result);
@@ -4273,7 +4241,7 @@ obj1:\n  a: 1\n  b: 2\nobj2:\n  a: 3\n  c: 4\nx: $merge($obj1, $obj2)\n",
         let p = project_with(&[(
             "main.yml",
             "\
-arr: [1]\nobj:\n  a: 1\nx: $merge($arr, $obj)\n",
+arr: [1]\nobj:\n  a: 1\nx: $merge(${arr()}, ${obj()})\n",
         )]);
         let err = compile_err(&p, "x", &Args::None);
         assert_eq!(err.code, E011, "$merge Array⊕Object → E011");
@@ -4285,7 +4253,7 @@ arr: [1]\nobj:\n  a: 1\nx: $merge($arr, $obj)\n",
         let p = project_with(&[(
             "main.yml",
             "\
-nums: [1, 2, 3]\nadd_one: \"${$0 + 1}\"\na: $map($add_one, $nums)\n",
+nums: [1, 2, 3]\nadd_one: \"${$0 + 1}\"\na: $map($add_one, ${nums()})\n",
         )]);
         assert_eq!(
             compile_ok(&p, "a", &Args::None),
@@ -4299,7 +4267,7 @@ nums: [1, 2, 3]\nadd_one: \"${$0 + 1}\"\na: $map($add_one, $nums)\n",
         let p = project_with(&[(
             "main.yml",
             "\
-items: [{x: 1}, {x: 3}]\ndoubler: \"${x * 2}\"\na: $map($doubler, $items)\n",
+items: [{x: 1}, {x: 3}]\ndoubler: \"${x * 2}\"\na: $map($doubler, ${items()})\n",
         )]);
         assert_eq!(
             compile_ok(&p, "a", &Args::None),
@@ -4313,7 +4281,7 @@ items: [{x: 1}, {x: 3}]\ndoubler: \"${x * 2}\"\na: $map($doubler, $items)\n",
         let p = project_with(&[(
             "main.yml",
             "\
-empty: []\nadd_one: \"${$0 + 1}\"\na: $map($add_one, $empty)\n",
+empty: []\nadd_one: \"${$0 + 1}\"\na: $map($add_one, ${empty()})\n",
         )]);
         assert_eq!(compile_ok(&p, "a", &Args::None), Value::Array(Vec::new()));
     }
@@ -4335,7 +4303,7 @@ add_one: \"${$0 + 1}\"\na: $map($add_one, 5)\n",
         let p = project_with(&[(
             "main.yml",
             "\
-items: [[1, 2]]\nt: \"$0\"\na: $map($t, $items)\n",
+items: [[1, 2]]\nt: \"$0\"\na: $map($t, ${items()})\n",
         )]);
         let err = compile_err(&p, "a", &Args::None);
         assert_eq!(err.code, E011, "$map array item → E011");
@@ -4349,7 +4317,7 @@ items: [[1, 2]]\nt: \"$0\"\na: $map($t, $items)\n",
         let p = project_with(&[(
             "main.yml",
             "\
-nums: [1, 2]\ninc: \"${$0 + 1}\"\nresult: $reduce($inc, $nums)\n",
+nums: [1, 2]\ninc: \"${$0 + 1}\"\nresult: $reduce($inc, ${nums()})\n",
         )]);
         // Step 1: 1+1=2, Step 2: 2+1=3 (last=2)
         assert_eq!(compile_ok(&p, "result", &Args::None), Value::int(3));
@@ -4360,7 +4328,7 @@ nums: [1, 2]\ninc: \"${$0 + 1}\"\nresult: $reduce($inc, $nums)\n",
         let p = project_with(&[(
             "main.yml",
             "\
-empty: []\nadd: \"$0\"\na: $reduce($add, $empty)\n",
+empty: []\nadd: \"$0\"\na: $reduce($add, ${empty()})\n",
         )]);
         assert_eq!(
             compile_ok(&p, "a", &Args::None),
@@ -4375,7 +4343,7 @@ empty: []\nadd: \"$0\"\na: $reduce($add, $empty)\n",
         let p = project_with(&[(
             "main.yml",
             "\
-nums: [5]\nt: \"${last}\"\na: $reduce($t, $nums)\n",
+nums: [5]\nt: \"${last}\"\na: $reduce($t, ${nums()})\n",
         )]);
         let err = compile_err(&p, "a", &Args::None);
         assert_eq!(err.code, E003, "$reduce one elem referencing last → E003");
@@ -4387,7 +4355,7 @@ nums: [5]\nt: \"${last}\"\na: $reduce($t, $nums)\n",
         let p = project_with(&[(
             "main.yml",
             "\
-nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, $nums)\n",
+nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
         )]);
         // Step 1: 1*2=2, Step 2: 2*2=4, Step 3: 3*2=6 (returns last step)
         assert_eq!(compile_ok(&p, "result", &Args::None), Value::int(6));
@@ -4541,7 +4509,7 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, $nums)\n",
 
     #[test]
     fn property_key_shorthand_with_interpolation() {
-        let p = project_with(&[("main.yml", "name: world\nmain:\n  x$sh: echo $name\n")]);
+        let p = project_with(&[("main.yml", "name: world\nmain:\n  x$sh: echo ${name()}\n")]);
         let opts = opts_with_exec();
         let val = compile(&p, &opts).unwrap();
         let mut expected = IndexMap::new();

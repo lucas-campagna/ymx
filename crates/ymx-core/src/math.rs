@@ -42,21 +42,13 @@ pub trait MathEngine {
 /// step).
 pub type CallHook<'a> = Rc<dyn Fn(&str, &[Value]) -> Result<Value, Diagnostic> + 'a>;
 
-/// Bare-`$name` component fallback hook (rule 2): receives the argument name
-/// after the named-argument lookup misses; `Ok(Some(v))` is the fallback
-/// value, `Ok(None)` keeps the `E003` missing-argument error. Never consulted
-/// inside `${...}` math context (there is no fallback there — PRD *String
-/// syntax*).
-pub type FallbackHook<'a> = Rc<dyn Fn(&str) -> Result<Option<Value>, Diagnostic> + 'a>;
-
 /// Evaluation scope for `${...}` math and string interpolation.
 ///
 /// Carries the named arguments (rule 2), the positional arguments (rule 4),
 /// the previous step's result in a reduce (`last`, rules 13/16 — `None`
 /// outside a reduce step or on its first step), the component-call dispatch
 /// hook for math `name(...)` calls (wired by the resolver in milestone 1.6,
-/// including the `E008` depth check at the call boundary), the bare-`$name`
-/// component fallback hook (rule 2, string-interpolation path only), and the
+/// including the `E008` depth check at the call boundary), and the
 /// diagnostic context (`file`, `component`, and the base `span` math
 /// diagnostics are attributed to).
 #[derive(Clone)]
@@ -79,9 +71,6 @@ pub struct Scope<'a> {
     /// Component-call dispatch hook for math `name(...)` calls ([`CallHook`]).
     /// `None` means no hook is registered (`invoke` then reports `E002`).
     pub call: Option<CallHook<'a>>,
-    /// Bare-`$name` component fallback hook (rule 2); `None` keeps the plain
-    /// `E003` missing-argument error.
-    pub fallback: Option<FallbackHook<'a>>,
 }
 
 impl<'a> Default for Scope<'a> {
@@ -101,7 +90,6 @@ impl<'a> Scope<'a> {
             positional: Vec::new(),
             last: None,
             call: None,
-            fallback: None,
         }
     }
 

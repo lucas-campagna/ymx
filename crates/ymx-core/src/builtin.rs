@@ -20,7 +20,7 @@ use std::rc::Rc;
 use crate::diag::{Diagnostic, FileId, Span, E002, E005, E008, E011};
 use crate::interp;
 use crate::ir::Value;
-use crate::math::{CallHook, FallbackHook, Scope, V1Engine};
+use crate::math::{CallHook, Scope, V1Engine};
 use crate::namespace::Definition;
 use crate::project::Options;
 use crate::project::Project;
@@ -72,8 +72,6 @@ pub struct BuiltinCtx<'a> {
     pub depth: u32,
     /// Hook for component calls (math `name(...)` inside `${...}`).
     pub call: CallHook<'a>,
-    /// Hook for bare `$name` fallback lookups.
-    pub fallback: FallbackHook<'a>,
 }
 
 /// A builtin implementation that evaluates its arguments per its own strategy.
@@ -329,7 +327,7 @@ fn resolve_parsed_value(
         super::callsite::ParsedValue::Literal(v) => Ok(v.clone()),
         super::callsite::ParsedValue::Raw(s) => Ok(Value::string(s.clone())),
         super::callsite::ParsedValue::Ref { name } => {
-            // Resolve a `$name` reference through the scope + fallback.
+            // Resolve a `$name` reference through the scope.
             let segments = interp::scan(&format!("${name}"), ctx.span)?;
             let scope = build_caller_scope(ctx);
             interp::resolve(&segments, &scope, &V1Engine)
@@ -358,7 +356,6 @@ fn build_caller_scope<'a>(ctx: &'a BuiltinCtx<'a>) -> Scope<'a> {
         positional: Vec::new(),
         last: None,
         call: Some(ctx.call.clone()),
-        fallback: Some(ctx.fallback.clone()),
     }
 }
 
@@ -376,7 +373,6 @@ fn build_scope_for_call<'a>(
         positional: args.positional_vec(),
         last: last.cloned(),
         call: Some(ctx.call.clone()),
-        fallback: Some(ctx.fallback.clone()),
     }
 }
 
@@ -421,7 +417,7 @@ fn resolve_callable(ctx: &BuiltinCtx<'_>, name: &str) -> Result<Rc<Definition>, 
 
 /// Evaluate a component call for `$map`/`$reduce`: the callable `def` is invoked
 /// with `args` and its result returned. Uses the `call` hook for math `name(...)`
-/// calls and the `fallback` hook for bare `$name` lookups.
+/// calls.
 fn eval_call(
     ctx: &BuiltinCtx<'_>,
     def: Rc<Definition>,
@@ -696,7 +692,6 @@ fn eval_builtin_call(
         opts: ctx.opts,
         depth: ctx.depth + 1, // The builtin call itself uses a depth slot.
         call: ctx.call.clone(),
-        fallback: ctx.fallback.clone(),
     };
 
     match builtin {

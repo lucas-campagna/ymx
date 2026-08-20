@@ -190,8 +190,7 @@ pub fn scan(src: &str, base: Span) -> Result<Vec<Segment>, Diagnostic> {
 /// `${...}` segments are evaluated through `engine` (the [`MathEngine`]
 /// boundary); `$name` / `$N` segments resolve against the scope's named /
 /// positional arguments (and the reduce-step `last` via
-/// [`Scope::lookup`]), then the rule-2 component fallback; a missing argument
-/// is `E003`.
+/// [`Scope::lookup`]); a missing argument is `E003`.
 pub fn resolve(
     segments: &[Segment],
     scope: &Scope<'_>,
@@ -299,9 +298,7 @@ pub fn resolve(
 ///
 /// `$N` resolves positionally (rule 4); a missing positional is `E003`. A
 /// named `$name` resolves in rule-2 order: (a) the named argument in scope;
-/// (b) else the scope's [`FallbackHook`](crate::math::FallbackHook) (the
-/// resolver wires it to call the regular component `name` with no args);
-/// (c) else `E003`.
+/// (b) else `E003`.
 fn resolve_arg(name: &str, span: Span, scope: &Scope<'_>) -> Result<Value, Diagnostic> {
     if name.bytes().all(|b| b.is_ascii_digit()) {
         return match name.parse::<usize>() {
@@ -324,21 +321,12 @@ fn resolve_arg(name: &str, span: Span, scope: &Scope<'_>) -> Result<Value, Diagn
     }
     match scope.lookup(name) {
         Some(v) => Ok(v.clone()),
-        None => {
-            if let Some(fallback) = &scope.fallback {
-                match fallback(name) {
-                    Ok(Some(v)) => return Ok(v),
-                    Ok(None) => {}
-                    Err(d) => return Err(d),
-                }
-            }
-            Err(ctx_err(
-                scope,
-                span,
-                E003,
-                format!("missing required argument `{name}`"),
-            ))
-        }
+        None => Err(ctx_err(
+            scope,
+            span,
+            E003,
+            format!("missing required argument `{name}`"),
+        )),
     }
 }
 
@@ -624,13 +612,10 @@ mod tests {
     }
 
     #[test]
-    fn fallback_hook_consulted_after_named_lookup_miss() {
-        // (a) named argument in scope wins; the fallback is not consulted.
+    fn named_argument_lookup_returns_value_or_e003() {
+        // (a) named argument in scope wins.
         let scope = Scope {
             named: named(&[("x", Value::int(1))]),
-            fallback: Some(Rc::new(|_| {
-                panic!("fallback must not be consulted when the argument is in scope")
-            })),
             ..Scope::new()
         };
         assert_eq!(
@@ -638,57 +623,23 @@ mod tests {
             Value::int(1)
         );
 
-        // (b) fallback Some(v) is the value.
-        let scope = Scope {
-            fallback: Some(Rc::new(|name| Ok((name == "comp").then(|| Value::int(42))))),
-            ..Scope::new()
-        };
-        assert_eq!(
-            resolve(&scan("$comp", SPAN).unwrap(), &scope, &FakeEngine).unwrap(),
-            Value::int(42)
-        );
-
-        // (c) fallback None keeps E003.
-        let scope = Scope {
-            fallback: Some(Rc::new(|_| Ok(None))),
-            ..Scope::new()
-        };
+        // (b) missing named argument is E003 (no component fallback).
+        let scope = Scope::new();
         let err = resolve(&scan("$comp", SPAN).unwrap(), &scope, &FakeEngine).unwrap_err();
         assert_eq!(err.code, E003);
 
-        // A hook error propagates.
-        let scope = Scope {
-            fallback: Some(Rc::new(|_| {
-                Err(ctx_err(&Scope::new(), SPAN, E010, "boom".into()))
-            })),
-            ..Scope::new()
-        };
-        let err = resolve(&scan("$comp", SPAN).unwrap(), &scope, &FakeEngine).unwrap_err();
-        assert_eq!(err.code, E010);
-
-        // Positional `$N` references never consult the fallback.
-        let scope = Scope {
-            fallback: Some(Rc::new(|_| {
-                panic!("positional must not consult the fallback")
-            })),
-            ..Scope::new()
-        };
+        // Positional `$N` references never return a component value.
+        let scope = Scope::new();
         let err = resolve(&scan("$0", SPAN).unwrap(), &scope, &FakeEngine).unwrap_err();
         assert_eq!(err.code, E003);
     }
 
     #[test]
-    fn fallback_applies_inside_surrounding_text() {
-        let scope = Scope {
-            fallback: Some(Rc::new(|name| {
-                Ok((name == "ratio").then(|| Value::float(2.5)))
-            })),
-            ..Scope::new()
-        };
-        assert_eq!(
-            resolve(&scan("r=$ratio!", SPAN).unwrap(), &scope, &FakeEngine).unwrap(),
-            Value::string("r=2.5!")
-        );
+    fn missing_named_argument_in_surrounding_text_is_e003() {
+        let scope = Scope::new();
+        let err = resolve(&scan("r=$ratio!", SPAN).unwrap(), &scope, &FakeEngine).unwrap_err();
+        assert_eq!(err.code, E003);
+        assert!(err.message.contains("ratio"), "{}", err.message);
     }
 
     #[test]

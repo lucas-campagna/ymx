@@ -1,8 +1,8 @@
-test1: $comp1
+test1: $comp1()
 test2: $comp1(456)
 test3: $comp2(a=1,b=2)
-test4: $comp3
-test5: $comp4
+test4: $comp3()
+test5: $comp4()
 
 comp1?: 123
 comp2?:

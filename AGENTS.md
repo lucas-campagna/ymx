@@ -50,7 +50,7 @@ Workspace at `crates/*`; see `docs/PRD.md` §Architecture.
 
 5. **`Diagnostic` carries its resolved file path** (`file: Option<PathBuf>`) so load-errors render without a `Project` to resolve against. Render format: `[code] file:line:col (component): message`.
 
-6. **Depth cap semantics.** On entry to each recursive op (inline `$comp()` call, math `comp()` call, bare-`$name` component fallback, template step, `from` dispatch), check `depth == max_depth` → `E008` (abort); else `depth += 1` and proceed. Exactly `max_depth` recursive ops are allowed (default 256).
+6. **Depth cap semantics.** On entry to each recursive op (inline `$comp()` call, math `comp()` call, template step, `from` dispatch), check `depth == max_depth` → `E008` (abort); else `depth += 1` and proceed. Exactly `max_depth` recursive ops are allowed (default 256).
 
 7. **Single shared f64 renderer** for JSON output AND string interpolation. Integer-valued floats keep the fractional part (`2.0` → `"2.0"`). Rust's default `{}` formatting is **not** used (it drops the fractional part). See `ir::render_f64`.
 

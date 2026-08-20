@@ -1,6 +1,6 @@
 adder: $0
 empty: []
-c: $reduce($adder, $empty)
+c: $reduce($adder, ${empty()})
 _test:
   c:
     result: null

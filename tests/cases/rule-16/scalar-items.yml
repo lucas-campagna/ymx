@@ -3,7 +3,7 @@ items:
   - 1
   - 2
   - 3
-c: $map($step, $items)
+c: $map($step, ${items()})
 _test:
   c:
     result: [1, 2, 3]

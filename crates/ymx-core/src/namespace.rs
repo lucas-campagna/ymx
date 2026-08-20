@@ -1260,7 +1260,9 @@ mod tests {
     #[test]
     fn register_override_replaces_existing_def() {
         let mut store = NamespaceStore::new();
-        store.register("", def("comp", 0, 1)).expect("register original comp");
+        store
+            .register("", def("comp", 0, 1))
+            .expect("register original comp");
         let original = store.get("", "comp").unwrap();
         assert!(matches!(original.body, Node::Null(_)));
 
@@ -1330,10 +1332,16 @@ mod tests {
         store.register_override("subdir", sub_def);
 
         let global = store.get("", "comp").unwrap();
-        assert!(matches!(global.body, Node::Null(_)), "global retains original");
+        assert!(
+            matches!(global.body, Node::Null(_)),
+            "global retains original"
+        );
 
         let sub = store.get("subdir", "comp").unwrap();
-        assert!(matches!(sub.body, Node::Bool(true, _)), "subdir has override");
+        assert!(
+            matches!(sub.body, Node::Bool(true, _)),
+            "subdir has override"
+        );
 
         assert_eq!(store.len(), 2, "global + subdir namespaces");
     }

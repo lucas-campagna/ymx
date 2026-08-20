@@ -1400,7 +1400,7 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
-            code: Some("comp1: 20\nmain: $comp1".to_string()),
+            code: Some("comp1: 20\nmain: ${comp1()}".to_string()),
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1421,7 +1421,7 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
-            code: Some("comp2: 20\nmain: $comp1 + $comp2".to_string()),
+            code: Some("comp2: 20\nmain: ${comp1()} + ${comp2()}".to_string()),
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1487,7 +1487,7 @@ mod tests {
             stdin_is_script: true,
             allowed_backends: None,
             no_exec: false,
-            code: Some("greeting: \"hi\"\nmain: $greeting".to_string()),
+            code: Some("greeting: \"hi\"\nmain: ${greeting()}".to_string()),
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1508,7 +1508,7 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
-            code: Some("{\"comp2\": 20, \"main\": \"$comp1 + $comp2\"}".to_string()),
+            code: Some("{\"comp2\": 20, \"main\": \"${comp1()} + ${comp2()}\"}".to_string()),
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1529,7 +1529,7 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
-            code: Some("main: $base * 3 + 1".to_string()),
+            code: Some("main: ${base() * 3 + 1}".to_string()),
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1550,7 +1550,7 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
-            code: Some("main: $greet".to_string()),
+            code: Some("main: ${greet()}".to_string()),
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
