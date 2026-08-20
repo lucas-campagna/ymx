@@ -1245,4 +1245,42 @@ mod tests {
             Value::Array(vec![Value::Int(1), Value::Int(2)])
         );
     }
+
+    // ---- _c override tests ----
+
+    #[test]
+    fn load_project_with_override_merges_components() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "a: 1\nb: 2\n");
+
+        let project = load_project_with_override(
+            &dir.path().join("main.yml"),
+            Some("b: 99\nc: 3"),
+        )
+        .expect("loads cleanly");
+
+        let a_def = project.namespaces.get("", "a").expect("a exists");
+        assert_eq!(node_to_value(&a_def.body), value_of("1\n"));
+
+        let b_def = project.namespaces.get("", "b").expect("b exists (overridden)");
+        assert_eq!(node_to_value(&b_def.body), value_of("99\n"));
+
+        let c_def = project.namespaces.get("", "c").expect("c exists (added)");
+        assert_eq!(node_to_value(&c_def.body), value_of("3\n"));
+    }
+
+    #[test]
+    fn load_project_with_override_none_is_identity() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "a: 1\n");
+
+        let project = load_project_with_override(
+            &dir.path().join("main.yml"),
+            None,
+        )
+        .expect("loads cleanly");
+
+        let a_def = project.namespaces.get("", "a").expect("a exists");
+        assert_eq!(node_to_value(&a_def.body), value_of("1\n"));
+    }
 }

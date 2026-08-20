@@ -1356,4 +1356,79 @@ mod tests {
         let value = yaml_to_value(docs.first().expect("has doc")).expect("converts");
         assert_eq!(value, Value::Int(42));
     }
+
+    // ---- task 6: -c / --code tests ----
+
+    fn err_of(parts: &[&str]) -> crate::args::ParseError {
+        let args: Vec<String> = parts.iter().map(|s| s.to_string()).collect();
+        crate::args::parse(&args).expect_err("expected usage error")
+    }
+
+    #[test]
+    fn code_only_mode_compiles_inline_script() {
+        let dir = TempDir::new();
+        let cli = ParsedCli {
+            path: dir.path().join("main.yml"),
+            entry: None,
+            max_depth: None,
+            pretty: None,
+            format: None,
+            output: None,
+            test: false,
+            test_dir: None,
+            stdin_is_script: true,
+            allowed_backends: None,
+            no_exec: false,
+            code: Some("main: hello world".to_string()),
+        };
+        assert_eq!(run(cli), RunOutcome::Success);
+    }
+
+    #[test]
+    fn code_with_file_overrides_components() {
+        let dir = TempDir::new();
+        dir.write("a.yml", "comp1: 5\ncomp2: 10\n");
+        let cli = ParsedCli {
+            path: dir.path().join("a.yml"),
+            entry: None,
+            max_depth: None,
+            pretty: None,
+            format: None,
+            output: None,
+            test: false,
+            test_dir: None,
+            stdin_is_script: false,
+            allowed_backends: None,
+            no_exec: false,
+            code: Some("comp1: 20\nmain: $comp1".to_string()),
+        };
+        assert_eq!(run(cli), RunOutcome::Success);
+    }
+
+    #[test]
+    fn code_with_file_new_components_added() {
+        let dir = TempDir::new();
+        dir.write("a.yml", "comp1: 10\n");
+        let cli = ParsedCli {
+            path: dir.path().join("a.yml"),
+            entry: None,
+            max_depth: None,
+            pretty: None,
+            format: None,
+            output: None,
+            test: false,
+            test_dir: None,
+            stdin_is_script: false,
+            allowed_backends: None,
+            no_exec: false,
+            code: Some("comp2: 20\nmain: $comp1 + $comp2".to_string()),
+        };
+        assert_eq!(run(cli), RunOutcome::Success);
+    }
+
+    #[test]
+    fn code_with_test_rejected_at_parse_time() {
+        let err = err_of(&["-c", "main: 1", "--test"]);
+        assert!(err.message.contains("-c/--code"));
+    }
 }
