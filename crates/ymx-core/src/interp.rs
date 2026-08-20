@@ -253,7 +253,9 @@ pub fn resolve(
         [Segment::Text(t)] => Ok(Value::string(t.clone())),
         [Segment::Arg { name, span }] => resolve_arg(name, *span, scope),
         [Segment::Math { src, .. }] => engine.eval(src, scope),
-        [Segment::Call { .. }] => unreachable!("shell call segments are not scanned yet"),
+        [Segment::Call { name, args, span }] => {
+            Ok(Value::string(resolve_shell_call(name, args, *span, scope)?))
+        }
         [Segment::Exec { backend, command, span }] => {
             resolve_exec_marker(backend, command, *span, scope, engine)
         }
@@ -270,8 +272,8 @@ pub fn resolve(
                         let v = engine.eval(src, scope)?;
                         out.push_str(&render_into_text(&v, scope, *span)?);
                     }
-                    Segment::Call { .. } => {
-                        unreachable!("shell call segments are not scanned yet")
+                    Segment::Call { name, args, span } => {
+                        out.push_str(&resolve_shell_call(name, args, *span, scope)?);
                     }
                     Segment::Exec { backend, command, span } => {
                         let marker = resolve_exec_marker(backend, command, *span, scope, engine)?;
@@ -307,14 +309,7 @@ pub fn resolve_shell(
                 out.push_str(&render_into_text(&v, scope, *span)?);
             }
             Segment::Call { name, args, span } => {
-                let call_src = format!("${name}({args})");
-                let call = match callsite::parse(&call_src) {
-                    Ok(Some(call)) => call,
-                    Ok(None) => unreachable!("constructed shell call did not parse"),
-                    Err((code, message)) => return Err(ctx_err(scope, *span, code, message)),
-                };
-                let v = scope.invoke_shell(&call, *span)?;
-                out.push_str(&render_into_text(&v, scope, *span)?);
+                out.push_str(&resolve_shell_call(name, args, *span, scope)?);
             }
             Segment::Exec { backend, command, span } => {
                 let marker = resolve_exec_marker(backend, command, *span, scope, engine)?;
@@ -361,6 +356,23 @@ fn resolve_exec_marker(
         ("__exec_backend".to_string(), Value::string(backend.to_string())),
         ("__exec_command".to_string(), Value::string(cmd_string)),
     ])))
+}
+
+/// Resolve a shell call segment (`$name(args)`) to rendered text.
+fn resolve_shell_call(
+    name: &str,
+    args: &str,
+    span: Span,
+    scope: &Scope<'_>,
+) -> Result<String, Diagnostic> {
+    let call_src = format!("${name}({args})");
+    let call = match callsite::parse(&call_src) {
+        Ok(Some(call)) => call,
+        Ok(None) => unreachable!("constructed shell call did not parse"),
+        Err((code, message)) => return Err(ctx_err(scope, span, code, message)),
+    };
+    let v = scope.invoke_shell(&call, span)?;
+    render_into_text(&v, scope, span)
 }
 
 /// Resolve a `$name` / `$N` argument reference.
