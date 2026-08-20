@@ -816,6 +816,38 @@ pub fn load_project(root: &Path) -> Result<Project, Vec<Diagnostic>> {
     }
 }
 
+pub fn load_project_with_override(
+    root: &Path,
+    override_yaml: Option<&str>,
+) -> Result<Project, Vec<Diagnostic>> {
+    match override_yaml {
+        None => load_project(root),
+        Some(yaml_str) => {
+            let mut project = load_project(root)?;
+
+            let node = match parse_document(yaml_str) {
+                Ok(n) => n,
+                Err(parse_err) => {
+                    let synthetic = root.join(".ymx-override");
+                    return Err(vec![parse_err.into_diagnostic(synthetic)]);
+                }
+            };
+
+            let synthetic_path = root.join(".ymx-override");
+            let file_id = FileId(project.files.len() as u32);
+            project.files.push(synthetic_path.clone());
+
+            let extract = extract_document(file_id, &node);
+
+            for def in extract.defs {
+                project.namespaces.register_override("", def);
+            }
+
+            Ok(project)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
