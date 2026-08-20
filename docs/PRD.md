@@ -179,6 +179,8 @@ ymx [path] [flags]
 
 - **No `path` — stdin is the script.** `cat script.yml | ymx` is equivalent to `ymx script.yml`. The full stdin content is treated as a YAML document; it is written to a temporary file (`main.yml`) inside a temporary project directory. The entry is `main.main` (or `--entry` overrides). If stdin is a terminal (tty) and no `path` is given, the CLI exits 2 with a usage error.
 
+  > Escape expansion (`\n`, `\t`, `\\`) is applied to stdin content before YAML parsing, same as `-c`.
+
 - **`path` given — stdin is call arguments.** `echo '{"a":123}' | ymx script.yml` calls the `main` component of `script.yml` with `a=123`. The positional argument `path` is the entry file (derived as `<file_stem>.<component>`, default `main.main`); the project root is the file's parent directory. Stdin is read as call arguments: it is first parsed as JSON; if that fails it is retried as YAML. The resulting value is converted to `Args`:
   - `Value::Object` → `Args::Named([(k,v), …])` (sorted by key for determinism)
   - `Value::Array` → `Args::Positional([v0, v1, …])`
@@ -189,6 +191,8 @@ ymx [path] [flags]
 
 **Inline code (`-c`).** The `-c` flag provides inline component definitions as a YAML or JSON string. When combined with a file, `-c` components override matching names from the file (complete replacement, not property-level merge). When used alone, `-c` is the entire script. Stdin can still provide call arguments when a file is present.
 
+> **Escape expansion.** The `-c` value undergoes escape expansion before YAML parsing: `\n` becomes a newline, `\t` becomes a tab, and `\\` becomes a literal backslash. Any other `\X` is passed through unchanged (the YMX string parser will catch truly invalid escapes). This lets users write multi-line YAML in a single-quoted shell string, e.g. `ymx -c 'main: $comp()\ncomp: a * b'`.
+
 Examples:
 ```bash
 ymx -c 'main: hello world'                           # → "hello world"
@@ -196,7 +200,7 @@ ymx -c '{"main": "${1 + 1}"}'                        # → 2
 echo '{"a": 1, "b": 2}' | ymx -c "main$: a + b"     # → 3 (stdin = args)
 echo -e 'a: 10\nb: 22' | ymx -c '{"main": "${a + b}"}' # → 32
 # With a file (a.yml defines comp1, comp2):
-ymx a.yml -c 'main: $comp2(x=2,y=3)\ncomp1$: a * b'  # → 6 (-c overrides comp1)
+ymx a.yml -c 'main: $comp2(x=2,y=3)\ncomp1$: a * b'  # → 6 (\n expanded to newline)
 ```
 
 **Flags:**

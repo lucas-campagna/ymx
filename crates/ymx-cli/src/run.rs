@@ -53,6 +53,28 @@ use ymx_test::{parse_tests, run_tests, Expected, TestResult};
 use crate::args::ParsedCli;
 use crate::diagnostic::render_with_guidance;
 
+fn expand_escapes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('\\') => out.push('\\'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// The orchestration outcome, mapped to a process [`ExitCode`] by [`main`].
 /// Kept as a small enum rather than returning [`ExitCode`] directly so the
 /// pipeline is unit-testable (`ExitCode` does not implement `PartialEq`).
@@ -213,7 +235,7 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
             // Mode 3: -c only, stdin will provide args later.
             let temp = TempProjDir::new();
             let script_path = temp.path().join("main.yml");
-            if let Err(e) = std::fs::write(&script_path, code) {
+            if let Err(e) = std::fs::write(&script_path, expand_escapes(code)) {
                 eprintln!("ymx: failed to write temp script: {e}");
                 return RunOutcome::Diagnostic;
             }
@@ -229,7 +251,7 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
             // Mode 1: -c only, no file (or path doesn't exist).
             let temp = TempProjDir::new();
             let script_path = temp.path().join("main.yml");
-            if let Err(e) = std::fs::write(&script_path, code) {
+            if let Err(e) = std::fs::write(&script_path, expand_escapes(code)) {
                 eprintln!("ymx: failed to write temp script: {e}");
                 return RunOutcome::Diagnostic;
             }
@@ -252,7 +274,7 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
         }
         let temp = TempProjDir::new();
         let script_path = temp.path().join("main.yml");
-        if let Err(e) = std::fs::write(&script_path, &raw) {
+        if let Err(e) = std::fs::write(&script_path, expand_escapes(&raw)) {
             eprintln!("ymx: failed to write temp script: {e}");
             return RunOutcome::Diagnostic;
         }
@@ -1355,6 +1377,48 @@ mod tests {
         let docs = YamlLoader::load_from_str("42\n").unwrap();
         let value = yaml_to_value(docs.first().expect("has doc")).expect("converts");
         assert_eq!(value, Value::Int(42));
+    }
+
+    // ---- expand_escapes tests ----
+
+    #[test]
+    fn expand_escapes_newline() {
+        assert_eq!(expand_escapes("hello\\nworld"), "hello\nworld");
+    }
+
+    #[test]
+    fn expand_escapes_tab() {
+        assert_eq!(expand_escapes("hello\\tworld"), "hello\tworld");
+    }
+
+    #[test]
+    fn expand_escapes_backslash() {
+        assert_eq!(expand_escapes("hello\\\\world"), "hello\\world");
+    }
+
+    #[test]
+    fn expand_escapes_passthrough_unknown() {
+        assert_eq!(expand_escapes("hello\\qworld"), "hello\\qworld");
+    }
+
+    #[test]
+    fn expand_escapes_trailing_backslash() {
+        assert_eq!(expand_escapes("hello\\"), "hello\\");
+    }
+
+    #[test]
+    fn expand_escapes_empty_string() {
+        assert_eq!(expand_escapes(""), "");
+    }
+
+    #[test]
+    fn expand_escapes_no_escapes() {
+        assert_eq!(expand_escapes("plain text"), "plain text");
+    }
+
+    #[test]
+    fn expand_escapes_multiple() {
+        assert_eq!(expand_escapes("a\\nb\\tc\\\\d"), "a\nb\tc\\d");
     }
 
     // ---- task 6: -c / --code tests ----
