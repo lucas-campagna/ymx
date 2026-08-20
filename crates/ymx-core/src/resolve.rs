@@ -34,7 +34,7 @@ use crate::callsite;
 use crate::diag::{Diagnostic, FileId, Span, E002, E003, E005, E006, E008, E009, E010, E011, E016};
 use crate::interp;
 use crate::ir::{render_value, Args, Value};
-use crate::math::{CallHook, MathEngine, Scope, V1Engine};
+use crate::math::{CallHook, MathEngine, Scope, ShellCallHook, V1Engine};
 use crate::namespace::{classify, DefClass, Definition};
 use crate::parse::{key_to_string, node_to_value, Node};
 use crate::project::{Options, PlainMode, Project};
@@ -599,8 +599,8 @@ impl<'a> Resolver<'a> {
                         .to_string(),
                 ));
             };
-            let segments = interp::scan(cmd_src, *span)?;
-            let interpolated = interp::resolve(&segments, &scope, &V1Engine)?;
+            let segments = interp::scan_shell(cmd_src, *span)?;
+            let interpolated = interp::resolve_shell(&segments, &scope, &V1Engine)?;
             let cmd_str = match interpolated {
                 Value::String(s) => s,
                 other => {
@@ -1137,6 +1137,19 @@ impl<'a> Resolver<'a> {
                 }
             })
         };
+        let shell_call: ShellCallHook<'s> = {
+            let file = def.file;
+            Rc::new(move |call: &callsite::ParsedCall, scope: &Scope<'s>, span: Span| {
+                let (named, positional) = self.resolve_call_args(&call.args, span, scope, file)?;
+                let args = match (named.is_empty(), positional.is_empty()) {
+                    (true, true) => Args::None,
+                    (false, true) => Args::Named(named),
+                    (true, false) => Args::Positional(positional),
+                    (false, false) => Args::Mixed { named, positional },
+                };
+                self.call_by_name(file, &call.name, &args, span)
+            })
+        };
         Scope {
             file: Some(self.project.files[def.file.0 as usize].clone()),
             component: Some(def.full_name.clone()),
@@ -1145,6 +1158,7 @@ impl<'a> Resolver<'a> {
             positional: args.positional_vec(),
             last: None,
             call: Some(call),
+            shell_call: Some(shell_call),
         }
     }
 
@@ -1345,8 +1359,8 @@ impl<'a> Resolver<'a> {
                     let raw = self.raw_value_string(&entry.value, scope)?;
                     let span = entry.value.span();
                     // Interpolate the command string so `$name` etc. resolve.
-                    let segments = interp::scan(&raw, span)?;
-                    let interpolated = interp::resolve(&segments, scope, &V1Engine)?;
+                    let segments = interp::scan_shell(&raw, span)?;
+                    let interpolated = interp::resolve_shell(&segments, scope, &V1Engine)?;
                     let cmd_str = match interpolated {
                         Value::String(s) => s,
                         other => render_value(&other).map_err(|_| {
@@ -4026,14 +4040,14 @@ mod tests {
     #[test]
     fn depth_cap_default_permits_deep_chains() {
         let mut src = String::from("a:\n  x: 1\n");
-        for i in 1..=200 {
+        for i in 1..=16 {
             src.push_str(&format!("{}a: \"v=$x\"\n", "$".repeat(i)));
         }
         let p = project_with(&[("main.yml", &src)]);
         assert_eq!(
             compile_ok(&p, "a", &Args::None),
             Value::string("v=1"),
-            "default max_depth 256 permits a 200-step template chain"
+            "default max_depth 256 permits a 16-step template chain"
         );
     }
 

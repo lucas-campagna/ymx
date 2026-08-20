@@ -23,6 +23,7 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use crate::callsite;
 use crate::diag::{Diagnostic, Span, E002, E003, E008, E010, E011};
 use crate::ir::{render_value, Value};
 
@@ -41,6 +42,10 @@ pub trait MathEngine {
 /// [`Scope`] clonable (the resolver builds child scopes per chain/dispatch
 /// step).
 pub type CallHook<'a> = Rc<dyn Fn(&str, &[Value]) -> Result<Value, Diagnostic> + 'a>;
+
+/// Component-call dispatch hook for shell interpolation `$name(args)` calls.
+pub type ShellCallHook<'a> =
+    Rc<dyn Fn(&callsite::ParsedCall, &Scope<'a>, Span) -> Result<Value, Diagnostic> + 'a>;
 
 /// Evaluation scope for `${...}` math and string interpolation.
 ///
@@ -71,6 +76,8 @@ pub struct Scope<'a> {
     /// Component-call dispatch hook for math `name(...)` calls ([`CallHook`]).
     /// `None` means no hook is registered (`invoke` then reports `E002`).
     pub call: Option<CallHook<'a>>,
+    /// Component-call dispatch hook for shell interpolation `$name(args)`.
+    pub shell_call: Option<ShellCallHook<'a>>,
 }
 
 impl<'a> Default for Scope<'a> {
@@ -90,6 +97,7 @@ impl<'a> Scope<'a> {
             positional: Vec::new(),
             last: None,
             call: None,
+            shell_call: None,
         }
     }
 
@@ -155,6 +163,29 @@ impl<'a> Scope<'a> {
                 code: E002,
                 message: format!(
                     "unknown component reference `{name}` (no component-call hook registered)"
+                ),
+            }),
+        }
+    }
+
+    /// Dispatch a shell interpolation `$name(args)` call through the
+    /// registered hook.
+    pub fn invoke_shell(
+        &self,
+        call: &callsite::ParsedCall,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match &self.shell_call {
+            Some(f) => f(call, self, span),
+            None => Err(Diagnostic {
+                file: self.file.clone(),
+                line: span.line,
+                col: span.col,
+                component: self.component.clone(),
+                code: E002,
+                message: format!(
+                    "unknown component reference `{}` (no shell component-call hook registered)",
+                    call.name
                 ),
             }),
         }
@@ -997,6 +1028,7 @@ mod tests {
     fn hook(f: impl Fn(&str, &[Value]) -> Result<Value, Diagnostic> + 'static) -> Scope<'static> {
         Scope {
             call: Some(Rc::new(f)),
+            shell_call: None,
             ..Scope::new()
         }
     }

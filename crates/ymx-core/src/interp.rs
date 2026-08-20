@@ -11,6 +11,7 @@
 //! interpoland is rendered via the shared [`render_value`] helper (objects and
 //! arrays into text are `E011`).
 
+use crate::callsite;
 use crate::diag::{Diagnostic, Span, E003, E010, E011};
 use crate::ir::{render_value, NoStringRender, Value};
 use crate::math::{MathEngine, Scope};
@@ -26,6 +27,12 @@ pub enum Segment {
     Arg { name: String, span: Span },
     /// A `${...}` math expression; `src` is the raw text between the braces.
     Math { src: String, span: Span },
+    /// A `$name(args)` component call inside shell interpolation.
+    Call {
+        name: String,
+        args: String,
+        span: Span,
+    },
     /// A `$<backend>{<command>}` executor call (rule 19).
     Exec {
         backend: String,
@@ -46,6 +53,15 @@ pub enum Segment {
 /// `base` is the span of the scalar's first character; segment spans are
 /// computed relative to it (advancing line/col across newlines).
 pub fn scan(src: &str, base: Span) -> Result<Vec<Segment>, Diagnostic> {
+    scan_impl(src, base, false)
+}
+
+/// Scan a shell command string into interpolation [`Segment`]s.
+pub fn scan_shell(src: &str, base: Span) -> Result<Vec<Segment>, Diagnostic> {
+    scan_impl(src, base, true)
+}
+
+fn scan_impl(src: &str, base: Span, shell_calls: bool) -> Result<Vec<Segment>, Diagnostic> {
     let mut segments: Vec<Segment> = Vec::new();
     let mut text = String::new();
     let mut chars = src.char_indices().peekable();
@@ -109,6 +125,43 @@ pub fn scan(src: &str, base: Span) -> Result<Vec<Segment>, Diagnostic> {
                                 chars.next();
                             } else {
                                 break;
+                            }
+                        }
+                        if shell_calls && chars.peek().map(|(_, c)| *c) == Some('(') {
+                            let rest = &src[start..];
+                            match callsite::parse_prefix(rest) {
+                                Ok(Some((call, consumed))) => {
+                                    let span = span_at(base, src, start);
+                                    debug_assert_eq!(call.name, name);
+                                    let args_start = call.name.len() + 2;
+                                    let args_end = consumed.saturating_sub(1);
+                                    let args = rest[args_start..args_end].to_string();
+                                    let target = start + consumed;
+                                    while let Some(&(next_idx, _)) = chars.peek() {
+                                        if next_idx < target {
+                                            chars.next();
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    segments.push(Segment::Call {
+                                        name: call.name,
+                                        args,
+                                        span,
+                                    });
+                                    continue;
+                                }
+                                Ok(None) => {}
+                                Err((code, message)) => {
+                                    return Err(Diagnostic {
+                                        file: None,
+                                        line: span_at(base, src, start).line,
+                                        col: span_at(base, src, start).col,
+                                        component: None,
+                                        code,
+                                        message,
+                                    });
+                                }
                             }
                         }
                         // Check for `$<backend>{<command>}` executor call.
@@ -200,42 +253,9 @@ pub fn resolve(
         [Segment::Text(t)] => Ok(Value::string(t.clone())),
         [Segment::Arg { name, span }] => resolve_arg(name, *span, scope),
         [Segment::Math { src, .. }] => engine.eval(src, scope),
-        [Segment::Exec {
-            backend,
-            command,
-            span,
-        }] => {
-            // Resolve interpolation inside the command string, then return
-            // an executor-call marker. The actual execution happens in the
-            // resolver (Task 4) — here we just parse and interpolate.
-            let cmd_segments = scan(command, *span)?;
-            let cmd_value = resolve(&cmd_segments, scope, engine)?;
-            let cmd_string = match &cmd_value {
-                Value::String(s) => s.clone(),
-                other => {
-                    return Err(ctx_err(
-                        scope,
-                        *span,
-                        E011,
-                        format!(
-                            "executor command must resolve to a string, got {}",
-                            match other {
-                                Value::Null => "null",
-                                Value::Bool(_) => "bool",
-                                Value::Int(_) => "int",
-                                Value::Float(_) => "float",
-                                Value::String(_) => "string",
-                                Value::Array(_) => "array",
-                                Value::Object(_) => "object",
-                            }
-                        ),
-                    ));
-                }
-            };
-            Ok(Value::object(IndexMap::from([
-                ("__exec_backend".to_string(), Value::string(backend.clone())),
-                ("__exec_command".to_string(), Value::string(cmd_string)),
-            ])))
+        [Segment::Call { .. }] => unreachable!("shell call segments are not scanned yet"),
+        [Segment::Exec { backend, command, span }] => {
+            resolve_exec_marker(backend, command, *span, scope, engine)
         }
         _ => {
             let mut out = String::new();
@@ -250,41 +270,11 @@ pub fn resolve(
                         let v = engine.eval(src, scope)?;
                         out.push_str(&render_into_text(&v, scope, *span)?);
                     }
-                    Segment::Exec {
-                        backend,
-                        command,
-                        span,
-                    } => {
-                        // In surrounding text context, resolve the command
-                        // and return the exec marker as text-rendered JSON.
-                        let cmd_segments = scan(command, *span)?;
-                        let cmd_value = resolve(&cmd_segments, scope, engine)?;
-                        let cmd_string = match &cmd_value {
-                            Value::String(s) => s.clone(),
-                            other => {
-                                return Err(ctx_err(
-                                    scope,
-                                    *span,
-                                    E011,
-                                    format!(
-                                        "executor command must resolve to a string, got {}",
-                                        match other {
-                                            Value::Null => "null",
-                                            Value::Bool(_) => "bool",
-                                            Value::Int(_) => "int",
-                                            Value::Float(_) => "float",
-                                            Value::String(_) => "string",
-                                            Value::Array(_) => "array",
-                                            Value::Object(_) => "object",
-                                        }
-                                    ),
-                                ));
-                            }
-                        };
-                        let marker = Value::object(IndexMap::from([
-                            ("__exec_backend".to_string(), Value::string(backend.clone())),
-                            ("__exec_command".to_string(), Value::string(cmd_string)),
-                        ]));
+                    Segment::Call { .. } => {
+                        unreachable!("shell call segments are not scanned yet")
+                    }
+                    Segment::Exec { backend, command, span } => {
+                        let marker = resolve_exec_marker(backend, command, *span, scope, engine)?;
                         out.push_str(&render_into_text(&marker, scope, *span)?);
                     }
                 }
@@ -292,6 +282,85 @@ pub fn resolve(
             Ok(Value::string(out))
         }
     }
+}
+
+/// Resolve shell-command interpolation segments into a String.
+///
+/// Shell command strings always render interpolations to text. In addition to
+/// the regular `$name` / `$0` / `${...}` forms, shell interpolation accepts
+/// `$name(args)` component calls.
+pub fn resolve_shell(
+    segments: &[Segment],
+    scope: &Scope<'_>,
+    engine: &dyn MathEngine,
+) -> Result<Value, Diagnostic> {
+    let mut out = String::new();
+    for seg in segments {
+        match seg {
+            Segment::Text(t) => out.push_str(t),
+            Segment::Arg { name, span } => {
+                let v = resolve_arg(name, *span, scope)?;
+                out.push_str(&render_into_text(&v, scope, *span)?);
+            }
+            Segment::Math { src, span } => {
+                let v = engine.eval(src, scope)?;
+                out.push_str(&render_into_text(&v, scope, *span)?);
+            }
+            Segment::Call { name, args, span } => {
+                let call_src = format!("${name}({args})");
+                let call = match callsite::parse(&call_src) {
+                    Ok(Some(call)) => call,
+                    Ok(None) => unreachable!("constructed shell call did not parse"),
+                    Err((code, message)) => return Err(ctx_err(scope, *span, code, message)),
+                };
+                let v = scope.invoke_shell(&call, *span)?;
+                out.push_str(&render_into_text(&v, scope, *span)?);
+            }
+            Segment::Exec { backend, command, span } => {
+                let marker = resolve_exec_marker(backend, command, *span, scope, engine)?;
+                out.push_str(&render_into_text(&marker, scope, *span)?);
+            }
+        }
+    }
+    Ok(Value::string(out))
+}
+
+/// Resolve a `$<backend>{...}` executor call to an exec marker object.
+fn resolve_exec_marker(
+    backend: &str,
+    command: &str,
+    span: Span,
+    scope: &Scope<'_>,
+    engine: &dyn MathEngine,
+) -> Result<Value, Diagnostic> {
+    let cmd_segments = scan_shell(command, span)?;
+    let cmd_value = resolve_shell(&cmd_segments, scope, engine)?;
+    let cmd_string = match &cmd_value {
+        Value::String(s) => s.clone(),
+        other => {
+            return Err(ctx_err(
+                scope,
+                span,
+                E011,
+                format!(
+                    "executor command must resolve to a string, got {}",
+                    match other {
+                        Value::Null => "null",
+                        Value::Bool(_) => "bool",
+                        Value::Int(_) => "int",
+                        Value::Float(_) => "float",
+                        Value::String(_) => "string",
+                        Value::Array(_) => "array",
+                        Value::Object(_) => "object",
+                    }
+                ),
+            ));
+        }
+    };
+    Ok(Value::object(IndexMap::from([
+        ("__exec_backend".to_string(), Value::string(backend.to_string())),
+        ("__exec_command".to_string(), Value::string(cmd_string)),
+    ])))
 }
 
 /// Resolve a `$name` / `$N` argument reference.
@@ -683,6 +752,22 @@ mod tests {
                     _ => Value::int(0),
                 })
             })),
+            shell_call: Some(Rc::new(|call, _scope, _span| {
+                let sum: i64 = call
+                    .args
+                    .iter()
+                    .map(|arg| match &arg.value {
+                        callsite::ParsedValue::Literal(Value::Int(i)) => *i,
+                        _ => 0,
+                    })
+                    .sum();
+                let value = match call.name.as_str() {
+                    "b" => Value::int(sum),
+                    "c" => Value::int(2 * sum),
+                    _ => Value::int(0),
+                };
+                Ok(value)
+            })),
             ..Scope::new()
         };
         assert_eq!(
@@ -946,6 +1031,54 @@ mod tests {
                 command: "".to_string(),
                 span: SPAN,
             }]
+        );
+    }
+
+    #[test]
+    fn shell_component_call_scans_and_resolves() {
+        let scope = Scope {
+            shell_call: Some(Rc::new(|call, _scope, _span| {
+                let sum: i64 = call
+                    .args
+                    .iter()
+                    .map(|arg| match &arg.value {
+                        crate::callsite::ParsedValue::Literal(Value::Int(i)) => *i,
+                        _ => 0,
+                    })
+                    .sum();
+                Ok(match call.name.as_str() {
+                    "sum" => Value::int(sum),
+                    "noop" => Value::int(0),
+                    _ => Value::int(-1),
+                })
+            })),
+            ..Scope::new()
+        };
+
+        let segs = scan_shell("echo $sum(1,2)", SPAN).unwrap();
+        assert_eq!(
+            segs,
+            vec![
+                Segment::Text("echo ".to_string()),
+                Segment::Call {
+                    name: "sum".to_string(),
+                    args: "1,2".to_string(),
+                    span: Span { line: 1, col: 6 },
+                },
+            ]
+        );
+        assert_eq!(
+            resolve_shell(&segs, &scope, &FakeEngine).unwrap(),
+            Value::string("echo 3")
+        );
+        assert_eq!(
+            resolve_shell(&scan_shell("x $sum(a=1, b=2)", SPAN).unwrap(), &scope, &FakeEngine)
+                .unwrap(),
+            Value::string("x 3")
+        );
+        assert_eq!(
+            resolve_shell(&scan_shell("x $noop()", SPAN).unwrap(), &scope, &FakeEngine).unwrap(),
+            Value::string("x 0")
         );
     }
 }

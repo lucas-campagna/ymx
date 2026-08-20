@@ -356,6 +356,7 @@ fn build_caller_scope<'a>(ctx: &'a BuiltinCtx<'a>) -> Scope<'a> {
         positional: Vec::new(),
         last: None,
         call: Some(ctx.call.clone()),
+        shell_call: None,
     }
 }
 
@@ -373,6 +374,7 @@ fn build_scope_for_call<'a>(
         positional: args.positional_vec(),
         last: last.cloned(),
         call: Some(ctx.call.clone()),
+        shell_call: None,
     }
 }
 

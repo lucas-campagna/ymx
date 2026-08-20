@@ -67,6 +67,20 @@ pub enum ParsedValue {
 /// bad quoted token, invalid argument name, empty argument, bad escapes),
 /// `E012` positional-after-named, or `E013` array/object literal argument.
 pub fn parse(src: &str) -> Result<Option<ParsedCall>, (&'static str, String)> {
+    match parse_prefix(src)? {
+        Some((call, consumed)) if consumed == src.len() => Ok(Some(call)),
+        _ => Ok(None),
+    }
+}
+
+/// Parse a call-site prefix from `src`.
+///
+/// Returns the parsed call plus the number of bytes consumed when `src`
+/// begins with a `$name(...)` shape; `Ok(None)` means `src` does not start
+/// with a call-site.
+pub(crate) fn parse_prefix(
+    src: &str,
+) -> Result<Option<(ParsedCall, usize)>, (&'static str, String)> {
     let b = src.as_bytes();
     let mut i = 0;
     if b.get(i) != Some(&b'$') {
@@ -91,14 +105,14 @@ pub fn parse(src: &str) -> Result<Option<ParsedCall>, (&'static str, String)> {
             format!("unterminated call-site `{src}` (missing `)`)"),
         ));
     };
-    if close != b.len() - 1 {
-        return Ok(None);
-    }
     let args = parse_args(&src[open + 1..close])?;
-    Ok(Some(ParsedCall {
-        name: name.to_string(),
-        args,
-    }))
+    Ok(Some((
+        ParsedCall {
+            name: name.to_string(),
+            args,
+        },
+        close + 1,
+    )))
 }
 
 /// The index of the `)` matching the `(` at `open`, tracking nested parens,
