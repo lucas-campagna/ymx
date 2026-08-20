@@ -503,3 +503,104 @@ fn exit_code_help_is_zero() {
     assert_exit(&["--help"], 0);
     assert_exit(&["-h"], 0);
 }
+
+// ---------------------------------------------------------------------------
+// Task 6 — -c/--code integration tests. Invoke the real binary with -c flag
+// and assert on stdout, stderr, and exit code.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn code_only_simple_scalar() {
+    let out = ymx(&["-c", "main: 42"]);
+    assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
+    assert_eq!(stdout(&out.0), "42");
+}
+
+#[test]
+fn code_only_string() {
+    let out = ymx(&["-c", "main: hello"]);
+    assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
+    assert_eq!(stdout(&out.0), "\"hello\"");
+}
+
+#[test]
+fn code_only_json() {
+    let out = ymx(&["-c", "{\"main\": \"${1 + 1}\"}"]);
+    assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
+    assert_eq!(stdout(&out.0), "2");
+}
+
+#[test]
+fn code_only_math() {
+    let out = ymx(&["-c", "main: ${10 * 5}"]);
+    assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
+    assert_eq!(stdout(&out.0), "50");
+}
+
+#[test]
+fn code_only_component_call() {
+    let out = ymx(&["-c", "greet: \"hi\"\nmain: $greet"]);
+    assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
+    assert_eq!(stdout(&out.0), "\"hi\"");
+}
+
+#[test]
+fn code_with_file_override() {
+    let dir = TempDir::new();
+    dir.write("a.yml", "comp: 1\nmain: $comp");
+    let out = ymx(&[dir.path().join("a.yml").to_str().unwrap(), "-c", "comp: 99"]);
+    assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
+    assert_eq!(stdout(&out.0), "99");
+}
+
+#[test]
+fn code_with_file_add_component() {
+    let dir = TempDir::new();
+    dir.write("a.yml", "x: 10");
+    let out = ymx(&[
+        dir.path().join("a.yml").to_str().unwrap(),
+        "-c",
+        "y: 20\nmain: $y",
+    ]);
+    assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
+    assert_eq!(stdout(&out.0), "20");
+}
+
+#[test]
+fn code_with_file_math() {
+    let dir = TempDir::new();
+    dir.write("a.yml", "base: 5");
+    let out = ymx(&[
+        dir.path().join("a.yml").to_str().unwrap(),
+        "-c",
+        "main: $base",
+    ]);
+    assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
+    assert_eq!(stdout(&out.0), "5");
+}
+
+#[test]
+fn code_with_file_json_override() {
+    let dir = TempDir::new();
+    dir.write("a.yml", "comp: 1");
+    let out = ymx(&[
+        dir.path().join("a.yml").to_str().unwrap(),
+        "-c",
+        "{\"comp\": 42, \"main\": \"$comp\"}",
+    ]);
+    assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
+    assert_eq!(stdout(&out.0), "42");
+}
+
+#[test]
+fn code_with_test_rejected() {
+    let out = ymx(&["-c", "main: 1", "--test"]);
+    assert_eq!(out.0.status.code(), Some(2), "exit 2 on -c+--test");
+}
+
+#[test]
+fn code_no_file_terminal_stdin_outputs_result() {
+    let out = ymx(&["-c", "main: 12"]);
+    assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
+    assert_eq!(stdout(&out.0), "12");
+}

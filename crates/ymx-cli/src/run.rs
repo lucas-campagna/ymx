@@ -1431,4 +1431,127 @@ mod tests {
         let err = err_of(&["-c", "main: 1", "--test"]);
         assert!(err.message.contains("-c/--code"));
     }
+
+    #[test]
+    fn code_only_json_input() {
+        let dir = TempDir::new();
+        let cli = ParsedCli {
+            path: dir.path().join("main.yml"),
+            entry: None,
+            max_depth: None,
+            pretty: None,
+            format: None,
+            output: None,
+            test: false,
+            test_dir: None,
+            stdin_is_script: true,
+            allowed_backends: None,
+            no_exec: false,
+            code: Some("{\"main\": \"${1 + 2}\"}".to_string()),
+        };
+        assert_eq!(run(cli), RunOutcome::Success);
+    }
+
+    #[test]
+    fn code_only_math_expression() {
+        let dir = TempDir::new();
+        let cli = ParsedCli {
+            path: dir.path().join("main.yml"),
+            entry: None,
+            max_depth: None,
+            pretty: None,
+            format: None,
+            output: None,
+            test: false,
+            test_dir: None,
+            stdin_is_script: true,
+            allowed_backends: None,
+            no_exec: false,
+            code: Some("main: ${10 / 2}".to_string()),
+        };
+        assert_eq!(run(cli), RunOutcome::Success);
+    }
+
+    #[test]
+    fn code_only_component_call() {
+        let dir = TempDir::new();
+        let cli = ParsedCli {
+            path: dir.path().join("main.yml"),
+            entry: None,
+            max_depth: None,
+            pretty: None,
+            format: None,
+            output: None,
+            test: false,
+            test_dir: None,
+            stdin_is_script: true,
+            allowed_backends: None,
+            no_exec: false,
+            code: Some("greeting: \"hi\"\nmain: $greeting".to_string()),
+        };
+        assert_eq!(run(cli), RunOutcome::Success);
+    }
+
+    #[test]
+    fn code_with_file_json_input() {
+        let dir = TempDir::new();
+        dir.write("a.yml", "comp1: 10\n");
+        let cli = ParsedCli {
+            path: dir.path().join("a.yml"),
+            entry: None,
+            max_depth: None,
+            pretty: None,
+            format: None,
+            output: None,
+            test: false,
+            test_dir: None,
+            stdin_is_script: false,
+            allowed_backends: None,
+            no_exec: false,
+            code: Some("{\"comp2\": 20, \"main\": \"$comp1 + $comp2\"}".to_string()),
+        };
+        assert_eq!(run(cli), RunOutcome::Success);
+    }
+
+    #[test]
+    fn code_with_file_math_expression() {
+        let dir = TempDir::new();
+        dir.write("a.yml", "base: 5\n");
+        let cli = ParsedCli {
+            path: dir.path().join("a.yml"),
+            entry: None,
+            max_depth: None,
+            pretty: None,
+            format: None,
+            output: None,
+            test: false,
+            test_dir: None,
+            stdin_is_script: false,
+            allowed_backends: None,
+            no_exec: false,
+            code: Some("main: $base * 3 + 1".to_string()),
+        };
+        assert_eq!(run(cli), RunOutcome::Success);
+    }
+
+    #[test]
+    fn code_with_file_component_call() {
+        let dir = TempDir::new();
+        dir.write("a.yml", "greet: \"hello\"\n");
+        let cli = ParsedCli {
+            path: dir.path().join("a.yml"),
+            entry: None,
+            max_depth: None,
+            pretty: None,
+            format: None,
+            output: None,
+            test: false,
+            test_dir: None,
+            stdin_is_script: false,
+            allowed_backends: None,
+            no_exec: false,
+            code: Some("main: $greet".to_string()),
+        };
+        assert_eq!(run(cli), RunOutcome::Success);
+    }
 }

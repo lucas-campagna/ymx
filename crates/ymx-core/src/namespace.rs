@@ -1254,4 +1254,87 @@ mod tests {
         assert_eq!(def.full_name, "$sum$");
         assert!(def.math_shorthand);
     }
+
+    // ---- register_override tests ----
+
+    #[test]
+    fn register_override_replaces_existing_def() {
+        let mut store = NamespaceStore::new();
+        store.register("", def("comp", 0, 1)).expect("register original comp");
+        let original = store.get("", "comp").unwrap();
+        assert!(matches!(original.body, Node::Null(_)));
+
+        // Override with same name but different body (a String node).
+        let mut overridden = def("comp", 0, 5);
+        overridden.body = Node::String("replaced".into(), Span { line: 5, col: 1 });
+        store.register_override("", overridden);
+
+        let got = store.get("", "comp").unwrap();
+        assert!(matches!(&got.body, Node::String(s, _) if s == "replaced"));
+        assert_eq!(got.span.line, 5, "new definition's span wins");
+    }
+
+    #[test]
+    fn register_override_adds_new_def() {
+        let mut store = NamespaceStore::new();
+        assert!(store.is_empty());
+
+        store.register_override("", def("brand_new", 0, 1));
+
+        let got = store.get("", "brand_new");
+        assert!(got.is_some(), "newly added def should be retrievable");
+        assert_eq!(got.unwrap().full_name, "brand_new");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn register_override_no_dup_error() {
+        let mut store = NamespaceStore::new();
+        store.register("", def("x", 0, 1)).expect("register x");
+
+        // register_override returns (), not Result. Just call it — if it
+        // compiled, the return-type contract is satisfied. Verify the override
+        // took effect.
+        store.register_override("", def("x", 0, 9));
+
+        let got = store.get("", "x").unwrap();
+        assert_eq!(got.span.line, 9, "override's span is kept");
+        // Still exactly one definition (not a duplicate slot).
+        assert_eq!(store.namespace("").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn register_override_in_subnamespace() {
+        let mut store = NamespaceStore::new();
+        store.register_override("subdir", def("comp", 1, 3));
+
+        assert!(
+            store.get("subdir", "comp").is_some(),
+            "def should exist in subdir namespace"
+        );
+        assert!(
+            store.get("", "comp").is_none(),
+            "def should NOT exist in global namespace"
+        );
+        assert_eq!(store.len(), 1, "only one namespace created");
+    }
+
+    #[test]
+    fn register_override_global_and_subnamespace_independent() {
+        let mut store = NamespaceStore::new();
+        store.register("", def("comp", 0, 1)).expect("global comp");
+
+        // Override in subdir with the same name — a different namespace.
+        let mut sub_def = def("comp", 1, 5);
+        sub_def.body = Node::Bool(true, Span { line: 5, col: 1 });
+        store.register_override("subdir", sub_def);
+
+        let global = store.get("", "comp").unwrap();
+        assert!(matches!(global.body, Node::Null(_)), "global retains original");
+
+        let sub = store.get("subdir", "comp").unwrap();
+        assert!(matches!(sub.body, Node::Bool(true, _)), "subdir has override");
+
+        assert_eq!(store.len(), 2, "global + subdir namespaces");
+    }
 }

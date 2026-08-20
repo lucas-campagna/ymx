@@ -1280,4 +1280,129 @@ mod tests {
         let a_def = project.namespaces.get("", "a").expect("a exists");
         assert_eq!(node_to_value(&a_def.body), value_of("1\n"));
     }
+
+    #[test]
+    fn load_project_with_override_discards_ymx_from_override() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "_ymx:\n  plain: false\nmain: 1\n");
+
+        let override_yaml = "_ymx:\n  plain: true\nmain: 2";
+        let project = load_project_with_override(&dir.path().join("main.yml"), Some(override_yaml))
+            .expect("loads cleanly");
+
+        let main_def = project.namespaces.get("", "main").expect("main exists");
+        assert_eq!(
+            node_to_value(&main_def.body),
+            value_of("2\n"),
+            "main overridden to 2"
+        );
+
+        assert_eq!(
+            project.raw_meta_ymx.len(),
+            1,
+            "only the file's _ymx is stored (override's discarded)"
+        );
+        assert_eq!(
+            project.raw_meta_ymx[0].1,
+            value_of("plain: false\n"),
+            "file's _ymx preserved"
+        );
+    }
+
+    #[test]
+    fn load_project_with_override_discards_test_from_override() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "main: 1\n_test:\n  main: 1\n");
+
+        let override_yaml = "main: 2\n_test:\n  main: 2";
+        let project = load_project_with_override(&dir.path().join("main.yml"), Some(override_yaml))
+            .expect("loads cleanly");
+
+        let main_def = project.namespaces.get("", "main").expect("main exists");
+        assert_eq!(
+            node_to_value(&main_def.body),
+            value_of("2\n"),
+            "main overridden to 2"
+        );
+
+        assert_eq!(
+            project.raw_meta_test.len(),
+            1,
+            "only the file's _test is stored (override's discarded)"
+        );
+        assert_eq!(
+            project.raw_meta_test[0].1,
+            value_of("main: 1\n"),
+            "file's _test preserved"
+        );
+    }
+
+    #[test]
+    fn load_project_with_override_discards_file_scoped_from_override() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "_helper: 2\nmain: 1\n");
+
+        let override_yaml = "_helper: 4\nmain: 3";
+        let project = load_project_with_override(&dir.path().join("main.yml"), Some(override_yaml))
+            .expect("loads cleanly");
+
+        let main_def = project.namespaces.get("", "main").expect("main exists");
+        assert_eq!(
+            node_to_value(&main_def.body),
+            value_of("3\n"),
+            "main overridden to 3"
+        );
+
+        let main_id = file_id_of(&project, "main.yml");
+        let helper_def = project
+            .file_scoped
+            .get(main_id, "_helper")
+            .expect("_helper exists (from file)");
+        assert_eq!(
+            node_to_value(&helper_def.body),
+            value_of("2\n"),
+            "file-scoped _helper keeps file's value, not override's"
+        );
+
+        let override_id = FileId(1);
+        let override_helper = project.file_scoped.get(override_id, "_helper");
+        assert!(
+            override_helper.is_none(),
+            "override's _helper is not registered in any file_scoped store"
+        );
+    }
+
+    #[test]
+    fn load_project_with_override_invalid_yaml_returns_error() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "main: 1\n");
+
+        let err =
+            load_project_with_override(&dir.path().join("main.yml"), Some(":\n  :\n  invalid"))
+                .expect_err("invalid override YAML should error");
+        assert_eq!(err.len(), 1);
+        assert_eq!(err[0].code, E001);
+        assert_eq!(
+            err[0].file.as_deref(),
+            Some(dir.path().join("main.yml/.ymx-override").as_path()),
+            "error carries synthetic override path (root.join)"
+        );
+    }
+
+    #[test]
+    fn load_project_with_override_empty_override_is_identity() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "a: 1\n");
+
+        let project = load_project_with_override(&dir.path().join("main.yml"), Some(""))
+            .expect("loads cleanly");
+
+        let a_def = project.namespaces.get("", "a").expect("a exists");
+        assert_eq!(node_to_value(&a_def.body), value_of("1\n"));
+
+        assert!(
+            project.namespaces.get("", "b").is_none(),
+            "no extra defs added from empty override"
+        );
+    }
 }
