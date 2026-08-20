@@ -393,6 +393,22 @@ impl NamespaceStore {
         ns.defs.insert(def.full_name.clone(), def);
         Ok(())
     }
+
+    /// Register `def` in namespace `path` (`""` for global), **replacing** any
+    /// existing definition with the same `full_name`. Unlike [`register`](Self::register),
+    /// this never returns [`DupError`] — the new definition silently wins.
+    /// Used by the `-c` / `--code` overlay to merge inline components on top of
+    /// file-loaded definitions.
+    pub fn register_override(&mut self, path: &str, def: Definition) {
+        let ns = self
+            .by_path
+            .entry(path.to_string())
+            .or_insert_with(|| Namespace {
+                path: path.to_string(),
+                defs: HashMap::new(),
+            });
+        ns.defs.insert(def.full_name.clone(), def);
+    }
 }
 
 /// A per-file store of `_`-prefixed (file-scoped) definitions. Keyed first by
