@@ -25,6 +25,7 @@ Options:
       --pretty             Force pretty JSON with -f compact
   -o, --output <file>      Write to file instead of stdout
   -t, --test               Run inline `_test` blocks instead of compiling
+  -c, --code <yml>        Inline YAML/JSON component definitions (overrides file components)
   -h, --help               Show this help
 
 Exit codes: 0 success | 1 diagnostic | 2 usage error
@@ -34,6 +35,9 @@ Examples:
   cat main.yml | ymx                 Stdin is the script (equiv to above)
   ymx . --test                       Run inline tests
   echo '{\"a\":1}' | ymx main.yml    Stdin provides call arguments
+  ymx -c 'main: hello'                        Inline script (no file)
+  ymx main.yml -c 'main$: a + b'              Override file components
+  echo '{\"a\":1}' | ymx -c 'main$: a + 1'     Inline script with stdin args
 ";
 
 /// Render the manual page. Currently identical to [`MANUAL`] (kept as a fn
@@ -62,6 +66,8 @@ mod tests {
         "--output",
         "-t",
         "--test",
+        "-c",
+        "--code",
         "-h",
         "--help",
     ];
