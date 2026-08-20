@@ -804,6 +804,7 @@ fn eval_resolve_mini(
             body: super::parse::Node::Object(entries.to_vec(), ctx.span),
             math_shorthand: false,
             trailing_question: false,
+            exec_backend: None,
         },
         &set.to_object(),
     )

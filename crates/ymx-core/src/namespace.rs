@@ -59,6 +59,11 @@ pub struct Definition {
     /// `true` for a top-level `a?` / `a?$` name: the definition carries a
     /// trailing `?` modifier (v2 optional/default-merge; E010 in v1).
     pub trailing_question: bool,
+    /// If present, the `$<backend>` executor suffix was detected on the
+    /// component name (e.g. `main$sh` → `Some("sh")`). The body is a
+    /// command source string to be evaluated as `$<backend>{<body>}` when
+    /// the component resolves.
+    pub exec_backend: Option<String>,
 }
 
 /// Parsed metadata about a regular component/template name.
@@ -78,6 +83,10 @@ pub struct ComponentMeta {
     pub trailing_dollar: bool,
     /// `true` iff the name had a trailing `?` (or `?$`) that was stripped.
     pub trailing_question: bool,
+    /// If present, the `$<backend>` executor suffix was detected (e.g.
+    /// `main$sh` → `Some("sh")`). The body is a command string to be
+    /// evaluated as a `$<backend>{<body>}` exec call.
+    pub exec_backend: Option<String>,
     /// Span of the name (for diagnostics).
     pub span: Span,
 }
@@ -179,21 +188,47 @@ pub fn classify(full_name: &str, span: Span) -> DefClass {
     let dollar_count = idx as u32;
     let after_leading = &full_name[idx..];
 
+    // Check for executor suffix `$<backend>` BEFORE trailing modifier stripping.
+    // `main$sh` → base="main", backend="sh"; `main$` → no exec suffix (empty backend).
+    let has_exec_suffix = {
+        let dollar_pos_opt = after_leading.rfind('$');
+        match dollar_pos_opt {
+            None => false,
+            Some(0) => false,
+            Some(dollar_pos) => {
+                let backend = &after_leading[dollar_pos + 1..];
+                if backend.is_empty() {
+                    false
+                } else {
+                    let mut chars = backend.chars();
+                    matches!(
+                        chars.next(),
+                        Some(c) if c.is_ascii_alphabetic() || c == '_'
+                    ) && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+                }
+            }
+        }
+    };
+
     // Strip trailing `?$`, `$?`, `$`, or `?` before effective-id validation.
     // `?$` is the correct v2 order (optional + math); `$?` is the wrong order
     // (rule 20) — both set trailing_dollar + trailing_question.
-    let (effective_id, trailing_dollar, trailing_question) =
-        if let Some(stripped) = after_leading.strip_suffix("?$") {
-            (stripped, true, true)
-        } else if let Some(stripped) = after_leading.strip_suffix("$?") {
-            (stripped, true, true)
-        } else if let Some(stripped) = after_leading.strip_suffix('$') {
-            (stripped, true, false)
-        } else if let Some(stripped) = after_leading.strip_suffix('?') {
-            (stripped, false, true)
-        } else {
-            (after_leading, false, false)
-        };
+    let (effective_id, trailing_dollar, trailing_question, exec_backend) = if has_exec_suffix {
+        let dollar_pos = after_leading.rfind('$').unwrap();
+        let base = &after_leading[..dollar_pos];
+        let backend = &after_leading[dollar_pos + 1..];
+        (base, false, false, Some(backend.to_string()))
+    } else if let Some(stripped) = after_leading.strip_suffix("?$") {
+        (stripped, true, true, None)
+    } else if let Some(stripped) = after_leading.strip_suffix("$?") {
+        (stripped, true, true, None)
+    } else if let Some(stripped) = after_leading.strip_suffix('$') {
+        (stripped, true, false, None)
+    } else if let Some(stripped) = after_leading.strip_suffix('?') {
+        (stripped, false, true, None)
+    } else {
+        (after_leading, false, false, None)
+    };
 
     if !is_valid_effective_id(effective_id) {
         return DefClass::InvalidName(span);
@@ -207,6 +242,7 @@ pub fn classify(full_name: &str, span: Span) -> DefClass {
         file_scoped,
         trailing_dollar,
         trailing_question,
+        exec_backend,
         span,
     };
     match effective_id.as_str() {
@@ -509,6 +545,7 @@ pub fn extract_document(file: FileId, body: &Node) -> DocExtract {
                     body: value.clone(),
                     math_shorthand: meta.trailing_dollar,
                     trailing_question: meta.trailing_question,
+                    exec_backend: meta.exec_backend.clone(),
                 };
                 if meta.file_scoped {
                     out.file_scoped_defs.push(def);
@@ -803,6 +840,7 @@ mod tests {
             body: Node::Null(Span { line, col: 1 }),
             math_shorthand: false,
             trailing_question: false,
+            exec_backend: None,
         }
     }
 

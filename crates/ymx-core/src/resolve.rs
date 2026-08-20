@@ -279,6 +279,20 @@ pub fn resolve_ref<'a>(
                     }
                 }
             }
+            // Try exec shorthand: `name$<backend>` — scan global namespace for
+            // defs whose full_name starts with `name$` and has `exec_backend`.
+            if let Some(ns) = project.namespaces.namespace("") {
+                for (_, def) in ns.defs() {
+                    if def.full_name.starts_with(name)
+                        && def.full_name[name.len()..].starts_with('$')
+                        && !def.full_name[name.len()..].starts_with("$?")
+                        && !def.full_name[name.len()..].starts_with("$$")
+                        && def.exec_backend.is_some()
+                    {
+                        return Ok(def);
+                    }
+                }
+            }
             if plain != PlainMode::False {
                 let mut paths: Vec<&str> = project
                     .namespaces
@@ -317,6 +331,21 @@ pub fn resolve_ref<'a>(
                         let with_dollar_question = format!("{}$?", name);
                         if let Some(def) = project.namespaces.get(path, &with_dollar_question) {
                             if !templates_only || def.full_name.starts_with('$') {
+                                return Ok(def);
+                            }
+                        }
+                    }
+                    // Also try exec shorthand for sub-namespace lookups:
+                    // `name$<backend>` in each sub-namespace.
+                    if let Some(ns) = project.namespaces.namespace(path) {
+                        for (_, def) in ns.defs() {
+                            if def.full_name.starts_with(name)
+                                && def.full_name[name.len()..].starts_with('$')
+                                && !def.full_name[name.len()..].starts_with("$?")
+                                && !def.full_name[name.len()..].starts_with("$$")
+                                && def.exec_backend.is_some()
+                                && (!templates_only || def.full_name.starts_with('$'))
+                            {
                                 return Ok(def);
                             }
                         }
@@ -364,7 +393,29 @@ pub fn compile(project: &Project, opts: &Options) -> Result<Value, Vec<Diagnosti
     let def = if component.starts_with('_') {
         project.file_scoped.get(file_id, component)
     } else {
-        project.namespaces.get(&namespace, component)
+        // Direct lookup first, then try trailing-modifier shorthands:
+        // `main$` (math), `main?` (optional), `main$?` (combo),
+        // `main$sh` / `main$pw` (exec).
+        project.namespaces.get(&namespace, component).or_else(|| {
+            let ns = project.namespaces.namespace(&namespace)?;
+            // Try main$, main?, main$?
+            for suffix in &["$", "?", "$?"] {
+                let key = format!("{component}{suffix}");
+                if let Some(def) = ns.get(&key) {
+                    return Some(def);
+                }
+            }
+            // Try main$<backend> (exec shorthand)
+            let prefix = format!("{component}$");
+            ns.defs()
+                .find(|(full, d)| {
+                    full.starts_with(&prefix)
+                        && !full[prefix.len()..].starts_with('?')
+                        && !full[prefix.len()..].starts_with('$')
+                        && d.exec_backend.is_some()
+                })
+                .map(|(_, d)| d)
+        })
     };
     let Some(def) = def else {
         return Err(vec![Diagnostic {
@@ -537,6 +588,50 @@ impl<'a> Resolver<'a> {
             let segments = interp::scan(&format!("${{{math_src}}}"), *span)?;
             let value = interp::resolve(&segments, &scope, &V1Engine)?;
             return self.finish(def, args, chain_initial, ResolvedBody::Value(value));
+        }
+        // Top-level `a$sh` / `a?$sh` shorthand: body is an exec command.
+        // Evaluate it as `$<backend>{<body>}` and use the result directly.
+        if let Some(ref backend) = def.exec_backend {
+            let Node::String(cmd_src, span) = &def.body else {
+                return Err(self.def_err(
+                    def,
+                    E010,
+                    "value for `$<backend>` component-name shorthand must be a string (command source)"
+                        .to_string(),
+                ));
+            };
+            let segments = interp::scan(cmd_src, *span)?;
+            let interpolated = interp::resolve(&segments, &scope, &V1Engine)?;
+            let cmd_str = match interpolated {
+                Value::String(s) => s,
+                other => {
+                    return Err(self.def_err(
+                        def,
+                        E011,
+                        format!(
+                            "exec command must resolve to a string, got {}",
+                            match other {
+                                Value::Null => "null",
+                                Value::Bool(_) => "bool",
+                                Value::Int(_) => "int",
+                                Value::Float(_) => "float",
+                                Value::String(_) => "string",
+                                Value::Object(_) => "object",
+                                Value::Array(_) => "array",
+                            }
+                        ),
+                    ));
+                }
+            };
+            let mut m = IndexMap::new();
+            m.insert("__exec_backend".to_string(), Value::string(backend.clone()));
+            m.insert("__exec_command".to_string(), Value::string(cmd_str));
+            return self.finish(
+                def,
+                args,
+                chain_initial,
+                ResolvedBody::Value(Value::Object(m)),
+            );
         }
         // Rule 17 chain fallback: when body evaluation fails with E003
         // (missing required argument), check if a `?`-suffixed template
@@ -2106,6 +2201,7 @@ mod tests {
             body: Node::Int(1, SPAN),
             math_shorthand: false,
             trailing_question: false,
+            exec_backend: None,
         }
     }
 

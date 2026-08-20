@@ -471,6 +471,7 @@ mod tests {
             body: Node::Int(1, SPAN),
             math_shorthand: false,
             trailing_question: false,
+            exec_backend: None,
         }
     }
 
@@ -482,6 +483,7 @@ mod tests {
             body,
             math_shorthand: false,
             trailing_question: false,
+            exec_backend: None,
         }
     }
 

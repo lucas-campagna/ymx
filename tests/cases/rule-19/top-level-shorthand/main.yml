@@ -1,0 +1,8 @@
+# main$sh: echo hello — top-level component-name exec shorthand (rule 19).
+# The name `main$sh` strips to effective_id "main" with exec_backend="sh".
+# Equivalent to: main: $sh{echo hello}
+main$sh: echo hello
+_test:
+  main:
+    args: {}
+    result: {exit_code: 0, stdout: "hello\n"}
