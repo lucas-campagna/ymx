@@ -63,6 +63,12 @@ pub struct ParsedCli {
     /// `--no-exec` — disables shell execution entirely (`$<backend>{...}`
     /// raises E016). Sets `opts.executor = None`.
     pub no_exec: bool,
+    /// `-c, --code <yml>` — inline YAML or JSON component definitions.
+    /// `None` when the flag was absent. When present, the value is parsed
+    /// as YAML (auto-detect JSON) and its top-level components are merged
+    /// into the global namespace, overriding any file-loaded definitions
+    /// with the same name.
+    pub code: Option<String>,
 }
 
 impl ParsedCli {
@@ -130,6 +136,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     let mut test = false;
     let mut allowed_backends: Option<Vec<String>> = None;
     let mut no_exec = false;
+    let mut code: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -177,6 +184,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
                 allowed_backends = Some(list);
             }
             "--no-exec" => no_exec = true,
+            "-c" | "--code" => code = Some(take_value(args, &mut i, "--code")?),
             other => {
                 if other.starts_with("--") {
                     return Err(ParseError {
@@ -203,6 +211,12 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
                 "expected exactly one file, got {} — usage: `ymx <file> [flags]`",
                 positionals.len()
             ),
+        });
+    }
+
+    if test && code.is_some() {
+        return Err(ParseError {
+            message: "-c/--code cannot be combined with --test".to_string(),
         });
     }
 
@@ -251,6 +265,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         stdin_is_script,
         allowed_backends,
         no_exec,
+        code,
     }))
 }
 
@@ -578,5 +593,36 @@ mod tests {
         assert!(!c.stdin_is_script);
         assert!(c.test);
         assert_eq!(c.path, PathBuf::from("."));
+    }
+
+    #[test]
+    fn code_short_flag_parses() {
+        let c = cli_of(&["-c", "main: hello", "proj/main.yml"]);
+        assert_eq!(c.code.as_deref(), Some("main: hello"));
+    }
+
+    #[test]
+    fn code_long_flag_parses() {
+        let c = cli_of(&["--code", "main: hello", "proj/main.yml"]);
+        assert_eq!(c.code.as_deref(), Some("main: hello"));
+    }
+
+    #[test]
+    fn code_absent_is_none() {
+        let c = cli_of(&["proj/main.yml"]);
+        assert_eq!(c.code, None);
+    }
+
+    #[test]
+    fn code_with_test_errors() {
+        let err = err_of(&["-c", "main: 1", "--test", "proj/main.yml"]);
+        assert!(err.message.contains("-c/--code"));
+        assert!(err.message.contains("--test"));
+    }
+
+    #[test]
+    fn code_with_test_no_file_errors() {
+        let err = err_of(&["-c", "main: 1", "--test"]);
+        assert!(err.message.contains("-c/--code"));
     }
 }
