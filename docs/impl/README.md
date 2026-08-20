@@ -48,7 +48,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.26 | `done` | Fix top-level `$` component-name modifier | ymx-core | [1.26-top-level-component-shorthand.md](1.26-top-level-component-shorthand.md) | 1.6 |
 | 1.27 | `done` | Shell execution builtins (`$sh`, `$pw`) | ymx-core, ymx-config, ymx-lib, ymx-cli | [1.27-shell-exec.md](1.27-shell-exec.md) | 1.26 |
 | 1.28 | `done` | CLI inline code flag (`-c`) | ymx-core, ymx-lib, ymx-cli | [1.28-cli-inline-code.md](1.28-cli-inline-code.md) | 1.27 |
-| 1.29 | `planned` | Remove bare $name component fallback | ymx-core | [1.29-remove-bare-name-fallback.md](1.29-remove-bare-name-fallback.md) | 1.28 |
+| 1.29 | `done` | Remove bare $name component fallback | ymx-core | [1.29-remove-bare-name-fallback.md](1.29-remove-bare-name-fallback.md) | 1.28 |
 
 ## Cross-cutting notes
 
