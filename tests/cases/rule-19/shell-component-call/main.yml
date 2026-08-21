@@ -1,0 +1,37 @@
+_ymx:
+  max_depth: 1
+sum: ${$0 + $1}
+named_sum: ${$a * 100 + $b}
+noop: ready
+obj:
+  a: 1
+recurse: $sh{echo $recurse()}
+positional:
+  out: $sh{echo $sum(12, 34)}
+named:
+  out: $sh{echo $named_sum(a=1, b=2)}
+no_args:
+  out: $sh{echo $noop()}
+unknown:
+  out: $sh{echo $missing()}
+non_scalar:
+  out: $sh{echo $obj()}
+_test:
+  positional:
+    args: {}
+    result: {out: {exit_code: 0, stdout: "46\n"}}
+  named:
+    args: {}
+    result: {out: {exit_code: 0, stdout: "102\n"}}
+  no_args:
+    args: {}
+    result: {out: {exit_code: 0, stdout: "ready\n"}}
+  unknown:
+    args: {}
+    error: E002
+  non_scalar:
+    args: {}
+    error: E011
+  recurse:
+    args: {}
+    error: E008
