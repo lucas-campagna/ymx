@@ -24,6 +24,7 @@
 //! fall back to interpolation.
 
 use crate::ir::Value;
+use indexmap::IndexMap;
 
 /// A parsed inline call-site `$name(...)` (rule 3).
 #[derive(Debug, Clone, PartialEq)]
@@ -203,6 +204,8 @@ fn split_top_level(s: &str) -> Result<Vec<&str>, (&'static str, String)> {
     let mut i = 0usize;
     let mut quote: Option<u8> = None;
     let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
     while i < b.len() {
         let c = b[i];
         if let Some(q) = quote {
@@ -254,7 +257,27 @@ fn split_top_level(s: &str) -> Result<Vec<&str>, (&'static str, String)> {
                     }
                     paren -= 1;
                 }
-                b',' if paren == 0 => {
+                b'[' => bracket += 1,
+                b']' => {
+                    if bracket == 0 {
+                        return Err((
+                            crate::diag::E010,
+                            format!("unbalanced `]` in call-site argument `{s}`"),
+                        ));
+                    }
+                    bracket -= 1;
+                }
+                b'{' => brace += 1,
+                b'}' => {
+                    if brace == 0 {
+                        return Err((
+                            crate::diag::E010,
+                            format!("unbalanced `}}` in call-site argument `{s}`"),
+                        ));
+                    }
+                    brace -= 1;
+                }
+                b',' if paren == 0 && bracket == 0 && brace == 0 => {
                     chunks.push(&s[start..i]);
                     start = i + 1;
                 }
@@ -364,10 +387,7 @@ fn parse_value(text: &str) -> Result<ParsedValue, (&'static str, String)> {
             )),
         },
         Some(b'$') => parse_dollar(text),
-        Some(b'[') | Some(b'{') => Err((
-            crate::diag::E013,
-            format!("array/object literal as direct call argument `{text}`"),
-        )),
+        Some(b'[') | Some(b'{') => parse_yaml_literal(text),
         Some(_) => {
             if text == "null" || text == "~" {
                 Ok(ParsedValue::Literal(Value::null()))
@@ -432,6 +452,195 @@ fn parse_dollar(text: &str) -> Result<ParsedValue, (&'static str, String)> {
         });
     }
     Ok(ParsedValue::Raw(text.to_string()))
+}
+
+/// Parse an inline YAML array or object literal (`[...]` or `{...}`) into a
+/// [`ParsedValue::Literal`]. Handles compact flow syntax (`{x:1}`) that
+/// `yaml_rust2` treats as a scalar.
+fn parse_yaml_literal(text: &str) -> Result<ParsedValue, (&'static str, String)> {
+    let text = text.trim();
+    if text.starts_with('[') {
+        let inner = &text[1..text.len() - 1].trim();
+        if inner.is_empty() {
+            return Ok(ParsedValue::Literal(Value::array(vec![])));
+        }
+        let items = split_flow_items(inner)?;
+        let values: Result<Vec<Value>, _> = items.iter().map(|s| parse_flow_value(s)).collect();
+        Ok(ParsedValue::Literal(Value::array(values?)))
+    } else if text.starts_with('{') {
+        let inner = &text[1..text.len() - 1].trim();
+        if inner.is_empty() {
+            return Ok(ParsedValue::Literal(Value::Object(IndexMap::new())));
+        }
+        let pairs = split_flow_items(inner)?;
+        let mut map = IndexMap::new();
+        for pair in pairs {
+            let (k, v) = parse_flow_kv(&pair)?;
+            map.insert(k, v);
+        }
+        Ok(ParsedValue::Literal(Value::Object(map)))
+    } else {
+        Err((
+            crate::diag::E010,
+            format!("expected `[...]` or `{{...}}`, got `{text}`"),
+        ))
+    }
+}
+
+/// Split a flow-level comma-separated list, respecting nested `[]`, `{}`,
+/// quotes, and `${...}`.
+fn split_flow_items(s: &str) -> Result<Vec<String>, (&'static str, String)> {
+    let b = s.as_bytes();
+    let mut items = Vec::new();
+    let mut depth_paren = 0i32;
+    let mut depth_bracket = 0i32;
+    let mut depth_brace = 0i32;
+    let mut quote: Option<u8> = None;
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+        } else {
+            match c {
+                b'\'' | b'"' => quote = Some(c),
+                b'$' if b.get(i + 1) == Some(&b'{') => {
+                    let mut inner_paren = 0i32;
+                    let mut j = i + 2;
+                    while j < b.len() {
+                        match b[j] {
+                            b'(' => inner_paren += 1,
+                            b')' if inner_paren > 0 => inner_paren -= 1,
+                            b'}' if inner_paren == 0 => break,
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+                    i = j;
+                }
+                b'(' => depth_paren += 1,
+                b')' => depth_paren -= 1,
+                b'[' => depth_bracket += 1,
+                b']' => depth_bracket -= 1,
+                b'{' => depth_brace += 1,
+                b'}' => depth_brace -= 1,
+                b',' if depth_paren == 0 && depth_bracket == 0 && depth_brace == 0 => {
+                    items.push(s[start..i].trim().to_string());
+                    start = i + 1;
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    items.push(s[start..].trim().to_string());
+    Ok(items)
+}
+
+/// Parse a single flow value (scalar, nested array, nested object, or math).
+fn parse_flow_value(text: &str) -> Result<Value, (&'static str, String)> {
+    let text = text.trim();
+    if text.starts_with('[') {
+        let inner = &text[1..text.len() - 1].trim();
+        if inner.is_empty() {
+            return Ok(Value::array(vec![]));
+        }
+        let items = split_flow_items(inner)?;
+        let values: Result<Vec<Value>, _> = items.iter().map(|s| parse_flow_value(s)).collect();
+        Ok(Value::array(values?))
+    } else if text.starts_with('{') {
+        let inner = &text[1..text.len() - 1].trim();
+        if inner.is_empty() {
+            return Ok(Value::Object(IndexMap::new()));
+        }
+        let pairs = split_flow_items(inner)?;
+        let mut map = IndexMap::new();
+        for pair in pairs {
+            let (k, v) = parse_flow_kv(&pair)?;
+            map.insert(k, v);
+        }
+        Ok(Value::Object(map))
+    } else if text.starts_with('"') || text.starts_with('\'') {
+        parse_flow_quoted(text)
+    } else if text == "null" || text == "~" {
+        Ok(Value::null())
+    } else if text == "true" {
+        Ok(Value::bool(true))
+    } else if text == "false" {
+        Ok(Value::bool(false))
+    } else if let Ok(i) = text.parse::<i64>() {
+        Ok(Value::int(i))
+    } else if let Ok(f) = text.parse::<f64>() {
+        Ok(Value::float(f))
+    } else if text.starts_with("${") && text.ends_with('}') {
+        Err((
+            crate::diag::E010,
+            "math expressions are not supported in flow literals".to_string(),
+        ))
+    } else {
+        Ok(Value::string(text.to_string()))
+    }
+}
+
+/// Parse a `key: value` pair from a flow object.
+fn parse_flow_kv(text: &str) -> Result<(String, Value), (&'static str, String)> {
+    let text = text.trim();
+    let colon = text.find(':').ok_or((
+        crate::diag::E010,
+        format!("expected `key: value` in object literal, got `{text}`"),
+    ))?;
+    let key = text[..colon].trim().to_string();
+    let val_text = text[colon + 1..].trim();
+    let value = parse_flow_value(val_text)?;
+    Ok((key, value))
+}
+
+/// Parse a quoted string literal (single or double quoted).
+fn parse_flow_quoted(text: &str) -> Result<Value, (&'static str, String)> {
+    let q = text.as_bytes()[0];
+    if text.len() < 2 || text.as_bytes()[text.len() - 1] != q {
+        return Err((
+            crate::diag::E010,
+            format!("unterminated quoted string `{text}`"),
+        ));
+    }
+    let inner = &text[1..text.len() - 1];
+    if q == b'"' {
+        let mut out = String::new();
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some('\\') => out.push('\\'),
+                    Some('"') => out.push('"'),
+                    Some(other) => {
+                        out.push('\\');
+                        out.push(other);
+                    }
+                    None => {
+                        return Err((
+                            crate::diag::E010,
+                            "trailing backslash in string".to_string(),
+                        ));
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        Ok(Value::string(out))
+    } else {
+        Ok(Value::string(inner.to_string()))
+    }
 }
 
 /// The index of the closing quote for a quoted token starting at index 0
@@ -628,12 +837,47 @@ mod tests {
     }
 
     #[test]
-    fn array_object_literals_are_e013() {
-        for bad in ["$x([1,2])", "$x({a:1})", "$x(a=[1])", "$x([1], 2)"] {
-            let (code, msg) = parse(bad).unwrap_err();
-            assert_eq!(code, crate::diag::E013, "{bad}");
-            assert!(msg.contains("literal"), "{bad}: {msg}");
+    fn array_object_literals_parse() {
+        let call = parse("$x([1,2])").unwrap().unwrap();
+        assert_eq!(
+            call.args,
+            vec![pos(lit(Value::array(vec![Value::int(1), Value::int(2)])))]
+        );
+        let call = parse("$x({a: 1})").unwrap().unwrap();
+        assert_eq!(call.args.len(), 1);
+        if let ParsedValue::Literal(Value::Object(m)) = &call.args[0].value {
+            assert_eq!(m.len(), 1);
+            assert_eq!(m.get("a"), Some(&Value::int(1)));
+        } else {
+            panic!("expected object literal, got {:?}", call.args[0].value);
         }
+        let call = parse("$x({a:1, b:2})").unwrap().unwrap();
+        if let ParsedValue::Literal(Value::Object(m)) = &call.args[0].value {
+            assert_eq!(m.len(), 2);
+            assert_eq!(m.get("a"), Some(&Value::int(1)));
+            assert_eq!(m.get("b"), Some(&Value::int(2)));
+        } else {
+            panic!("expected object literal, got {:?}", call.args[0].value);
+        }
+        let call = parse("$x([1,2,3])").unwrap().unwrap();
+        if let ParsedValue::Literal(Value::Array(arr)) = &call.args[0].value {
+            assert_eq!(
+                arr.as_slice(),
+                &[Value::int(1), Value::int(2), Value::int(3)]
+            );
+        } else {
+            panic!("expected array literal");
+        }
+        let call = parse("$x(a=[1])").unwrap().unwrap();
+        assert_eq!(call.args[0].key, Some("a".to_string()));
+        if let ParsedValue::Literal(Value::Array(arr)) = &call.args[0].value {
+            assert_eq!(arr.as_slice(), &[Value::int(1)]);
+        } else {
+            panic!("expected array literal");
+        }
+        let call = parse("$x([1], 2)").unwrap().unwrap();
+        assert_eq!(call.args.len(), 2);
+        assert_eq!(call.args[1].value, lit(Value::int(2)));
     }
 
     #[test]

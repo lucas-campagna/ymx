@@ -2173,7 +2173,7 @@ fn overwrite_named_args(initial: &Args, result: &IndexMap<String, Value>) -> Arg
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diag::{Span, E003, E011, E012, E013};
+    use crate::diag::{Span, E003, E011, E012};
     use crate::namespace::Definition;
     use crate::parse::Node;
 
@@ -3014,8 +3014,12 @@ mod tests {
         ]);
         let d = compile_err(&p, "main", &Args::None);
         assert_eq!(d.code, E012, "positional after named");
-        let d = compile_err(&p, "arr", &Args::None);
-        assert_eq!(d.code, E013, "array literal as direct arg");
+        let v = compile_ok(&p, "arr", &Args::None);
+        assert_eq!(
+            v,
+            Value::array(vec![Value::int(1), Value::int(2)]),
+            "array literal arg"
+        );
         let d = compile_err(&p, "unterm", &Args::None);
         assert_eq!(d.code, E010, "unterminated call-site");
         let d = compile_err(&p, "esc", &Args::None);
