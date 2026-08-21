@@ -4157,6 +4157,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn depth_cap_applies_to_shell_component_calls() {
+        let opts = Options {
+            max_depth: 1,
+            ..Options::default()
+        };
+        let p = project_with(&[(
+            "main.yml",
+            "a: \"$sh{echo $b()}\"\nb: \"$sh{echo $c()}\"\nc: \"v=1\"\n",
+        )]);
+        let d = compile_err_with(&p, "a", &Args::None, &opts);
+        assert_eq!(d.code, E008);
+        assert_eq!(d.component.as_deref(), Some("c"));
+    }
+
     // ---- Milestone 1.6 task 9 gap: math `comp(...)` calls (PRD rule 7) ----
 
     #[test]
