@@ -13,6 +13,7 @@ ymx 0.1.0 — YAML → JSON compiler for YMX v1
 
 Usage: ymx [path] [flags]
        ymx --help | -h
+       ymx --errors
 
 Stdin modes (implicit, no flag needed):
   No path given   → stdin is the YAML script (writes to temp main.yml)
@@ -26,6 +27,7 @@ Options:
   -o, --output <file>      Write to file instead of stdout
   -t, --test               Run inline `_test` blocks instead of compiling
   -c, --code <yml>        Inline YAML/JSON component definitions (overrides file components)
+      --errors             Print full diagnostic code reference and exit
   -h, --help               Show this help
 
 Exit codes: 0 success | 1 diagnostic | 2 usage error
@@ -68,6 +70,7 @@ mod tests {
         "--test",
         "-c",
         "--code",
+        "--errors",
         "-h",
         "--help",
     ];

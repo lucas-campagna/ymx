@@ -113,11 +113,13 @@ pub struct ParseError {
 }
 
 /// Parser outcome: a fully parsed command line, or a `--help` / `-h`
-/// request (serviced by the caller — printing the manual and exiting `0`).
+/// request (serviced by the caller — printing the manual and exiting `0`),
+/// or an `--errors` request (printed diagnostic table, exit `0`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseOutcome {
     Cli(ParsedCli),
     Help,
+    Errors,
 }
 
 /// Parse `ymx <path> [flags]`.
@@ -143,6 +145,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         let arg = args[i].as_str();
         match arg {
             "-h" | "--help" => return Ok(ParseOutcome::Help),
+            "--errors" => return Ok(ParseOutcome::Errors),
             "-t" | "--test" => test = true,
             "--pretty" => pretty = Some(true),
             "-e" | "--entry" => entry = Some(take_value(args, &mut i, "--entry")?),
@@ -632,5 +635,26 @@ mod tests {
     fn code_with_test_no_file_errors() {
         let err = err_of(&["-c", "main: 1", "--test"]);
         assert!(err.message.contains("-c/--code"));
+    }
+
+    #[test]
+    fn errors_alone_returns_errors_outcome() {
+        assert_eq!(parse(&args(&["--errors"])), Ok(ParseOutcome::Errors));
+    }
+
+    #[test]
+    fn errors_with_file_returns_errors_outcome() {
+        assert_eq!(
+            parse(&args(&["--errors", "proj/main.yml"])),
+            Ok(ParseOutcome::Errors)
+        );
+    }
+
+    #[test]
+    fn errors_before_help_returns_errors_first_wins() {
+        assert_eq!(
+            parse(&args(&["--errors", "--help"])),
+            Ok(ParseOutcome::Errors)
+        );
     }
 }

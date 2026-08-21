@@ -12,6 +12,7 @@
 
 mod args;
 mod diagnostic;
+mod errors;
 mod help;
 mod run;
 
@@ -24,6 +25,10 @@ fn main() -> ExitCode {
     match parse(&argv) {
         Ok(ParseOutcome::Help) => {
             print!("{}", help::manual());
+            ExitCode::SUCCESS
+        }
+        Ok(ParseOutcome::Errors) => {
+            errors::print_errors();
             ExitCode::SUCCESS
         }
         Ok(ParseOutcome::Cli(cli)) => run::run(cli).to_exit_code(),
