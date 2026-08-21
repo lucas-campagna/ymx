@@ -1,7 +1,7 @@
 ---
 version: "1.x"
 title: "YMX v1 implementation plan"
-short: "Index of versioned implementation milestones (1.1 – 1.30)"
+short: "Index of versioned implementation milestones (1.1 – 1.31)"
 description: |
   Tracks the build of YMX v1 per docs/PRD.md: the rules-1–18 resolver, JSON
   output, CLI + library, inline `_test`, file-path entry addressing, and
@@ -50,6 +50,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.28 | `done` | CLI inline code flag (`-c`) | ymx-core, ymx-lib, ymx-cli | [1.28-cli-inline-code.md](1.28-cli-inline-code.md) | 1.27 |
 | 1.29 | `done` | Remove bare $name component fallback | ymx-core | [1.29-remove-bare-name-fallback.md](1.29-remove-bare-name-fallback.md) | 1.28 |
 | 1.30 | `done` | Escape expansion in -c and stdin-as-script | ymx-cli | [1.30-escape-expansion.md](1.30-escape-expansion.md) | 1.29 |
+| 1.31 | `planned` | Component calls in shell interpolation | ymx-core | [1.31-shell-component-call.md](1.31-shell-component-call.md) | 1.27 |
 
 ## Cross-cutting notes
 

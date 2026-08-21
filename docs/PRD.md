@@ -1160,13 +1160,21 @@ $box: $sh{echo $name}
 
 **Error handling:** non-zero exit codes are returned as part of the result (not an error). E016 is emitted only for spawn failures, missing executor (`opts.executor` is `None`), or disallowed backend (not in `allowed_backends`).
 
-**Interpolation inside `$sh{...}`:** the command string undergoes the same interpolation as regular strings — `$name`, `$0`, `${...}` are resolved before execution. Scalar values render per *Number→string rendering*; Array/Object arguments → E011.
+**Interpolation inside `$sh{...}`:** the command string undergoes the same interpolation as regular strings — `$name`, `$0`, `${...}` are resolved before execution. In addition, `$name(args)` (function-call syntax) calls the named component with the given arguments before shell execution — the same call grammar as math `name(...)` calls (rule 7), but with a `$` prefix marking it as interpolation. Positional args bind to `$0`, `$1`, …; named args use `key=value`. The component's return value is rendered to a string and interpolated in place. Scalar values render per *Number→string rendering*; Array/Object arguments → E011.
 
 ```yml
 file: path/to/file.txt
 lines: $sh{wc -l < $file}
 # $file interpolates to "path/to/file.txt", then the command is executed
 # lines → {"exit_code": 0, "stdout": "      42 path/to/file.txt\n"}
+```
+
+```yml
+# Component call inside $sh — the component is called first, result interpolated into the command
+sum: ${$0 + $1}
+lines: $sh{echo $sum(1,2)}
+# $sum(1,2) calls the 'sum' component → "3", command becomes "echo 3"
+# lines → {"exit_code": 0, "stdout": "3\n"}
 ```
 
 **Restriction via `_ymx.allowed_backends`:** the front-matter field `allowed_backends` (a list of strings) limits which backends may be used. If absent, all backends are allowed. If set, only the listed backends are permitted — using a non-listed backend emits E016.
