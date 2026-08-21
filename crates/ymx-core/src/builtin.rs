@@ -17,7 +17,7 @@
 use indexmap::IndexMap;
 use std::rc::Rc;
 
-use crate::diag::{Diagnostic, FileId, Span, E002, E005, E008, E011};
+use crate::diag::{Diagnostic, FileId, Span, E002, E005, E008, E010, E011};
 use crate::interp;
 use crate::ir::Value;
 use crate::math::{CallHook, Scope, V1Engine};
@@ -239,7 +239,59 @@ impl BuiltinImpl for ReduceBuiltin {
             None
         };
 
-        // Second arg: eagerly evaluated, must be Array.
+        let def = resolve_callable(ctx, &fn_name)?;
+
+        let item_to_args = |item: &Value| -> Result<super::ir::Args, Diagnostic> {
+            match item {
+                Value::Object(m) => {
+                    Ok(super::ir::Args::Named(m.iter().map(|(k, v)| (k.clone(), v.clone())).collect()))
+                }
+                v if v.is_scalar() => Ok(super::ir::Args::Positional(vec![v.clone()])),
+                Value::Array(_) => Err(ctx_err(
+                    ctx,
+                    E011,
+                    "array item in $reduce argument is not supported (array items must be objects or scalars)"
+                        .to_string(),
+                )),
+                _ => unreachable!(),
+            }
+        };
+
+        let source_name: Option<&str> = match &args[1].value {
+            super::callsite::ParsedValue::Call(nested) if nested.args.is_empty() => {
+                Some(nested.name.as_str())
+            }
+            super::callsite::ParsedValue::Math { src } => {
+                src.strip_suffix("()").filter(|s| !s.is_empty())
+            }
+            _ => None,
+        };
+
+        if let Some(source_name) = source_name {
+            if let Ok(source_def) = resolve_callable(ctx, source_name) {
+                if let super::parse::Node::Array(items, _) = &source_def.body {
+                    if items.is_empty() {
+                        return Ok(Value::Null);
+                    }
+
+                    let mut prev: Option<Value> = None;
+                    for item in items {
+                        let last = prev.clone().or_else(|| init.clone());
+                        let mut item_scope = build_caller_scope(ctx);
+                        item_scope.last = last.clone();
+                        let resolved_item = eval_resolve_node(item, &item_scope, ctx)?;
+                        let item_args = item_to_args(&resolved_item)?;
+                        let scope = build_scope_for_call(ctx, &item_args, last.as_ref());
+                        let result = eval_def(ctx, &def, &item_args, &scope)?;
+                        prev = Some(result);
+                    }
+
+                    return Ok(prev.expect("non-empty reduce always produces a result"));
+                }
+            }
+        }
+
+        // Fallback: second arg is eagerly evaluated, must be Array.
         let arr = resolve_parsed_value(&args[1].value, ctx)?;
         let Value::Array(items) = arr else {
             return Err(ctx_err(
@@ -254,23 +306,10 @@ impl BuiltinImpl for ReduceBuiltin {
             return Ok(Value::Null);
         }
 
-        // Look up the callable component.
-        let def = resolve_callable(ctx, &fn_name)?;
-
         // Single-element: run one step, `last` NOT in scope.
         if items.len() == 1 {
             let item = &items[0];
-            let item_args = match item {
-                Value::Object(m) => {
-                    super::ir::Args::Named(m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                }
-                v if v.is_scalar() => super::ir::Args::Positional(vec![v.clone()]),
-                Value::Array(_) => {
-                    return Err(ctx_err(ctx, E011,
-                        "array item in $reduce argument is not supported (array items must be objects or scalars)".to_string()));
-                }
-                _ => unreachable!(),
-            };
+            let item_args = item_to_args(item)?;
 
             // No depth check here because we're not recursing into a sub-call
             // that would be depth-limited; the outer component call already
@@ -289,17 +328,7 @@ impl BuiltinImpl for ReduceBuiltin {
         let mut prev: Option<Value> = None;
 
         for item in items {
-            let item_args = match item {
-                Value::Object(m) => {
-                    super::ir::Args::Named(m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                }
-                v if v.is_scalar() => super::ir::Args::Positional(vec![v.clone()]),
-                Value::Array(_) => {
-                    return Err(ctx_err(ctx, E011,
-                        "array item in $reduce argument is not supported (array items must be objects or scalars)".to_string()));
-                }
-                _ => unreachable!(),
-            };
+            let item_args = item_to_args(&item)?;
 
             // Build scope with `last` bound to init (if provided) on first step,
             // then to prev result on subsequent steps.
@@ -450,6 +479,17 @@ fn eval_def(
     _args: &super::ir::Args,
     scope: &Scope<'_>,
 ) -> Result<Value, Diagnostic> {
+    if def.math_shorthand {
+        let super::parse::Node::String(math_src, span) = &def.body else {
+            return Err(ctx_err(
+                ctx,
+                E010,
+                "value for `$` component-name shorthand must be a string (math source)".to_string(),
+            ));
+        };
+        let segments = interp::scan(&format!("${{{math_src}}}"), *span)?;
+        return interp::resolve(&segments, scope, &V1Engine);
+    }
     // Rule 11 step 1: resolve the body against scope.
     let body = eval_resolve_body(&def.body, scope, ctx)?;
 
@@ -764,6 +804,17 @@ fn eval_def_inner(
     args: &super::ir::Args,
 ) -> Result<Value, Diagnostic> {
     let scope = build_scope_for_call(ctx, args, None);
+    if def.math_shorthand {
+        let super::parse::Node::String(math_src, span) = &def.body else {
+            return Err(ctx_err(
+                ctx,
+                E010,
+                "value for `$` component-name shorthand must be a string (math source)".to_string(),
+            ));
+        };
+        let segments = interp::scan(&format!("${{{math_src}}}"), *span)?;
+        return interp::resolve(&segments, &scope, &V1Engine);
+    }
     eval_resolve_body(&def.body, &scope, ctx).map(|body| match body {
         ResolvedBody::Value(v) => v,
         ResolvedBody::Object(set) => set.to_object(),

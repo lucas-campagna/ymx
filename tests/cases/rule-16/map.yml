@@ -3,6 +3,7 @@ items:
   - {a: 1, b: 2}
   - {a: 2, b: 3}
 c: $map($adder, ${items()})
+d: $map($adder, $items())
 _test:
-  c:
-    result: ["1 + 2", "2 + 3"]
+  c: {result: ["1 + 2", "2 + 3"]}
+  d: {result: ["1 + 2", "2 + 3"]}

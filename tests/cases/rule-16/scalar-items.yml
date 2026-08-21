@@ -1,9 +1,12 @@
-step: $0
+step: $0 + 10
 items:
   - 1
   - 2
   - 3
 c: $map($step, ${items()})
+d: $map($step, $items())
 _test:
   c:
-    result: [1, 2, 3]
+    result: [1 + 10, 2 + 10, 3 + 10]
+  d:
+    result: [1 + 10, 2 + 10, 3 + 10]

@@ -1,8 +1,11 @@
-adder: $a + $b
+adder$: a + b
 items:
   - {a: 1, b: 2}
-  - {a: 2, b: 3}
+  - {a: 2 + $last, b: 3}
 c: $reduce($adder, ${items()})
+d: $reduce($adder, $items())
 _test:
   c:
-    result: "2 + 3"
+    result: 8
+  d:
+    result: 8
