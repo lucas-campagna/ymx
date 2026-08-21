@@ -1139,16 +1139,19 @@ impl<'a> Resolver<'a> {
         };
         let shell_call: ShellCallHook<'s> = {
             let file = def.file;
-            Rc::new(move |call: &callsite::ParsedCall, scope: &Scope<'s>, span: Span| {
-                let (named, positional) = self.resolve_call_args(&call.args, span, scope, file)?;
-                let args = match (named.is_empty(), positional.is_empty()) {
-                    (true, true) => Args::None,
-                    (false, true) => Args::Named(named),
-                    (true, false) => Args::Positional(positional),
-                    (false, false) => Args::Mixed { named, positional },
-                };
-                self.call_by_name(file, &call.name, &args, span)
-            })
+            Rc::new(
+                move |call: &callsite::ParsedCall, scope: &Scope<'s>, span: Span| {
+                    let (named, positional) =
+                        self.resolve_call_args(&call.args, span, scope, file)?;
+                    let args = match (named.is_empty(), positional.is_empty()) {
+                        (true, true) => Args::None,
+                        (false, true) => Args::Named(named),
+                        (true, false) => Args::Positional(positional),
+                        (false, false) => Args::Mixed { named, positional },
+                    };
+                    self.call_by_name(file, &call.name, &args, span)
+                },
+            )
         };
         Scope {
             file: Some(self.project.files[def.file.0 as usize].clone()),

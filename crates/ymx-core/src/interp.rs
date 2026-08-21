@@ -256,9 +256,11 @@ pub fn resolve(
         [Segment::Call { name, args, span }] => {
             Ok(Value::string(resolve_shell_call(name, args, *span, scope)?))
         }
-        [Segment::Exec { backend, command, span }] => {
-            resolve_exec_marker(backend, command, *span, scope, engine)
-        }
+        [Segment::Exec {
+            backend,
+            command,
+            span,
+        }] => resolve_exec_marker(backend, command, *span, scope, engine),
         _ => {
             let mut out = String::new();
             for seg in segments {
@@ -275,7 +277,11 @@ pub fn resolve(
                     Segment::Call { name, args, span } => {
                         out.push_str(&resolve_shell_call(name, args, *span, scope)?);
                     }
-                    Segment::Exec { backend, command, span } => {
+                    Segment::Exec {
+                        backend,
+                        command,
+                        span,
+                    } => {
                         let marker = resolve_exec_marker(backend, command, *span, scope, engine)?;
                         out.push_str(&render_into_text(&marker, scope, *span)?);
                     }
@@ -311,7 +317,11 @@ pub fn resolve_shell(
             Segment::Call { name, args, span } => {
                 out.push_str(&resolve_shell_call(name, args, *span, scope)?);
             }
-            Segment::Exec { backend, command, span } => {
+            Segment::Exec {
+                backend,
+                command,
+                span,
+            } => {
                 let marker = resolve_exec_marker(backend, command, *span, scope, engine)?;
                 out.push_str(&render_into_text(&marker, scope, *span)?);
             }
@@ -353,7 +363,10 @@ fn resolve_exec_marker(
         }
     };
     Ok(Value::object(IndexMap::from([
-        ("__exec_backend".to_string(), Value::string(backend.to_string())),
+        (
+            "__exec_backend".to_string(),
+            Value::string(backend.to_string()),
+        ),
         ("__exec_command".to_string(), Value::string(cmd_string)),
     ])))
 }
@@ -1084,8 +1097,12 @@ mod tests {
             Value::string("echo 3")
         );
         assert_eq!(
-            resolve_shell(&scan_shell("x $sum(a=1, b=2)", SPAN).unwrap(), &scope, &FakeEngine)
-                .unwrap(),
+            resolve_shell(
+                &scan_shell("x $sum(a=1, b=2)", SPAN).unwrap(),
+                &scope,
+                &FakeEngine
+            )
+            .unwrap(),
             Value::string("x 3")
         );
         assert_eq!(

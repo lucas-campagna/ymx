@@ -1,4 +1,4 @@
-main: $result
+main: $result()
 
 double: ${$0 * 2}
 
@@ -7,7 +7,7 @@ items:
   - 2
   - 3
 
-result: $map($double, $items)
+result: $map($double, $items())
 
 _test:
   - result: [2, 4, 6]

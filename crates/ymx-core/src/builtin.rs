@@ -338,10 +338,11 @@ fn resolve_parsed_value(
             interp::resolve(&segments, &scope, &V1Engine)
         }
         super::callsite::ParsedValue::Call(nested) => {
-            // A nested call-site: evaluate it by resolving through our call hook.
-            let segments = interp::scan(&format!("${}(...)", nested.name), ctx.span)?;
-            let scope = build_caller_scope(ctx);
-            interp::resolve(&segments, &scope, &V1Engine)
+            let mut resolved_args = Vec::with_capacity(nested.args.len());
+            for arg in &nested.args {
+                resolved_args.push(resolve_parsed_value(&arg.value, ctx)?);
+            }
+            (ctx.call)(&nested.name, &resolved_args)
         }
     }
 }

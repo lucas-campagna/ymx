@@ -1,4 +1,4 @@
-main: $result
+main: $result()
 
 # A simple sum step: receives {a, b} and returns their sum as a string
 sum_step: $a + $b
@@ -8,7 +8,7 @@ items:
   - {a: 20, b: 10}
   - {a: 30, b: 30}
 
-result: $reduce($sum_step, $items)
+result: $reduce($sum_step, $items())
 
 _test:
   - result: "30 + 30"
