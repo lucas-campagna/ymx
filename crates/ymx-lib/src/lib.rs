@@ -25,7 +25,7 @@ pub use ymx_core::exec::{CommandExecutor, ExecError, ExecOutput};
 pub use ymx_core::ir::Value;
 pub use ymx_core::project::{Format, Options, Project};
 
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Default command executor that shells out to the platform's shell.
 ///
@@ -60,12 +60,16 @@ impl CommandExecutor for StdExecutor {
         };
 
         let output = cmd
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .output()
             .map_err(|e| ExecError::SpawnFailed(e.to_string()))?;
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         Ok(ExecOutput {
             exit_code: output.status.code().unwrap_or(-1),
             stdout,
+            stderr,
         })
     }
 }

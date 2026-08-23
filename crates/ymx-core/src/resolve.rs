@@ -658,7 +658,17 @@ impl<'a> Resolver<'a> {
         _args: &Args,
     ) -> Result<Option<Value>, Diagnostic> {
         let ns = self.def_namespace(def);
-        let name = format!("${}", def.full_name);
+        // Strip exec backend suffix (e.g. `$sh`) before prepending `$` so the
+        // template lookup uses the bare component name.
+        let bare_name = if let Some(ref backend) = def.exec_backend {
+            let suffix = format!("${}", backend);
+            def.full_name
+                .strip_suffix(&suffix)
+                .unwrap_or(&def.full_name)
+        } else {
+            &def.full_name
+        };
+        let name = format!("${}", bare_name);
         // Look up templates in the chain: `$comp3`, `$comp3$`, `$comp3?`, `$comp3$?`.
         let tpl = self
             .lookup_template(&ns, &name, def.file)
@@ -860,7 +870,17 @@ impl<'a> Resolver<'a> {
         chain_initial: Option<&Args>,
     ) -> Result<Option<Value>, Diagnostic> {
         let ns = self.def_namespace(def);
-        let name = format!("${}", def.full_name);
+        // Strip exec backend suffix (e.g. `$sh`) before prepending `$` so the
+        // template lookup uses the bare component name.
+        let bare_name = if let Some(ref backend) = def.exec_backend {
+            let suffix = format!("${}", backend);
+            def.full_name
+                .strip_suffix(&suffix)
+                .unwrap_or(&def.full_name)
+        } else {
+            &def.full_name
+        };
+        let name = format!("${}", bare_name);
         let tpl = self
             .lookup_template(&ns, &name, def.file)
             .or_else(|| {
@@ -1799,7 +1819,7 @@ impl<'a> Resolver<'a> {
     /// - If `opts.allowed_backends` is `Some` and `backend` is not in the
     ///   list → E016 (backend not allowed).
     /// - On `ExecError::UnknownBackend` or `ExecError::SpawnFailed` → E016.
-    /// - On success → `Value::Object({ "exit_code": Int, "stdout": String })`.
+    /// - On success → `Value::Object({ "exit_code": Int, "stdout": String, "stderr": String })`.
     fn execute_command(
         &self,
         backend: &str,
@@ -1838,6 +1858,7 @@ impl<'a> Resolver<'a> {
                 let mut m = IndexMap::new();
                 m.insert("exit_code".to_string(), Value::Int(output.exit_code as i64));
                 m.insert("stdout".to_string(), Value::string(output.stdout));
+                m.insert("stderr".to_string(), Value::string(output.stderr));
                 Ok(Value::Object(m))
             }
             Err(ExecError::UnknownBackend(name)) => Err(Diagnostic {
@@ -4414,11 +4435,13 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
                 "fail" => Ok(ExecOutput {
                     exit_code: 1,
                     stdout: String::new(),
+                    stderr: String::new(),
                 }),
                 "error" => Err(ExecError::SpawnFailed("mock error".to_string())),
                 _ => Ok(ExecOutput {
                     exit_code: 0,
                     stdout: format!("{command}\n"),
+                    stderr: String::new(),
                 }),
             }
         }
@@ -4439,6 +4462,7 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
         let mut expected = IndexMap::new();
         expected.insert("exit_code".to_string(), Value::Int(0));
         expected.insert("stdout".to_string(), Value::string("echo hi\n"));
+        expected.insert("stderr".to_string(), Value::string(""));
         assert_eq!(val, Value::Object(expected));
     }
 
@@ -4450,6 +4474,7 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
         let mut expected = IndexMap::new();
         expected.insert("exit_code".to_string(), Value::Int(1));
         expected.insert("stdout".to_string(), Value::string(""));
+        expected.insert("stderr".to_string(), Value::string(""));
         assert_eq!(val, Value::Object(expected));
     }
 
@@ -4527,6 +4552,7 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
         let mut expected = IndexMap::new();
         expected.insert("exit_code".to_string(), Value::Int(0));
         expected.insert("stdout".to_string(), Value::string("echo hi\n"));
+        expected.insert("stderr".to_string(), Value::string(""));
         assert_eq!(val, Value::Object(expected));
     }
 
@@ -4539,6 +4565,7 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
         let mut exec_result = IndexMap::new();
         exec_result.insert("exit_code".to_string(), Value::Int(0));
         exec_result.insert("stdout".to_string(), Value::string("echo hi\n"));
+        exec_result.insert("stderr".to_string(), Value::string(""));
         expected.insert("x".to_string(), Value::Object(exec_result));
         assert_eq!(val, Value::Object(expected));
     }
@@ -4552,6 +4579,7 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
         let mut exec_result = IndexMap::new();
         exec_result.insert("exit_code".to_string(), Value::Int(0));
         exec_result.insert("stdout".to_string(), Value::string("echo world\n"));
+        exec_result.insert("stderr".to_string(), Value::string(""));
         expected.insert("x".to_string(), Value::Object(exec_result));
         assert_eq!(val, Value::Object(expected));
     }
@@ -4567,6 +4595,7 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
         let mut exec_result = IndexMap::new();
         exec_result.insert("exit_code".to_string(), Value::Int(0));
         exec_result.insert("stdout".to_string(), Value::string("echo hi\n"));
+        exec_result.insert("stderr".to_string(), Value::string(""));
         expected.insert("x".to_string(), Value::Object(exec_result));
         assert_eq!(val, Value::Object(expected));
     }
@@ -4583,6 +4612,7 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
         let mut exec_result = IndexMap::new();
         exec_result.insert("exit_code".to_string(), Value::Int(0));
         exec_result.insert("stdout".to_string(), Value::string("echo test\n"));
+        exec_result.insert("stderr".to_string(), Value::string(""));
         expected.insert("x".to_string(), Value::Object(exec_result));
         assert_eq!(val, Value::Object(expected));
     }

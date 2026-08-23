@@ -12,6 +12,7 @@ use std::fmt;
 pub struct ExecOutput {
     pub exit_code: i32,
     pub stdout: String,
+    pub stderr: String,
 }
 
 /// Execution failure.
