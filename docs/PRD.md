@@ -297,6 +297,7 @@ pub fn compile(project: &Project, opts: &Options) -> Result<Value, Vec<Diagnosti
 pub struct ExecOutput {
     pub exit_code: i32,
     pub stdout: String,
+    pub stderr: String,
 }
 
 /// Error from a failed shell command execution.
@@ -1134,9 +1135,9 @@ The first `x$?:` is an error. The correct form for a math-evaluated optional def
 
 ### 19. Shell execution builtins (`$sh`, `$pw`)
 
-The `$sh{<command>}` and `$pw{<command>}` forms execute a shell command and return its result as `{exit_code: Int, stdout: String}`.
+The `$sh{<command>}` and `$pw{<command>}` forms execute a shell command and return its result as `{exit_code: Int, stdout: String, stderr: String}`.
 
-**Value form:** `$sh{<command>}` / `$pw{<command>}` — the command string is interpolated (all scalar types; Array/Object → E011), then executed via the configured `CommandExecutor`. The result is always an object with `exit_code` (Int) and `stdout` (String).
+**Value form:** `$sh{<command>}` / `$pw{<command>}` — the command string is interpolated (all scalar types; Array/Object → E011), then executed via the configured `CommandExecutor`. The result is always an object with `exit_code` (Int), `stdout` (String), and `stderr` (String).
 
 ```yml
 content: $sh{cat path/to/file.txt}
@@ -1166,7 +1167,7 @@ $box: $sh{echo $name}
 file: path/to/file.txt
 lines: $sh{wc -l < $file}
 # $file interpolates to "path/to/file.txt", then the command is executed
-# lines → {"exit_code": 0, "stdout": "      42 path/to/file.txt\n"}
+# lines → {"exit_code": 0, "stdout": "      42 path/to/file.txt\n", "stderr": ""}
 ```
 
 ```yml
@@ -1174,7 +1175,7 @@ lines: $sh{wc -l < $file}
 sum: ${$0 + $1}
 lines: $sh{echo $sum(1,2)}
 # $sum(1,2) calls the 'sum' component → "3", command becomes "echo 3"
-# lines → {"exit_code": 0, "stdout": "3\n"}
+# lines → {"exit_code": 0, "stdout": "3\n", "stderr": ""}
 ```
 
 **Restriction via `_ymx.allowed_backends`:** the front-matter field `allowed_backends` (a list of strings) limits which backends may be used. If absent, all backends are allowed. If set, only the listed backends are permitted — using a non-listed backend emits E016.
