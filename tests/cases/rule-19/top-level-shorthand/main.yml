@@ -5,4 +5,4 @@ main$sh: echo hello
 _test:
   main:
     args: {}
-    result: {exit_code: 0, stdout: "hello\n"}
+    result: {exit_code: 0, stdout: "hello\n", stderr: ""}

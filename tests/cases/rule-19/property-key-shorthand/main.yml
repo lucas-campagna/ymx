@@ -3,4 +3,4 @@ comp:
 _test:
   comp:
     args: {}
-    result: {main: {exit_code: 0, stdout: "hi\n"}}
+    result: {main: {exit_code: 0, stdout: "hi\n", stderr: ""}}

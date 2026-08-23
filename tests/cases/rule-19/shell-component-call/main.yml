@@ -19,13 +19,13 @@ non_scalar:
 _test:
   positional:
     args: {}
-    result: {out: {exit_code: 0, stdout: "46\n"}}
+    result: {out: {exit_code: 0, stdout: "46\n", stderr: ""}}
   named:
     args: {}
-    result: {out: {exit_code: 0, stdout: "102\n"}}
+    result: {out: {exit_code: 0, stdout: "102\n", stderr: ""}}
   no_args:
     args: {}
-    result: {out: {exit_code: 0, stdout: "ready\n"}}
+    result: {out: {exit_code: 0, stdout: "ready\n", stderr: ""}}
   unknown:
     args: {}
     error: E002

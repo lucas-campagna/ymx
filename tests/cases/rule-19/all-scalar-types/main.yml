@@ -6,6 +6,6 @@ _test:
   comp:
     args: {x: 42, flag: true, val: 3.14}
     result:
-      a: {exit_code: 0, stdout: "42\n"}
-      b: {exit_code: 0, stdout: "true\n"}
-      c: {exit_code: 0, stdout: "3.14\n"}
+      a: {exit_code: 0, stdout: "42\n", stderr: ""}
+      b: {exit_code: 0, stdout: "true\n", stderr: ""}
+      c: {exit_code: 0, stdout: "3.14\n", stderr: ""}

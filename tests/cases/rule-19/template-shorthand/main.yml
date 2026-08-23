@@ -6,4 +6,4 @@ box_call:
 _test:
   box_call:
     args: {}
-    result: {box_call: {name: {exit_code: 0, stdout: "world\n"}}}
+    result: {box_call: {name: {exit_code: 0, stdout: "world\n", stderr: ""}}}

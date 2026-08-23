@@ -1,0 +1,11 @@
+comp:
+  out_and_err: $sh{echo "hello"; echo "world" >&2}
+  stderr_only: $sh{echo "oops" >&2}
+  stdout_only: $sh{echo "fine"}
+_test:
+  comp:
+    args: {}
+    result:
+      out_and_err: {exit_code: 0, stdout: "hello\n", stderr: "world\n"}
+      stderr_only: {exit_code: 0, stdout: "", stderr: "oops\n"}
+      stdout_only: {exit_code: 0, stdout: "fine\n", stderr: ""}

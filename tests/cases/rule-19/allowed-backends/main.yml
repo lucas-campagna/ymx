@@ -5,4 +5,4 @@ comp:
 _test:
   comp:
     args: {}
-    result: {out: {exit_code: 0, stdout: "ok\n"}}
+    result: {out: {exit_code: 0, stdout: "ok\n", stderr: ""}}
