@@ -376,7 +376,44 @@ fn same_doc_target(project: &Project, file: FileId, key: &str) -> Option<String>
             return Some(with_dollar);
         }
     }
-    None
+    // Third pass: strip `$\w*` suffixes from raw keys to find exec-backend
+    // variants like `main$sh`, `main$pw`, etc.
+    fn strip_exec_suffix(raw: &str) -> Option<&str> {
+        let dollar = raw.rfind('$')?;
+        let stem = &raw[..dollar];
+        let suffix = &raw[dollar + 1..];
+        if !stem.is_empty()
+            && !stem.contains('$')
+            && suffix
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            Some(stem)
+        } else {
+            None
+        }
+    }
+
+    let mut candidates: Vec<(&str, String)> = Vec::new();
+    for (path, ns) in project.namespaces.namespaces() {
+        for (raw_key, def) in ns.defs() {
+            if def.file == file && strip_exec_suffix(raw_key) == Some(key) {
+                let qualified = if path.is_empty() {
+                    raw_key.to_string()
+                } else {
+                    format!("{path}.{raw_key}")
+                };
+                candidates.push((path, qualified));
+            }
+        }
+    }
+    for (fid, raw_key, _def) in project.file_scoped.defs() {
+        if fid == file && strip_exec_suffix(raw_key) == Some(key) {
+            candidates.push(("", raw_key.to_string()));
+        }
+    }
+    candidates.sort_by(|a, b| a.0.cmp(b.0).then(a.1.cmp(&b.1)));
+    candidates.first().map(|(_, q)| q.clone())
 }
 
 /// The `E002` diagnostic for a type-2 key that is not defined in the `_test`

@@ -1,0 +1,8 @@
+main$sh: "exit 1"
+test_with_template$sh: "echo 123abc"
+$test_with_template: stdout
+_test:
+  main:
+    error: E016
+  test_with_template:
+    error: E016
