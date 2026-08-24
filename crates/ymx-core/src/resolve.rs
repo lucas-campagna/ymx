@@ -1221,28 +1221,55 @@ impl<'a> Resolver<'a> {
     }
 
     /// Try to interpret an object body as the property-call form of `$if`:
-    /// exactly keys `if`, `then`, `else` (in any order). Returns `Some(result)`
-    /// if this is a conditional, `None` otherwise.
+    /// only `if`/`then`/`else` property keys allowed; any other key → E010.
+    /// Returns `Some(result)` if this is a conditional, `None` otherwise
+    /// (no `if`/`then`/`else` keys at all).
     fn try_if_property(
         &self,
         entries: &[crate::parse::Entry],
         scope: &Scope<'_>,
         file: FileId,
     ) -> Result<Option<Value>, Diagnostic> {
-        if entries.len() != 3 {
-            return Ok(None);
-        }
+        let mut has_if_then_else = false;
         let mut if_entry = None;
         let mut then_entry = None;
         let mut else_entry = None;
+        let mut unknown_entry = None;
         for entry in entries {
             let key = crate::parse::key_to_string(&entry.key);
             match key.as_str() {
-                "if" => if_entry = Some(entry),
-                "then" => then_entry = Some(entry),
-                "else" => else_entry = Some(entry),
-                _ => return Ok(None),
+                "if" => {
+                    has_if_then_else = true;
+                    if_entry = Some(entry);
+                }
+                "then" => {
+                    has_if_then_else = true;
+                    then_entry = Some(entry);
+                }
+                "else" => {
+                    has_if_then_else = true;
+                    else_entry = Some(entry);
+                }
+                _ => {
+                    unknown_entry = Some(entry);
+                }
             }
+        }
+        if !has_if_then_else {
+            return Ok(None);
+        }
+        if let Some(entry) = unknown_entry {
+            return Err(Diagnostic {
+                file: Some(self.project.files[file.0 as usize].clone()),
+                line: entry.key_span.line,
+                col: entry.key_span.col,
+                component: scope.component.clone(),
+                code: E010,
+                message: format!(
+                    "$if property-call: unexpected key `{}` — only `if`, `then`, `else` are allowed",
+                    crate::parse::key_to_string(&entry.key)
+                ),
+            });
         }
         let (if_e, then_e, else_e) = match (if_entry, then_entry, else_entry) {
             (Some(a), Some(b), Some(c)) => (a, b, c),

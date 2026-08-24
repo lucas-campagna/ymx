@@ -1871,28 +1871,54 @@ impl BuiltinImpl for IfBuiltin {
 ///   then: <then_val>
 ///   else: <else_val>
 /// ```
+/// Only `if`/`then`/`else` property keys allowed; any other key → E010.
 /// Returns `Some(result)` if this is an `if/then/else` property object,
-/// `None` otherwise.
+/// `None` otherwise (no `if`/`then`/`else` keys at all).
 pub fn try_eval_if_property(
     entries: &[super::parse::Entry],
     scope: &Scope<'_>,
     ctx: &BuiltinCtx<'_>,
 ) -> Option<Result<Value, Diagnostic>> {
-    // Must be exactly three entries with keys "if", "then", "else" (in any order).
-    if entries.len() != 3 {
-        return None;
-    }
+    let mut has_if_then_else = false;
     let mut if_entry = None;
     let mut then_entry = None;
     let mut else_entry = None;
+    let mut unknown_entry = None;
     for entry in entries {
         let key = super::parse::key_to_string(&entry.key);
         match key.as_str() {
-            "if" => if_entry = Some(entry),
-            "then" => then_entry = Some(entry),
-            "else" => else_entry = Some(entry),
-            _ => return None,
+            "if" => {
+                has_if_then_else = true;
+                if_entry = Some(entry);
+            }
+            "then" => {
+                has_if_then_else = true;
+                then_entry = Some(entry);
+            }
+            "else" => {
+                has_if_then_else = true;
+                else_entry = Some(entry);
+            }
+            _ => {
+                unknown_entry = Some(entry);
+            }
         }
+    }
+    if !has_if_then_else {
+        return None;
+    }
+    if let Some(entry) = unknown_entry {
+        return Some(Err(Diagnostic {
+            file: ctx.file.clone(),
+            line: entry.key_span.line,
+            col: entry.key_span.col,
+            component: ctx.component.clone(),
+            code: E010,
+            message: format!(
+                "$if property-call: unexpected key `{}` — only `if`, `then`, `else` are allowed",
+                super::parse::key_to_string(&entry.key)
+            ),
+        }));
     }
     let (if_e, then_e, else_e) = match (if_entry, then_entry, else_entry) {
         (Some(a), Some(b), Some(c)) => (a, b, c),
