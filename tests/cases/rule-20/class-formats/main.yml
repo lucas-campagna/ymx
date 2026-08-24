@@ -1,43 +1,28 @@
 _test:
   class_string:
-    result:
-      from: div
-      class: "a b c"
-      children: text
+    format: html
+    result: "<div class=\"a b c\">text</div>"
   class_array:
-    result:
-      from: div
-      class:
-        - a
-        - b
-        - c
-      children: text
+    format: html
+    result: "<div class=\"a b c\">text</div>"
   class_object:
-    result:
-      from: div
-      class:
-        active: true
-        hidden: false
-        visible: true
-      children: text
+    format: html
+    result: "<div class=\"active visible\">text</div>"
 
 class_string:
-  from: div
+  div: text
   class: "a b c"
-  children: text
 
 class_array:
-  from: div
+  div: text
   class:
     - a
     - b
     - c
-  children: text
 
 class_object:
-  from: div
+  div: text
   class:
     active: true
     hidden: false
     visible: true
-  children: text

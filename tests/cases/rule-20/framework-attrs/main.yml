@@ -1,16 +1,13 @@
 _test:
   htmx:
-    result:
-      from: div
-      hx-target: "#result"
-      hx-get: "/api/data"
+    format: html
+    result: "<div hx-target=\"#result\" hx-get=\"/api/data\">content</div>"
   vue:
-    result:
-      from: input
-      v-model: name
+    format: html
+    result: "<input v-model=\"name\">"
 
 htmx:
-  from: div
+  div: content
   hx-target: "#result"
   hx-get: "/api/data"
 

@@ -1,13 +1,8 @@
 _test:
   nested:
-    result:
-      from: div
-      children:
-        from: span
-        children: inner text
+    format: html
+    result: "<div><span>inner text</span></div>"
 
 nested:
-  from: div
-  children:
-    from: span
-    children: inner text
+  div:
+    span: "inner text"

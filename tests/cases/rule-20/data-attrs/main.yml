@@ -1,15 +1,10 @@
 _test:
   data_attrs:
-    result:
-      from: div
-      data-id: "123"
-      data-values:
-        - 1
-        - 2
-        - 3
+    format: html
+    result: "<div data-id=\"123\" data-values=\"1 2 3\">content</div>"
 
 data_attrs:
-  from: div
+  div: content
   data-id: "123"
   data-values:
     - 1

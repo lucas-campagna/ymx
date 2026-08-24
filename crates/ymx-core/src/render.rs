@@ -33,6 +33,24 @@ const BOOLEAN_ATTRS: &[&str] = &[
     "indeterminate",
 ];
 
+/// Lowercase set of HTML void (self-closing) elements that have no closing tag.
+const VOID_ELEMENTS: &[&str] = &[
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "param",
+    "source",
+    "track",
+    "wbr",
+];
+
 /// Case-insensitive set of known HTML attribute names.
 /// These keys will never be treated as tag names in the `from`-key shortcut.
 const KNOWN_HTML_ATTRS: &[&str] = &[
@@ -151,7 +169,11 @@ fn render_tag(map: &IndexMap<String, Value>) -> String {
 
     let inner = map.get("children").map(render_value).unwrap_or_default();
 
-    format!("<{tag}{attrs}>{inner}</{tag}>")
+    if inner.is_empty() && is_void_element(tag) {
+        format!("<{tag}{attrs}>")
+    } else {
+        format!("<{tag}{attrs}>{inner}</{tag}>")
+    }
 }
 
 /// Render an object without `from` as text content for each key-value pair.
@@ -249,6 +271,11 @@ fn is_known_html_attr(key: &str) -> bool {
         return true;
     }
     KNOWN_HTML_ATTRS.iter().any(|&k| lower == k)
+}
+
+/// Return `true` if `tag` is a known HTML void (self-closing) element (case-insensitive).
+fn is_void_element(tag: &str) -> bool {
+    VOID_ELEMENTS.iter().any(|&e| tag.eq_ignore_ascii_case(e))
 }
 
 /// Return `true` if `v` is a scalar value (string/number/bool/null, not array/object).

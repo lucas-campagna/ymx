@@ -1,25 +1,19 @@
 _test:
   string_child:
-    result:
-      from: p
-      children: "hello"
+    format: html
+    result: "<p>hello</p>"
   int_child:
-    result:
-      from: p
-      children: 42
+    format: html
+    result: "<p>42</p>"
   bool_child:
-    result:
-      from: p
-      children: true
+    format: html
+    result: "<p>true</p>"
 
 string_child:
-  from: p
-  children: "hello"
+  p: hello
 
 int_child:
-  from: p
-  children: 42
+  p: 42
 
 bool_child:
-  from: p
-  children: true
+  p: true

@@ -1,20 +1,16 @@
 _test:
   disabled_true:
-    result:
-      from: input
-      disabled: true
+    format: html
+    result: "<input disabled>"
   disabled_false:
-    result:
-      from: input
-      disabled: false
+    format: html
+    result: "<input>"
   checked_true:
-    result:
-      from: input
-      checked: true
+    format: html
+    result: "<input checked>"
   readonly_true:
-    result:
-      from: input
-      readonly: true
+    format: html
+    result: "<input readonly>"
 
 disabled_true:
   from: input
