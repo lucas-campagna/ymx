@@ -46,6 +46,7 @@ use yaml_rust2::{Yaml, YamlLoader};
 use ymx_config::{extract_options, CliOverrides};
 use ymx_lib::ymx_core::ir::Args;
 use ymx_lib::ymx_core::project::{Format, Options, Project};
+use ymx_lib::ymx_core::render::{DefaultHtmlRenderer, HtmlRenderer};
 use ymx_lib::ymx_core::resolve::{compile, compile_component};
 use ymx_lib::{load_project, load_project_with_override, Diagnostic, StdExecutor, Value};
 use ymx_test::{parse_tests, run_tests, Expected, TestResult};
@@ -332,6 +333,17 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
     // --no-exec disables shell execution entirely.
     if cli.no_exec {
         opts.executor = None;
+    }
+
+    // --to overrides the effective format (handles temp-dir path where
+    // CliOverrides is constructed directly from cli.format without to).
+    if let Some(ref to) = cli.to {
+        opts.format = match to.as_str() {
+            "json" => Format::Json,
+            "html" => Format::Html,
+            "diagnostics" => Format::Diagnostics,
+            _ => Format::Json,
+        };
     }
 
     if cli.test {
@@ -721,6 +733,8 @@ fn emit(cli: &ParsedCli, opts: &Options, value: &Value) -> RunOutcome {
         Format::Json => emit_json(cli, true, value),
         // Compact format uses opts.pretty (false by default, true if --pretty given)
         Format::Compact => emit_json(cli, opts.pretty, value),
+        // HTML format renders the value tree to HTML via DefaultHtmlRenderer.
+        Format::Html => emit_html(cli, value),
     }
 }
 
@@ -739,6 +753,19 @@ fn emit_json(cli: &ParsedCli, pretty: bool, value: &Value) -> RunOutcome {
         Some(path) => write_file(path, &json),
         None => {
             print!("{json}");
+            RunOutcome::Success
+        }
+    }
+}
+
+/// Render `value` to HTML via [`DefaultHtmlRenderer`] and dispatch to
+/// `--output` or stdout.
+fn emit_html(cli: &ParsedCli, value: &Value) -> RunOutcome {
+    let html = DefaultHtmlRenderer.render_html(value);
+    match cli.output.as_deref() {
+        Some(path) => write_file(path, &html),
+        None => {
+            print!("{html}");
             RunOutcome::Success
         }
     }
@@ -842,6 +869,7 @@ mod tests {
             max_depth: None,
             pretty: None,
             format: None,
+            to: None,
             output: None,
             test: false,
             test_dir: None,
@@ -866,6 +894,7 @@ mod tests {
             max_depth: None,
             pretty: None,
             format: None,
+            to: None,
             output: None,
             test: true,
             test_dir: Some(dir.to_path_buf()),
@@ -884,6 +913,7 @@ mod tests {
             max_depth: None,
             pretty: None,
             format: None,
+            to: None,
             output: None,
             test: false,
             test_dir: None,
@@ -1437,6 +1467,7 @@ mod tests {
             max_depth: None,
             pretty: None,
             format: None,
+            to: None,
             output: None,
             test: false,
             test_dir: None,
@@ -1458,6 +1489,7 @@ mod tests {
             max_depth: None,
             pretty: None,
             format: None,
+            to: None,
             output: None,
             test: false,
             test_dir: None,
@@ -1479,6 +1511,7 @@ mod tests {
             max_depth: None,
             pretty: None,
             format: None,
+            to: None,
             output: None,
             test: false,
             test_dir: None,
@@ -1505,6 +1538,7 @@ mod tests {
             max_depth: None,
             pretty: None,
             format: None,
+            to: None,
             output: None,
             test: false,
             test_dir: None,
@@ -1525,6 +1559,7 @@ mod tests {
             max_depth: None,
             pretty: None,
             format: None,
+            to: None,
             output: None,
             test: false,
             test_dir: None,
@@ -1545,6 +1580,7 @@ mod tests {
             max_depth: None,
             pretty: None,
             format: None,
+            to: None,
             output: None,
             test: false,
             test_dir: None,
@@ -1566,6 +1602,7 @@ mod tests {
             max_depth: None,
             pretty: None,
             format: None,
+            to: None,
             output: None,
             test: false,
             test_dir: None,
@@ -1587,6 +1624,7 @@ mod tests {
             max_depth: None,
             pretty: None,
             format: None,
+            to: None,
             output: None,
             test: false,
             test_dir: None,
@@ -1608,6 +1646,7 @@ mod tests {
             max_depth: None,
             pretty: None,
             format: None,
+            to: None,
             output: None,
             test: false,
             test_dir: None,

@@ -41,6 +41,9 @@ pub struct ParsedCli {
     pub pretty: Option<bool>,
     /// `--format <json|diagnostics>` (default `json`).
     pub format: Option<Format>,
+    /// `--to <json|html|diagnostics>` (alternative to `--format`).
+    /// Orchestration concern — derived into `format` in [`overrides()`].
+    pub to: Option<String>,
     /// `--output <file>` orchestration concern — never consumed by
     /// `extract_options`.
     pub output: Option<PathBuf>,
@@ -92,11 +95,21 @@ impl ParsedCli {
             .unwrap_or("main");
         let component = self.entry.as_deref().unwrap_or("main");
         let entry = format!("{}.{}", file_stem, component);
+        let format = self
+            .to
+            .as_ref()
+            .map(|t| match t.as_str() {
+                "json" => Format::Json,
+                "html" => Format::Html,
+                "diagnostics" => Format::Diagnostics,
+                _ => Format::Json,
+            })
+            .or_else(|| self.format.clone());
         CliOverrides {
             entry: Some(entry),
             max_depth: self.max_depth,
             pretty: self.pretty,
-            format: self.format.clone(),
+            format,
             plain: None,
             allowed_backends: self.allowed_backends.clone(),
         }
@@ -134,6 +147,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     let mut max_depth: Option<u32> = None;
     let mut pretty: Option<bool> = None;
     let mut format: Option<Format> = None;
+    let mut to: Option<String> = None;
     let mut output: Option<PathBuf> = None;
     let mut test = false;
     let mut allowed_backends: Option<Vec<String>> = None;
@@ -146,7 +160,21 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         match arg {
             "-h" | "--help" => return Ok(ParseOutcome::Help),
             "--errors" => return Ok(ParseOutcome::Errors),
-            "-t" | "--test" => test = true,
+            "--test" => test = true,
+            "-t" | "--to" => {
+                let raw = take_value(args, &mut i, "--to")?;
+                match raw.as_str() {
+                    "json" | "html" | "diagnostics" => {}
+                    other => {
+                        return Err(ParseError {
+                            message: format!(
+                                "--to: `{other}` is not `json`, `html`, or `diagnostics`"
+                            ),
+                        })
+                    }
+                }
+                to = Some(raw);
+            }
             "--pretty" => pretty = Some(true),
             "-e" | "--entry" => entry = Some(take_value(args, &mut i, "--entry")?),
             "-m" | "--max-depth" => {
@@ -223,6 +251,12 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         });
     }
 
+    if format.is_some() && to.is_some() {
+        return Err(ParseError {
+            message: "--format and --to cannot be combined".to_string(),
+        });
+    }
+
     let stdin_is_script: bool;
     let path: PathBuf;
 
@@ -270,6 +304,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         max_depth,
         pretty,
         format,
+        to,
         output,
         test,
         test_dir,
@@ -380,6 +415,69 @@ mod tests {
 
         let err = err_of(&["--format", "xml", "proj/main.yml"]);
         assert!(err.message.contains("xml"));
+    }
+
+    #[test]
+    fn to_long_flag_parses_json_html_diagnostics() {
+        let c = cli_of(&["--to", "json", "proj/main.yml"]);
+        assert_eq!(c.to.as_deref(), Some("json"));
+
+        let c = cli_of(&["--to", "html", "proj/main.yml"]);
+        assert_eq!(c.to.as_deref(), Some("html"));
+
+        let c = cli_of(&["--to", "diagnostics", "proj/main.yml"]);
+        assert_eq!(c.to.as_deref(), Some("diagnostics"));
+
+        let err = err_of(&["--to", "xml", "proj/main.yml"]);
+        assert!(err.message.contains("--to"));
+        assert!(err.message.contains("xml"));
+    }
+
+    #[test]
+    fn to_short_flag_parses() {
+        let c = cli_of(&["-t", "html", "proj/main.yml"]);
+        assert_eq!(c.to.as_deref(), Some("html"));
+    }
+
+    #[test]
+    fn to_absent_is_none() {
+        let c = cli_of(&["proj/main.yml"]);
+        assert_eq!(c.to, None);
+    }
+
+    #[test]
+    fn format_and_to_combined_errors() {
+        let err = err_of(&["--format", "json", "--to", "html", "proj/main.yml"]);
+        assert!(err.message.contains("--format"));
+        assert!(err.message.contains("--to"));
+    }
+
+    #[test]
+    fn to_reverses_order_with_format_errors() {
+        let err = err_of(&["--to", "html", "--format", "json", "proj/main.yml"]);
+        assert!(err.message.contains("--format"));
+        assert!(err.message.contains("--to"));
+    }
+
+    #[test]
+    fn to_overrides_format_in_overrides() {
+        let c = cli_of(&["--to", "html", "proj/main.yml"]);
+        let ov = c.overrides();
+        assert_eq!(ov.format, Some(Format::Html));
+    }
+
+    #[test]
+    fn to_missing_value_errors() {
+        let err = err_of(&["--to"]);
+        assert!(err.message.contains("--to"));
+        assert!(err.message.contains("missing value"));
+    }
+
+    #[test]
+    fn t_short_flag_missing_value_errors() {
+        let err = err_of(&["-t"]);
+        assert!(err.message.contains("--to"));
+        assert!(err.message.contains("missing value"));
     }
 
     #[test]
