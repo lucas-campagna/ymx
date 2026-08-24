@@ -33,6 +33,68 @@ const BOOLEAN_ATTRS: &[&str] = &[
     "indeterminate",
 ];
 
+/// Case-insensitive set of known HTML attribute names.
+/// These keys will never be treated as tag names in the `from`-key shortcut.
+const KNOWN_HTML_ATTRS: &[&str] = &[
+    // Reserved/meta keys
+    "style",
+    "class",
+    "children",
+    "from",
+    // Boolean attributes (already in BOOLEAN_ATTRS but listed here too for completeness)
+    "disabled",
+    "readonly",
+    "checked",
+    "selected",
+    "multiple",
+    "autofocus",
+    "autocomplete",
+    "hidden",
+    "controls",
+    "loop",
+    "muted",
+    "playsinline",
+    "autoplay",
+    "preload",
+    "required",
+    "novalidate",
+    "formnovalidate",
+    "reversed",
+    "indeterminate",
+    // General HTML attributes
+    "id",
+    "name",
+    "type",
+    "value",
+    "placeholder",
+    "title",
+    "alt",
+    "src",
+    "href",
+    "action",
+    "method",
+    "target",
+    "rel",
+    "media",
+    "width",
+    "height",
+    "size",
+    "max",
+    "min",
+    "step",
+    "pattern",
+    "async",
+    "defer",
+    "crossorigin",
+    "integrity",
+    "nomodule",
+    "scoped",
+    // data-* attributes
+    "data-id",
+    "data-key",
+    "data-value",
+];
+
 impl HtmlRenderer for DefaultHtmlRenderer {
     fn render_html(&self, value: &Value) -> String {
         render_value(value)
@@ -49,6 +111,12 @@ fn render_value(v: &Value) -> String {
         Value::Object(map) => {
             if map.contains_key("from") {
                 render_tag(map)
+            } else if let Some((tag_key, tag_val)) = find_tag_shortcut(map) {
+                let mut m = map.clone();
+                m.shift_remove(tag_key);
+                m.insert("from".into(), Value::String(tag_key.to_string()));
+                m.insert("children".into(), tag_val.clone());
+                render_tag(&m)
             } else {
                 render_object_text(map)
             }
@@ -81,17 +149,50 @@ fn render_tag(map: &IndexMap<String, Value>) -> String {
 
     let attrs = render_attrs(map);
 
-    let inner = map
-        .get("children")
-        .map(render_value)
-        .unwrap_or_default();
+    let inner = map.get("children").map(render_value).unwrap_or_default();
 
     format!("<{tag}{attrs}>{inner}</{tag}>")
 }
 
 /// Render an object without `from` as text content for each key-value pair.
+/// Scalar-valued known HTML attribute keys are rendered as `key="value"` attributes.
 fn render_object_text(map: &IndexMap<String, Value>) -> String {
-    map.values().map(render_value).collect()
+    let mut parts: Vec<String> = Vec::new();
+    let mut attr_parts: Vec<String> = Vec::new();
+
+    for (key, val) in map {
+        if is_known_html_attr(key) && is_scalar_val(val) {
+            attr_parts.push(format!("{}=\"{}\"", key, stringify_attr_value(val)));
+        } else if !is_known_html_attr(key) {
+            parts.push(render_value(val));
+        }
+        // If key IS a known HTML attr but value is non-scalar, skip (non-scalar can't be an attr value)
+    }
+
+    let mut out = attr_parts.join(" ");
+    if !parts.is_empty() {
+        out.push_str(&parts.join(""));
+    }
+    out
+}
+
+/// Find a single scalar-valued key that is not a known HTML attribute.
+/// If found, returns Some((key, &value)) representing the implied tag name and children.
+fn find_tag_shortcut<'a>(map: &'a IndexMap<String, Value>) -> Option<(&'a str, &'a Value)> {
+    let mut found: Option<(&'a str, &'a Value)> = None;
+    for (key, val) in map {
+        if is_known_html_attr(key) {
+            continue;
+        }
+        if !is_scalar_val(val) {
+            return None; // non-scalar value — not a shortcut
+        }
+        if found.is_some() {
+            return None; // more than one candidate — not a shortcut
+        }
+        found = Some((key.as_str(), val));
+    }
+    found
 }
 
 /// Render HTML attributes from an object map, skipping `from` and `children`.
@@ -140,6 +241,21 @@ fn render_attrs(map: &IndexMap<String, Value>) -> String {
 fn is_boolean_attr(key: &str) -> bool {
     let lower = key.to_lowercase();
     BOOLEAN_ATTRS.iter().any(|&b| lower == b)
+}
+
+/// Return `true` if `key` is a known HTML attribute name (case-insensitive).
+/// Also returns `true` for any key starting with `data-`.
+fn is_known_html_attr(key: &str) -> bool {
+    let lower = key.to_lowercase();
+    if lower.starts_with("data-") {
+        return true;
+    }
+    KNOWN_HTML_ATTRS.iter().any(|&k| lower == k)
+}
+
+/// Return `true` if `v` is a scalar value (string/number/bool/null, not array/object).
+fn is_scalar_val(v: &Value) -> bool {
+    !matches!(v, Value::Array(_) | Value::Object(_))
 }
 
 /// Normalize a `style` value to a CSS attribute string.
@@ -339,10 +455,7 @@ mod tests {
 
     #[test]
     fn normalize_class_string() {
-        assert_eq!(
-            normalize_class(&Value::string("a  b  c")),
-            "a b c"
-        );
+        assert_eq!(normalize_class(&Value::string("a  b  c")), "a b c");
     }
 
     #[test]
@@ -401,5 +514,92 @@ mod tests {
         let r = DefaultHtmlRenderer;
         let v = Value::string("test");
         assert_eq!(r.render_html(&v), "test");
+    }
+
+    #[test]
+    fn from_key_shortcut_single_scalar_renders_as_tag() {
+        // `button: click-me` → `<button>click-me</button>`
+        let mut map = IndexMap::new();
+        map.insert("button".into(), Value::string("click-me"));
+        assert_eq!(render_value(&Value::Object(map)), "<button>click-me</button>");
+    }
+
+    #[test]
+    fn from_key_shortcut_with_class_attribute() {
+        // `button: click-me` with `class: "btn"` → `<button class="btn">click-me</button>`
+        let mut map = IndexMap::new();
+        map.insert("button".into(), Value::string("click-me"));
+        map.insert("class".into(), Value::string("btn"));
+        assert_eq!(
+            render_value(&Value::Object(map)),
+            "<button class=\"btn\">click-me</button>"
+        );
+    }
+
+    #[test]
+    fn from_key_shortcut_href_is_attribute_not_tag() {
+        // `href: "url"` should render as attribute href="url", not as a tag
+        let mut map = IndexMap::new();
+        map.insert("href".into(), Value::string("url"));
+        let result = render_value(&Value::Object(map));
+        assert!(!result.starts_with("<href"));
+        assert!(result.contains("href=\"url\""));
+    }
+
+    #[test]
+    fn from_key_shortcut_data_attr_is_attribute_not_tag() {
+        // `data-id: "123"` should render as attribute, not as a tag
+        let mut map = IndexMap::new();
+        map.insert("data-id".into(), Value::string("123"));
+        let result = render_value(&Value::Object(map));
+        assert!(!result.starts_with("<data-id"));
+        assert!(result.contains("data-id=\"123\""));
+    }
+
+    #[test]
+    fn from_key_shortcut_multiple_scalar_keys_not_a_shortcut() {
+        // Multiple scalar keys without `from` — no shortcut fires
+        let mut map = IndexMap::new();
+        map.insert("prop_a".into(), Value::string("val_a"));
+        map.insert("prop_b".into(), Value::string("val_b"));
+        let result = render_value(&Value::Object(map));
+        // Falls back to object-text: values concatenated
+        assert_eq!(result, "val_aval_b");
+    }
+
+    #[test]
+    fn from_key_shortcut_with_style_object() {
+        let mut map = IndexMap::new();
+        map.insert("div".into(), Value::string("content"));
+        let mut style = IndexMap::new();
+        style.insert("color".into(), Value::string("red"));
+        map.insert("style".into(), Value::Object(style));
+        let result = render_value(&Value::Object(map));
+        assert_eq!(result, "<div style=\"color: red\">content</div>");
+    }
+
+    #[test]
+    fn find_tag_shortcut_rejects_non_scalar_value() {
+        let mut map = IndexMap::new();
+        map.insert("button".into(), Value::array(vec![Value::string("a")]));
+        assert!(find_tag_shortcut(&map).is_none());
+    }
+
+    #[test]
+    fn find_tag_shortcut_rejects_known_attr() {
+        let mut map = IndexMap::new();
+        map.insert("id".into(), Value::string("my-id"));
+        assert!(find_tag_shortcut(&map).is_none());
+    }
+
+    #[test]
+    fn find_tag_shortcut_accepts_valid_tag() {
+        let mut map = IndexMap::new();
+        map.insert("my_button".into(), Value::string("click"));
+        let result = find_tag_shortcut(&map);
+        assert!(result.is_some());
+        let (tag, val) = result.unwrap();
+        assert_eq!(tag, "my_button");
+        assert_eq!(val, &Value::string("click"));
     }
 }
