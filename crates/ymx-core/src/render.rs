@@ -176,16 +176,14 @@ fn render_object_text(map: &IndexMap<String, Value>) -> String {
     out
 }
 
-/// Find a single scalar-valued key that is not a known HTML attribute.
+/// Find a single key that is not a known HTML attribute.
+/// Scalars, objects, and arrays are all valid shortcut values.
 /// If found, returns Some((key, &value)) representing the implied tag name and children.
 fn find_tag_shortcut<'a>(map: &'a IndexMap<String, Value>) -> Option<(&'a str, &'a Value)> {
     let mut found: Option<(&'a str, &'a Value)> = None;
     for (key, val) in map {
         if is_known_html_attr(key) {
             continue;
-        }
-        if !is_scalar_val(val) {
-            return None; // non-scalar value — not a shortcut
         }
         if found.is_some() {
             return None; // more than one candidate — not a shortcut
@@ -521,7 +519,10 @@ mod tests {
         // `button: click-me` → `<button>click-me</button>`
         let mut map = IndexMap::new();
         map.insert("button".into(), Value::string("click-me"));
-        assert_eq!(render_value(&Value::Object(map)), "<button>click-me</button>");
+        assert_eq!(
+            render_value(&Value::Object(map)),
+            "<button>click-me</button>"
+        );
     }
 
     #[test]
@@ -579,10 +580,14 @@ mod tests {
     }
 
     #[test]
-    fn find_tag_shortcut_rejects_non_scalar_value() {
+    fn find_tag_shortcut_accepts_array_value() {
         let mut map = IndexMap::new();
-        map.insert("button".into(), Value::array(vec![Value::string("a")]));
-        assert!(find_tag_shortcut(&map).is_none());
+        map.insert("body".into(), Value::array(vec![Value::string("a"), Value::string("b")]));
+        let result = find_tag_shortcut(&map);
+        assert!(result.is_some());
+        let (tag, val) = result.unwrap();
+        assert_eq!(tag, "body");
+        assert!(matches!(val, Value::Array(_)));
     }
 
     #[test]

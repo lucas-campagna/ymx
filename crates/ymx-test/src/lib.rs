@@ -16,6 +16,7 @@
 use ymx_core::diag::{Diagnostic, FileId, Span, E002, E010};
 use ymx_core::ir::{Args, Value};
 use ymx_core::project::{Options, Project};
+use ymx_core::render::{DefaultHtmlRenderer, HtmlRenderer};
 use ymx_core::resolve::{compile_component, resolve_entry};
 
 /// The per-test call arguments, mirroring the call-site grammar (rule 3):
@@ -45,6 +46,8 @@ pub enum Expected {
     Value(Value),
     /// The target must produce a diagnostic with the given code (e.g. `"E002"`).
     Error { code: String },
+    /// The target must compile to a value that renders to this HTML string.
+    Html(String),
 }
 
 /// One concrete `_test` case: the namespace-qualified target component name,
@@ -255,8 +258,8 @@ fn parse_type2(
 }
 
 /// Parse one B mapping (value variant `{args,result}` / error variant
-/// `{args,error}`) into a [`Test`]. `component` is the type-2 key for the
-/// `E010` anchor (`None` for a bare B).
+/// `{args,error}` / html variant `{args,result,format}`) into a [`Test`].
+/// `component` is the type-2 key for the `E010` anchor (`None` for a bare B).
 fn parse_b(
     project: &Project,
     file: FileId,
@@ -269,6 +272,7 @@ fn parse_b(
         unreachable!("a B mapping is always an object");
     };
     b_check(project, file, component, value)?;
+    b_check_format(project, file, component, value)?;
     let args = match m.get("args") {
         None => TestArgs::None,
         Some(Value::Object(named)) => {
@@ -282,6 +286,11 @@ fn parse_b(
             Value::String(code) => Expected::Error { code: code.clone() },
             _ => unreachable!("b_check ensured `error` is a string"),
         }
+    } else if m.contains_key("format") {
+        let Value::String(html) = &m["result"] else {
+            unreachable!("b_check_format ensured `result` is a string when format is html");
+        };
+        Expected::Html(html.clone())
     } else {
         Expected::Value(m["result"].clone())
     };
@@ -322,6 +331,45 @@ fn b_check(
             _ => Err(malformed("`error` must be a string diagnostic code")),
         },
         (true, false) => Ok(()),
+    }
+}
+
+/// Validates the `format` key in a B mapping (if present). `format: html`
+/// is only valid alongside `result`; `format: html` with `error` is malformed
+/// (E010), and any other `format` value is also E010.
+fn b_check_format(
+    project: &Project,
+    file: FileId,
+    component: Option<&str>,
+    value: &Value,
+) -> Result<(), Diagnostic> {
+    let Value::Object(m) = value else {
+        unreachable!("a B mapping is always an object");
+    };
+    let Some(format_val) = m.get("format") else {
+        return Ok(());
+    };
+    let malformed = |detail: &str| Diagnostic {
+        file: Some(project.files[file.0 as usize].clone()),
+        line: 1,
+        col: 1,
+        component: component.map(str::to_string),
+        code: E010,
+        message: format!("malformed `_test` block: {detail}"),
+    };
+    match format_val {
+        Value::String(s) if s == "html" => {
+            if m.contains_key("error") {
+                Err(malformed("`format: html` cannot be used with `error`"))
+            } else if !m.contains_key("result") {
+                Err(malformed("`format: html` requires `result` to be present"))
+            } else if !matches!(&m["result"], Value::String(_)) {
+                Err(malformed("`format: html` requires `result` to be a string"))
+            } else {
+                Ok(())
+            }
+        }
+        _ => Err(malformed("`format` must be `html` if present")),
     }
 }
 
@@ -461,6 +509,7 @@ pub fn run_tests(project: &Project, opts: &Options, entry: Option<&str>) -> Vec<
         Ok(tests) => tests,
         Err(_) => return Vec::new(),
     };
+    let renderer = DefaultHtmlRenderer;
     tests
         .into_iter()
         .map(|test| {
@@ -473,6 +522,10 @@ pub fn run_tests(project: &Project, opts: &Options, entry: Option<&str>) -> Vec<
                 Expected::Error { code } => match &actual {
                     Err(diags) => diags.iter().any(|d| d.code == code.as_str()),
                     Ok(_) => false,
+                },
+                Expected::Html(expected_html) => match &actual {
+                    Ok(value) => renderer.render_html(value) == *expected_html,
+                    Err(_) => false,
                 },
             };
             TestResult {
@@ -994,5 +1047,91 @@ mod tests {
         let p = with_test(project(), 0, "main:\n  result: 1\n  error: \"E002\"\n");
         assert!(parse_tests(&p, None).is_err());
         assert!(run_tests(&p, &Options::default(), None).is_empty());
+    }
+
+    // ---- format: html ----
+
+    #[test]
+    fn format_html_in_b_mapping_creates_expected_html() {
+        let p = with_test(
+            project(),
+            0,
+            "main: {format: html, result: \"<p>hi</p>\"}\n",
+        );
+        let tests = parse_tests(&p, None).expect("format html B");
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].expected, Expected::Html("<p>hi</p>".to_string()));
+    }
+
+    #[test]
+    fn format_html_with_error_is_e010() {
+        let p = with_test(project(), 0, "main: {format: html, error: \"E002\"}\n");
+        let diags = parse_tests(&p, None).unwrap_err();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, E010);
+        assert!(diags[0].message.contains("format: html"));
+        assert!(diags[0].message.contains("error"));
+    }
+
+    #[test]
+    fn format_non_html_value_is_e010() {
+        for src in [
+            "main: {format: json, result: \"{}\"}\n",
+            "main: {format: text, result: \"hi\"}\n",
+        ] {
+            let p = with_test(project(), 0, src);
+            let diags = parse_tests(&p, None).unwrap_err();
+            assert_eq!(diags.len(), 1, "{src}");
+            assert_eq!(diags[0].code, E010, "{src}");
+            assert!(diags[0].message.contains("format"), "{src}");
+        }
+    }
+
+    #[test]
+    fn format_html_with_non_string_result_is_e010() {
+        let p = with_test(project(), 0, "main: {format: html, result: 42}\n");
+        let diags = parse_tests(&p, None).unwrap_err();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, E010);
+        assert!(diags[0].message.contains("string"));
+    }
+
+    #[test]
+    fn run_tests_html_match_passes() {
+        // render_html escapes HTML, so a string "<p>hi</p>" becomes "&lt;p&gt;hi&lt;/p&gt;"
+        let mut p = Project::new();
+        p.root = PathBuf::from("/proj");
+        p.files = vec![PathBuf::from("/proj/main.yml")];
+        p.namespaces
+            .register(
+                "",
+                def_body(0, "main", Node::String("<p>hi</p>".to_string(), SPAN)),
+            )
+            .unwrap();
+        let p = with_test(
+            p,
+            0,
+            "main: {format: html, result: \"&lt;p&gt;hi&lt;/p&gt;\"}\n",
+        );
+        let results = run_tests(&p, &Options::default(), None);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed, "HTML rendered matches expected");
+    }
+
+    #[test]
+    fn run_tests_html_mismatch_fails() {
+        let mut p = Project::new();
+        p.root = PathBuf::from("/proj");
+        p.files = vec![PathBuf::from("/proj/main.yml")];
+        p.namespaces
+            .register(
+                "",
+                def_body(0, "main", Node::String("<p>hi</p>".to_string(), SPAN)),
+            )
+            .unwrap();
+        let p = with_test(p, 0, "main: {format: html, result: \"<p>bye</p>\"}\n");
+        let results = run_tests(&p, &Options::default(), None);
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].passed, "HTML rendered does not match");
     }
 }

@@ -202,6 +202,7 @@ fn expected_text(expected: &Expected) -> String {
     match expected {
         Expected::Value(v) => value_text(v),
         Expected::Error { code } => format!("diagnostic code {code}"),
+        Expected::Html(html) => format!("HTML:\n{}", html),
     }
 }
 

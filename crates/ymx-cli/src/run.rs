@@ -689,6 +689,7 @@ fn diff(result: &TestResult) -> String {
     let expected = match &result.test.expected {
         Expected::Value(v) => serde_json::to_string(v).unwrap_or_else(|_| format!("{v:?}")),
         Expected::Error { code } => format!("error {code}"),
+        Expected::Html(html) => format!("HTML:{nl}{html}", nl = '\n'),
     };
     let actual = match &result.actual {
         Ok(v) => serde_json::to_string(v).unwrap_or_else(|_| format!("{v:?}")),
