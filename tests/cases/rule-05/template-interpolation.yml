@@ -1,0 +1,7 @@
+main:
+  a: 123
+$main: "> $a"
+_test:
+  main:
+    args: {}
+    result: "> 123"
