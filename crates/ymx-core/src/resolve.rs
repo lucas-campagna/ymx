@@ -30,8 +30,9 @@ use std::rc::Rc;
 use indexmap::IndexMap;
 
 use crate::builtin::{
-    Builtin, BuiltinCtx, BuiltinImpl, JoinBuiltin, LowerBuiltin, MapBuiltin, MergeBuiltin,
-    ReduceBuiltin, ReplaceBuiltin, SplitBuiltin, TrimBuiltin, UpperBuiltin,
+    Builtin, BuiltinCtx, BuiltinImpl, EntriesBuiltin, FromEntriesBuiltin, JoinBuiltin,
+    KeysBuiltin, LowerBuiltin, MapBuiltin, MergeBuiltin, OmitBuiltin, PickBuiltin,
+    ReduceBuiltin, ReplaceBuiltin, SplitBuiltin, TrimBuiltin, UpperBuiltin, ValuesBuiltin,
 };
 use crate::callsite;
 use crate::diag::{Diagnostic, FileId, Span, E002, E003, E005, E006, E008, E009, E010, E011, E016};
@@ -1971,12 +1972,12 @@ impl<'a> Resolver<'a> {
                 Builtin::First => Err(builtin_not_yet_implemented(ctx, "$first")),
                 Builtin::Last => Err(builtin_not_yet_implemented(ctx, "$last")),
                 Builtin::Slice => Err(builtin_not_yet_implemented(ctx, "$slice")),
-                Builtin::Keys => Err(builtin_not_yet_implemented(ctx, "$keys")),
-                Builtin::Values => Err(builtin_not_yet_implemented(ctx, "$values")),
-                Builtin::Entries => Err(builtin_not_yet_implemented(ctx, "$entries")),
-                Builtin::FromEntries => Err(builtin_not_yet_implemented(ctx, "$from_entries")),
-                Builtin::Pick => Err(builtin_not_yet_implemented(ctx, "$pick")),
-                Builtin::Omit => Err(builtin_not_yet_implemented(ctx, "$omit")),
+                Builtin::Keys => KeysBuiltin.eval(&ctx, &call.args),
+                Builtin::Values => ValuesBuiltin.eval(&ctx, &call.args),
+                Builtin::Entries => EntriesBuiltin.eval(&ctx, &call.args),
+                Builtin::FromEntries => FromEntriesBuiltin.eval(&ctx, &call.args),
+                Builtin::Pick => PickBuiltin.eval(&ctx, &call.args),
+                Builtin::Omit => OmitBuiltin.eval(&ctx, &call.args),
                 Builtin::Type => Err(builtin_not_yet_implemented(ctx, "$type")),
                 Builtin::IsArray => Err(builtin_not_yet_implemented(ctx, "$is_array")),
                 Builtin::IsObject => Err(builtin_not_yet_implemented(ctx, "$is_object")),

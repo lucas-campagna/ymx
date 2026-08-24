@@ -1070,6 +1070,299 @@ impl BuiltinImpl for FilterBuiltin {
     }
 }
 
+// ---- $keys ----
+
+pub struct KeysBuiltin;
+
+impl BuiltinImpl for KeysBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$keys expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let obj = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Object(m) = obj else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$keys argument must be an Object, got {:?}", obj),
+            ));
+        };
+
+        Ok(Value::Array(m.keys().map(|k| Value::string(k.clone())).collect()))
+    }
+}
+
+// ---- $values ----
+
+pub struct ValuesBuiltin;
+
+impl BuiltinImpl for ValuesBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$values expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let obj = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Object(m) = obj else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$values argument must be an Object, got {:?}", obj),
+            ));
+        };
+
+        Ok(Value::Array(m.values().cloned().collect()))
+    }
+}
+
+// ---- $entries ----
+
+pub struct EntriesBuiltin;
+
+impl BuiltinImpl for EntriesBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$entries expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let obj = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Object(m) = obj else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$entries argument must be an Object, got {:?}", obj),
+            ));
+        };
+
+        let entries: Vec<Value> = m
+            .iter()
+            .map(|(k, v)| {
+                let mut pair = IndexMap::with_capacity(2);
+                pair.insert("key".to_string(), Value::string(k.clone()));
+                pair.insert("value".to_string(), v.clone());
+                Value::Object(pair)
+            })
+            .collect();
+
+        Ok(Value::Array(entries))
+    }
+}
+
+// ---- $from_entries ----
+
+pub struct FromEntriesBuiltin;
+
+impl BuiltinImpl for FromEntriesBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!(
+                    "$from_entries expects exactly 1 argument, got {}",
+                    args.len()
+                ),
+            ));
+        }
+
+        let arr = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Array(items) = arr else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!(
+                    "$from_entries argument must be an Array, got {:?}",
+                    arr
+                ),
+            ));
+        };
+
+        let mut result = IndexMap::with_capacity(items.len());
+        for (i, item) in items.into_iter().enumerate() {
+            let Value::Object(entry) = item else {
+                return Err(ctx_err(
+                    ctx,
+                    E011,
+                    format!(
+                        "$from_entries: element at index {} is not an Object",
+                        i
+                    ),
+                ));
+            };
+
+            let Some(Value::String(key)) = entry.get("key") else {
+                return Err(ctx_err(
+                    ctx,
+                    E011,
+                    format!(
+                        "$from_entries: element at index {} is missing a string `key` field",
+                        i
+                    ),
+                ));
+            };
+
+            let value = entry.get("value").cloned().unwrap_or(Value::Null);
+            result.insert(key.clone(), value);
+        }
+
+        Ok(Value::Object(result))
+    }
+}
+
+// ---- $pick ----
+
+pub struct PickBuiltin;
+
+impl BuiltinImpl for PickBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 2 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$pick expects exactly 2 arguments, got {}", args.len()),
+            ));
+        }
+
+        let obj = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Object(m) = obj else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$pick first argument must be an Object, got {:?}", obj),
+            ));
+        };
+
+        let keys = resolve_parsed_value(&args[1].value, ctx)?;
+        let Value::Array(key_items) = keys else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!(
+                    "$pick second argument must be an Array of strings, got {:?}",
+                    keys
+                ),
+            ));
+        };
+
+        let mut result = IndexMap::with_capacity(key_items.len());
+        for item in key_items {
+            let Value::String(k) = item else {
+                return Err(ctx_err(
+                    ctx,
+                    E011,
+                    format!(
+                        "$pick: key list contains a non-string element {:?}",
+                        item
+                    ),
+                ));
+            };
+            if let Some(v) = m.get(&k) {
+                result.insert(k, v.clone());
+            }
+        }
+
+        Ok(Value::Object(result))
+    }
+}
+
+// ---- $omit ----
+
+pub struct OmitBuiltin;
+
+impl BuiltinImpl for OmitBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 2 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$omit expects exactly 2 arguments, got {}", args.len()),
+            ));
+        }
+
+        let obj = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Object(m) = obj else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$omit first argument must be an Object, got {:?}", obj),
+            ));
+        };
+
+        let keys = resolve_parsed_value(&args[1].value, ctx)?;
+        let Value::Array(key_items) = keys else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!(
+                    "$omit second argument must be an Array of strings, got {:?}",
+                    keys
+                ),
+            ));
+        };
+
+        let mut omit_set = Vec::with_capacity(key_items.len());
+        for item in &key_items {
+            let Value::String(k) = item else {
+                return Err(ctx_err(
+                    ctx,
+                    E011,
+                    format!(
+                        "$omit: key list contains a non-string element {:?}",
+                        item
+                    ),
+                ));
+            };
+            omit_set.push(k.clone());
+        }
+
+        let mut result = IndexMap::with_capacity(m.len());
+        for (k, v) in m {
+            if !omit_set.contains(&k) {
+                result.insert(k.clone(), v.clone());
+            }
+        }
+
+        Ok(Value::Object(result))
+    }
+}
+
 // ---- Shared helper functions ----
 
 /// Check if a value is truthy: `Bool(true)` is truthy, `Bool(false)` and
@@ -1498,36 +1791,12 @@ fn eval_builtin_call(
         Builtin::First => FirstBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Last => LastBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Slice => SliceBuiltin.eval(&sub_ctx, &call.args),
-        Builtin::Keys => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$keys is not yet implemented".to_string(),
-        )),
-        Builtin::Values => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$values is not yet implemented".to_string(),
-        )),
-        Builtin::Entries => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$entries is not yet implemented".to_string(),
-        )),
-        Builtin::FromEntries => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$from_entries is not yet implemented".to_string(),
-        )),
-        Builtin::Pick => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$pick is not yet implemented".to_string(),
-        )),
-        Builtin::Omit => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$omit is not yet implemented".to_string(),
-        )),
+        Builtin::Keys => KeysBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Values => ValuesBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Entries => EntriesBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::FromEntries => FromEntriesBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Pick => PickBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Omit => OmitBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Type => Err(ctx_err(
             &sub_ctx,
             E011,
