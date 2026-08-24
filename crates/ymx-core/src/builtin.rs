@@ -683,7 +683,404 @@ impl BuiltinImpl for ReplaceBuiltin {
     }
 }
 
+// ---- $first ----
+
+pub struct FirstBuiltin;
+
+impl BuiltinImpl for FirstBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$first expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let arr = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Array(items) = arr else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$first argument must be an Array, got {:?}", arr),
+            ));
+        };
+
+        Ok(items.into_iter().next().unwrap_or(Value::Null))
+    }
+}
+
+// ---- $last ----
+
+pub struct LastBuiltin;
+
+impl BuiltinImpl for LastBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$last expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let arr = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Array(items) = arr else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$last argument must be an Array, got {:?}", arr),
+            ));
+        };
+
+        Ok(items.into_iter().last().unwrap_or(Value::Null))
+    }
+}
+
+// ---- $sort ----
+
+pub struct SortBuiltin;
+
+impl BuiltinImpl for SortBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$sort expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let arr = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Array(items) = arr else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$sort argument must be an Array, got {:?}", arr),
+            ));
+        };
+
+        if items.is_empty() {
+            return Ok(Value::Array(Vec::new()));
+        }
+
+        // Determine the element kind from the first element.
+        let all_int = items.iter().all(|v| matches!(v, Value::Int(_)));
+        let all_float = items.iter().all(|v| matches!(v, Value::Float(_)));
+        let all_string = items.iter().all(|v| matches!(v, Value::String(_)));
+
+        if all_int {
+            let mut nums: Vec<i64> = items
+                .iter()
+                .filter_map(|v| match v {
+                    Value::Int(i) => Some(*i),
+                    _ => unreachable!(),
+                })
+                .collect();
+            nums.sort();
+            Ok(Value::Array(nums.into_iter().map(Value::Int).collect()))
+        } else if all_float {
+            let mut nums: Vec<f64> = items
+                .iter()
+                .filter_map(|v| match v {
+                    Value::Float(f) => Some(*f),
+                    _ => unreachable!(),
+                })
+                .collect();
+            nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            Ok(Value::Array(
+                nums.into_iter().map(Value::Float).collect(),
+            ))
+        } else if all_string {
+            let mut strs: Vec<String> = items
+                .iter()
+                .filter_map(|v| match v {
+                    Value::String(s) => Some(s.clone()),
+                    _ => unreachable!(),
+                })
+                .collect();
+            strs.sort();
+            Ok(Value::Array(
+                strs.into_iter().map(Value::String).collect(),
+            ))
+        } else {
+            Err(ctx_err(
+                ctx,
+                E011,
+                "$sort requires all elements to be the same type (all Int, all Float, or all String)"
+                    .to_string(),
+            ))
+        }
+    }
+}
+
+// ---- $reverse ----
+
+pub struct ReverseBuiltin;
+
+impl BuiltinImpl for ReverseBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$reverse expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let arr = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Array(items) = arr else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$reverse argument must be an Array, got {:?}", arr),
+            ));
+        };
+
+        let mut reversed = items;
+        reversed.reverse();
+        Ok(Value::Array(reversed))
+    }
+}
+
+// ---- $unique ----
+
+pub struct UniqueBuiltin;
+
+impl BuiltinImpl for UniqueBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$unique expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let arr = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Array(items) = arr else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$unique argument must be an Array, got {:?}", arr),
+            ));
+        };
+
+        let mut seen: Vec<Value> = Vec::new();
+        for item in items {
+            if !seen.iter().any(|s| s == &item) {
+                seen.push(item);
+            }
+        }
+        Ok(Value::Array(seen))
+    }
+}
+
+// ---- $flatten ----
+
+pub struct FlattenBuiltin;
+
+impl BuiltinImpl for FlattenBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$flatten expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let arr = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Array(items) = arr else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$flatten argument must be an Array, got {:?}", arr),
+            ));
+        };
+
+        let mut result = Vec::new();
+        for item in items {
+            match item {
+                Value::Array(inner) => result.extend(inner),
+                other => result.push(other),
+            }
+        }
+        Ok(Value::Array(result))
+    }
+}
+
+// ---- $slice ----
+
+pub struct SliceBuiltin;
+
+impl BuiltinImpl for SliceBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 3 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$slice expects exactly 3 arguments, got {}", args.len()),
+            ));
+        }
+
+        let arr = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Array(items) = arr else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$slice first argument must be an Array, got {:?}", arr),
+            ));
+        };
+
+        let start_val = resolve_parsed_value(&args[1].value, ctx)?;
+        let Value::Int(start_raw) = start_val else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$slice second argument (start) must be an Int, got {:?}", start_val),
+            ));
+        };
+
+        let end_val = resolve_parsed_value(&args[2].value, ctx)?;
+        let Value::Int(end_raw) = end_val else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$slice third argument (end) must be an Int, got {:?}", end_val),
+            ));
+        };
+
+        let len = items.len() as i64;
+
+        // Normalize negative indices.
+        let start = if start_raw < 0 {
+            (len + start_raw).max(0) as usize
+        } else {
+            start_raw.min(len) as usize
+        };
+
+        let end = if end_raw < 0 {
+            (len + end_raw).max(0) as usize
+        } else {
+            end_raw.min(len) as usize
+        };
+
+        // Ensure start <= end (swap if needed is not spec'd; clamp instead).
+        let (start, end) = if start > end { (end, start) } else { (start, end) };
+
+        Ok(Value::Array(items[start..end].to_vec()))
+    }
+}
+
+// ---- $filter ----
+
+pub struct FilterBuiltin;
+
+impl BuiltinImpl for FilterBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 2 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$filter expects exactly 2 arguments, got {}", args.len()),
+            ));
+        }
+
+        // First arg: unevaluated callable component reference.
+        let fn_name = match &args[0].value {
+            super::callsite::ParsedValue::Ref { name } => name.clone(),
+            other => {
+                return Err(ctx_err(ctx, E011,
+                    format!("first argument of $filter must be an unevaluated callable component reference, got {:?}", other)));
+            }
+        };
+
+        // Second arg: eagerly evaluated, must be Array.
+        let arr = resolve_parsed_value(&args[1].value, ctx)?;
+        let Value::Array(items) = arr else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("second argument of $filter must be an Array, got {:?}", arr),
+            ));
+        };
+
+        // Empty array → empty array.
+        if items.is_empty() {
+            return Ok(Value::Array(Vec::new()));
+        }
+
+        // Look up the callable component.
+        let def = resolve_callable(ctx, &fn_name)?;
+
+        let mut out = Vec::new();
+        for item in items {
+            let item_args = match &item {
+                Value::Object(m) => {
+                    super::ir::Args::Named(m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                }
+                v if v.is_scalar() => super::ir::Args::Positional(vec![v.clone()]),
+                Value::Array(_) => {
+                    return Err(ctx_err(ctx, E011,
+                        "array item in $filter argument is not supported (array items must be objects or scalars)".to_string()));
+                }
+                _ => unreachable!("Value::Object and scalar cover all non-array cases"),
+            };
+
+            let result = eval_call(ctx, def.clone(), &item_args)?;
+            if is_truthy(&result) {
+                out.push(item);
+            }
+        }
+
+        Ok(Value::Array(out))
+    }
+}
+
 // ---- Shared helper functions ----
+
+/// Check if a value is truthy: `Bool(true)` is truthy, `Bool(false)` and
+/// `Null` are falsy; everything else (numbers, strings, arrays, objects) is truthy.
+fn is_truthy(v: &Value) -> bool {
+    match v {
+        Value::Bool(b) => *b,
+        Value::Null => false,
+        _ => true,
+    }
+}
 
 /// Render a [`Value`] to a string using the same rules as interpolation.
 /// Int renders plainly, Float via `render_f64`, Bool as `"true"`/`"false"`,
@@ -1093,46 +1490,14 @@ fn eval_builtin_call(
         Builtin::Upper => UpperBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Lower => LowerBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Replace => ReplaceBuiltin.eval(&sub_ctx, &call.args),
-        Builtin::Filter => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$filter is not yet implemented".to_string(),
-        )),
-        Builtin::Sort => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$sort is not yet implemented".to_string(),
-        )),
-        Builtin::Reverse => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$reverse is not yet implemented".to_string(),
-        )),
-        Builtin::Unique => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$unique is not yet implemented".to_string(),
-        )),
-        Builtin::Flatten => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$flatten is not yet implemented".to_string(),
-        )),
-        Builtin::First => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$first is not yet implemented".to_string(),
-        )),
-        Builtin::Last => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$last is not yet implemented".to_string(),
-        )),
-        Builtin::Slice => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$slice is not yet implemented".to_string(),
-        )),
+        Builtin::Filter => FilterBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Sort => SortBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Reverse => ReverseBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Unique => UniqueBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Flatten => FlattenBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::First => FirstBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Last => LastBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Slice => SliceBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Keys => Err(ctx_err(
             &sub_ctx,
             E011,
