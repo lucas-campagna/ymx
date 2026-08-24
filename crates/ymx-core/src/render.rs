@@ -447,10 +447,14 @@ pub fn stringify_attr_value(v: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Array(arr) => {
             let items: Vec<String> = arr.iter().map(stringify_attr_value).collect();
-            serde_json::to_string(&items).unwrap_or_else(|_| items.join(" "))
+            serde_json::to_string(&items)
+                .map(|s| s.replace('"', "'"))
+                .unwrap_or_else(|_| items.join(" "))
         }
         Value::Object(obj) => {
-            serde_json::to_string(obj).unwrap_or_else(|_| "{...}".to_string())
+            serde_json::to_string(obj)
+                .map(|s| s.replace('"', "'"))
+                .unwrap_or_else(|_| "{...}".to_string())
         }
     }
 }
@@ -609,7 +613,7 @@ mod tests {
     #[test]
     fn stringify_attr_value_array() {
         let arr = Value::array(vec![Value::string("a"), Value::string("b")]);
-        assert_eq!(stringify_attr_value(&arr), "[\"a\",\"b\"]");
+        assert_eq!(stringify_attr_value(&arr), "['a','b']");
     }
 
     #[test]

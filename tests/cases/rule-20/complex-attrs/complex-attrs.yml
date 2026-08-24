@@ -1,7 +1,7 @@
 _test:
   alpine:
     format: html
-    result: "<script src=\"//unpkg.com/alpinejs\" defer></script><div x-data=\"{\"open\":false}\"><button @click=\"open = true\">Expand</button><span x-show=\"open\">Content...</span></div>"
+    result: "<script src=\"//unpkg.com/alpinejs\" defer></script><div x-data=\"{'open':false}\"><button @click=\"open = true\">Expand</button><span x-show=\"open\">Content...</span></div>"
 
 alpine:
   - from: script
