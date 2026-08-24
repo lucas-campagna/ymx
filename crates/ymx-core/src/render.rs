@@ -256,7 +256,18 @@ fn render_object_text(map: &IndexMap<String, Value>) -> String {
         if is_known_html_attr(key) && is_scalar_val(val) {
             attr_parts.push(format!("{}=\"{}\"", key, stringify_attr_value(val)));
         } else if !is_known_html_attr(key) {
-            parts.push(render_value(val));
+            match val {
+                Value::Bool(true) => {
+                    // Boolean attribute with true value - render as bare attribute
+                    attr_parts.push(key.clone());
+                }
+                Value::Bool(false) | Value::Null => {
+                    // Skip false booleans and nulls
+                }
+                _ => {
+                    parts.push(render_value(val));
+                }
+            }
         }
         // If key IS a known HTML attr but value is non-scalar, skip (non-scalar can't be an attr value)
     }
@@ -289,38 +300,45 @@ fn looks_like_attr(key: &str) -> bool {
 /// If the object has a `children` key plus exactly one other non-attribute key,
 /// the other key is treated as the tag name.
 fn find_tag_shortcut<'a>(map: &'a IndexMap<String, Value>) -> Option<(&'a str, &'a Value)> {
+    let non_attr: Vec<_> = map.iter()
+        .filter(|(k, _)| !is_known_html_attr(k) && !k.eq_ignore_ascii_case("children"))
+        .collect();
+    
     // If object has `children` plus exactly one other non-attribute key, that other key is the tag
-    if map.contains_key("children") {
-        let others: Vec<_> = map
-            .iter()
-            .filter(|(k, _)| {
-                !is_known_html_attr(k)
-                && !k.eq_ignore_ascii_case("children")
-                && !looks_like_attr(k)
-            })
-            .collect();
-        if others.len() == 1 {
-            let (key, val) = others[0];
+    if map.contains_key("children") && non_attr.len() == 1 {
+        let (key, val) = non_attr[0];
+        return Some((key.as_str(), val));
+    }
+    
+    // If exactly one non-attribute key (existing behavior)
+    if non_attr.len() == 1 {
+        let (key, val) = non_attr[0];
+        return Some((key.as_str(), val));
+    }
+    
+    // If multiple non-attribute keys, check if one is a tag and others are booleans
+    // A key is a potential tag if its value is NOT boolean and NOT array and key doesn't look like an attr
+    let tag_candidates: Vec<_> = non_attr.iter()
+        .filter(|(k, v)| {
+            !matches!(v, Value::Bool(_) | Value::Array(_)) && !looks_like_attr(k)
+        })
+        .collect();
+    
+    // If exactly one tag candidate AND all other non-attr keys are booleans or attr-like
+    if tag_candidates.len() == 1 && non_attr.len() > 1 {
+        let remaining_all_ok = non_attr.iter()
+            .filter(|(k, _)| !matches!(k.as_str(), _ if *k == tag_candidates[0].0))
+            .all(|(k, v)| {
+                matches!(v, Value::Bool(_)) || looks_like_attr(k)
+            });
+        
+        if remaining_all_ok {
+            let (key, val) = tag_candidates[0];
             return Some((key.as_str(), val));
         }
     }
-
-    // Otherwise, find exactly one non-attribute key (excluding children and attr-like keys)
-    let candidates: Vec<_> = map
-        .iter()
-        .filter(|(k, _v)| {
-            !is_known_html_attr(k)
-            && !k.eq_ignore_ascii_case("children")
-            && !looks_like_attr(k)
-        })
-        .collect();
-
-    if candidates.len() == 1 {
-        let (key, val) = candidates[0];
-        Some((key.as_str(), val))
-    } else {
-        None
-    }
+    
+    None
 }
 
 /// Render HTML attributes from an object map, skipping `from` and `children`.
@@ -372,7 +390,11 @@ fn is_known_html_attr(key: &str) -> bool {
     if lower.starts_with("data-") {
         return true;
     }
-    KNOWN_HTML_ATTRS.iter().any(|&k| lower == k)
+    if KNOWN_HTML_ATTRS.iter().any(|&k| lower == k) {
+        return true;
+    }
+    // Also recognize framework attribute prefixes (x-, @, :, hx-, v-)
+    looks_like_attr(key)
 }
 
 /// Return `true` if `tag` is a known HTML void (self-closing) element (case-insensitive).
