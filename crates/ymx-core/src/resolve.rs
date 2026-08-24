@@ -30,11 +30,11 @@ use std::rc::Rc;
 use indexmap::IndexMap;
 
 use crate::builtin::{
-    Builtin, BuiltinCtx, BuiltinImpl, CoalesceBuiltin, EntriesBuiltin, FromEntriesBuiltin,
-    IsArrayBuiltin, IsNullBuiltin, IsNumberBuiltin, IsObjectBuiltin, IsStringBuiltin,
-    JoinBuiltin, KeysBuiltin, LowerBuiltin, MapBuiltin, MergeBuiltin, OmitBuiltin, PickBuiltin,
-    ReduceBuiltin, ReplaceBuiltin, SplitBuiltin, ToNumberBuiltin, ToStringBuiltin, TrimBuiltin,
-    TypeBuiltin, UpperBuiltin, ValuesBuiltin,
+    AvgBuiltin, Builtin, BuiltinCtx, BuiltinImpl, CoalesceBuiltin, EntriesBuiltin,
+    FromEntriesBuiltin, IsArrayBuiltin, IsNullBuiltin, IsNumberBuiltin, IsObjectBuiltin,
+    IsStringBuiltin, JoinBuiltin, KeysBuiltin, LowerBuiltin, MapBuiltin, MaxBuiltin, MergeBuiltin,
+    MinBuiltin, OmitBuiltin, PickBuiltin, ReduceBuiltin, ReplaceBuiltin, SplitBuiltin, SumBuiltin,
+    ToNumberBuiltin, ToStringBuiltin, TrimBuiltin, TypeBuiltin, UpperBuiltin, ValuesBuiltin,
 };
 use crate::callsite;
 use crate::diag::{Diagnostic, FileId, Span, E002, E003, E005, E006, E008, E009, E010, E011, E016};
@@ -1989,10 +1989,10 @@ impl<'a> Resolver<'a> {
                 Builtin::ToString => ToStringBuiltin.eval(&ctx, &call.args),
                 Builtin::ToNumber => ToNumberBuiltin.eval(&ctx, &call.args),
                 Builtin::Coalesce => CoalesceBuiltin.eval(&ctx, &call.args),
-                Builtin::Sum => Err(builtin_not_yet_implemented(ctx, "$sum")),
-                Builtin::Avg => Err(builtin_not_yet_implemented(ctx, "$avg")),
-                Builtin::Min => Err(builtin_not_yet_implemented(ctx, "$min")),
-                Builtin::Max => Err(builtin_not_yet_implemented(ctx, "$max")),
+                Builtin::Sum => SumBuiltin.eval(&ctx, &call.args),
+                Builtin::Avg => AvgBuiltin.eval(&ctx, &call.args),
+                Builtin::Min => MinBuiltin.eval(&ctx, &call.args),
+                Builtin::Max => MaxBuiltin.eval(&ctx, &call.args),
                 Builtin::If => Err(builtin_not_yet_implemented(ctx, "$if")),
                 Builtin::When => Err(builtin_not_yet_implemented(ctx, "$when")),
             };

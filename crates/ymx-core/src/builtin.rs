@@ -1612,6 +1612,246 @@ impl BuiltinImpl for CoalesceBuiltin {
     }
 }
 
+// ---- $sum ----
+
+pub struct SumBuiltin;
+
+impl BuiltinImpl for SumBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$sum expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let arr = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Array(items) = arr else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$sum argument must be an Array, got {:?}", arr),
+            ));
+        };
+
+        if items.is_empty() {
+            return Ok(Value::Int(0));
+        }
+
+        let mut has_float = false;
+        let mut int_sum: i64 = 0;
+        let mut float_sum: f64 = 0.0;
+
+        for item in &items {
+            match item {
+                Value::Int(i) => {
+                    if has_float {
+                        float_sum += *i as f64;
+                    } else {
+                        int_sum += i;
+                    }
+                }
+                Value::Float(f) => {
+                    if !has_float {
+                        float_sum = int_sum as f64;
+                        has_float = true;
+                    }
+                    float_sum += f;
+                }
+                other => {
+                    return Err(ctx_err(
+                        ctx,
+                        E011,
+                        format!("$sum: non-numeric element {:?}", other),
+                    ));
+                }
+            }
+        }
+
+        if has_float {
+            Ok(Value::Float(float_sum))
+        } else {
+            Ok(Value::Int(int_sum))
+        }
+    }
+}
+
+// ---- $avg ----
+
+pub struct AvgBuiltin;
+
+impl BuiltinImpl for AvgBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$avg expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let arr = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Array(items) = arr else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$avg argument must be an Array, got {:?}", arr),
+            ));
+        };
+
+        if items.is_empty() {
+            return Ok(Value::Null);
+        }
+
+        let mut sum: f64 = 0.0;
+
+        for item in &items {
+            match item {
+                Value::Int(i) => {
+                    sum += *i as f64;
+                }
+                Value::Float(f) => {
+                    sum += f;
+                }
+                other => {
+                    return Err(ctx_err(
+                        ctx,
+                        E011,
+                        format!("$avg: non-numeric element {:?}", other),
+                    ));
+                }
+            }
+        }
+
+        Ok(Value::Float(sum / items.len() as f64))
+    }
+}
+
+// ---- $min ----
+
+pub struct MinBuiltin;
+
+impl BuiltinImpl for MinBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$min expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let arr = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Array(items) = arr else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$min argument must be an Array, got {:?}", arr),
+            ));
+        };
+
+        if items.is_empty() {
+            return Ok(Value::Null);
+        }
+
+        let mut min_item = &items[0];
+        let mut min_float = value_to_f64(min_item).ok_or_else(|| {
+            ctx_err(
+                ctx,
+                E011,
+                format!("$min: non-numeric element {:?}", min_item),
+            )
+        })?;
+
+        for item in items.iter().skip(1) {
+            let f = value_to_f64(item).ok_or_else(|| {
+                ctx_err(
+                    ctx,
+                    E011,
+                    format!("$min: non-numeric element {:?}", item),
+                )
+            })?;
+            if f < min_float {
+                min_float = f;
+                min_item = item;
+            }
+        }
+
+        Ok(min_item.clone())
+    }
+}
+
+// ---- $max ----
+
+pub struct MaxBuiltin;
+
+impl BuiltinImpl for MaxBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$max expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let arr = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Array(items) = arr else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$max argument must be an Array, got {:?}", arr),
+            ));
+        };
+
+        if items.is_empty() {
+            return Ok(Value::Null);
+        }
+
+        let mut max_item = &items[0];
+        let mut max_float = value_to_f64(max_item).ok_or_else(|| {
+            ctx_err(
+                ctx,
+                E011,
+                format!("$max: non-numeric element {:?}", max_item),
+            )
+        })?;
+
+        for item in items.iter().skip(1) {
+            let f = value_to_f64(item).ok_or_else(|| {
+                ctx_err(
+                    ctx,
+                    E011,
+                    format!("$max: non-numeric element {:?}", item),
+                )
+            })?;
+            if f > max_float {
+                max_float = f;
+                max_item = item;
+            }
+        }
+
+        Ok(max_item.clone())
+    }
+}
+
 // ---- Shared helper functions ----
 
 /// Check if a value is truthy: `Bool(true)` is truthy, `Bool(false)` and
@@ -1621,6 +1861,15 @@ fn is_truthy(v: &Value) -> bool {
         Value::Bool(b) => *b,
         Value::Null => false,
         _ => true,
+    }
+}
+
+/// Extract the f64 value from a numeric `Value` (Int or Float).
+fn value_to_f64(v: &Value) -> Option<f64> {
+    match v {
+        Value::Int(i) => Some(*i as f64),
+        Value::Float(f) => Some(*f),
+        _ => None,
     }
 }
 
@@ -2055,26 +2304,10 @@ fn eval_builtin_call(
         Builtin::ToString => ToStringBuiltin.eval(&sub_ctx, &call.args),
         Builtin::ToNumber => ToNumberBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Coalesce => CoalesceBuiltin.eval(&sub_ctx, &call.args),
-        Builtin::Sum => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$sum is not yet implemented".to_string(),
-        )),
-        Builtin::Avg => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$avg is not yet implemented".to_string(),
-        )),
-        Builtin::Min => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$min is not yet implemented".to_string(),
-        )),
-        Builtin::Max => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$max is not yet implemented".to_string(),
-        )),
+        Builtin::Sum => SumBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Avg => AvgBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Min => MinBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Max => MaxBuiltin.eval(&sub_ctx, &call.args),
         Builtin::If => Err(ctx_err(
             &sub_ctx,
             E011,
