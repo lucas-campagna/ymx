@@ -246,7 +246,22 @@ pub fn classify(full_name: &str, span: Span) -> DefClass {
         span,
     };
     match effective_id.as_str() {
-        "map" | "reduce" | "merge" => DefClass::BuiltinReserved(meta),
+        // Existing builtins
+        "map" | "reduce" | "merge"
+        // String builtins
+        | "split" | "join" | "trim" | "upper" | "lower" | "replace"
+        // Array builtins
+        | "filter" | "sort" | "reverse" | "unique" | "flatten"
+        | "first" | "last" | "slice"
+        // Object builtins
+        | "keys" | "values" | "entries" | "from_entries" | "pick" | "omit"
+        // Type builtins
+        | "type" | "is_array" | "is_object" | "is_string" | "is_number"
+        | "is_null" | "to_string" | "to_number" | "coalesce"
+        // Math aggregate builtins
+        | "sum" | "avg" | "min" | "max"
+        // Conditional builtins
+        | "if" | "when" => DefClass::BuiltinReserved(meta),
         "_ymx" if dollar_count == 0 && !trailing_dollar => DefClass::MetaBare(MetaKey::Ymx, span),
         "_test" if dollar_count == 0 && !trailing_dollar => DefClass::MetaBare(MetaKey::Test, span),
         "_use" if dollar_count == 0 && !trailing_dollar => DefClass::MetaBare(MetaKey::Use, span),
@@ -1225,11 +1240,11 @@ mod tests {
 
     #[test]
     fn trailing_dollar_top_level_component_registered_with_math_shorthand() {
-        // `sum$: x + y` — component `sum` with math_shorthand flag.
-        let ex = extract(0, "sum$: x + y\n");
-        assert_eq!(ex.defs.len(), 1, "sum$ registers as a component");
+        // `add$: x + y` — component `add` with math_shorthand flag.
+        let ex = extract(0, "add$: x + y\n");
+        assert_eq!(ex.defs.len(), 1, "add$ registers as a component");
         let def = &ex.defs[0];
-        assert_eq!(def.full_name, "sum$");
+        assert_eq!(def.full_name, "add$");
         assert!(def.math_shorthand, "math_shorthand should be true");
         // Body is stored as the raw string "x + y".
         assert!(matches!(&def.body, Node::String(s, _) if s == "x + y"));
@@ -1247,11 +1262,11 @@ mod tests {
 
     #[test]
     fn leading_and_trailing_dollar_both_stripped() {
-        // `$sum$: x + y` — leading $ for template, trailing $ for math shorthand.
-        let ex = extract(0, "$sum$: x + y\n");
-        assert_eq!(ex.defs.len(), 1, "$sum$ registers as a component");
+        // `$add$: x + y` — leading $ for template, trailing $ for math shorthand.
+        let ex = extract(0, "$add$: x + y\n");
+        assert_eq!(ex.defs.len(), 1, "$add$ registers as a component");
         let def = &ex.defs[0];
-        assert_eq!(def.full_name, "$sum$");
+        assert_eq!(def.full_name, "$add$");
         assert!(def.math_shorthand);
     }
 

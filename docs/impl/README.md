@@ -1,7 +1,7 @@
 ---
 version: "1.x"
 title: "YMX v1 implementation plan"
-short: "Index of versioned implementation milestones (1.1 – 1.33)"
+short: "Index of versioned implementation milestones (1.1 – 1.34)"
 description: |
   Tracks the build of YMX v1 per docs/PRD.md: the rules-1–18 resolver, JSON
   output, CLI + library, inline `_test`, file-path entry addressing, and
@@ -53,6 +53,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.31 | `done` | Component calls in shell interpolation | ymx-core | [1.31-shell-component-call.md](1.31-shell-component-call.md) | 1.27 |
 | 1.32 | `done` | CLI `--errors` flag | ymx-cli | [1.32-errors-flag.md](1.32-errors-flag.md) | 1.10 |
 | 1.33 | `done` | Shell execution stderr capture | ymx-core, ymx-lib | [1.33-stderr-capture.md](1.33-stderr-capture.md) | 1.27 |
+| 1.34 | `planned` | Additional builtins: $split/$join/$filter/… | ymx-core | [1.34-additional-builtins.md](1.34-additional-builtins.md) | 1.8 |
 
 ## Cross-cutting notes
 

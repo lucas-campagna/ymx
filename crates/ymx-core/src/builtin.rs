@@ -26,12 +26,53 @@ use crate::project::Options;
 use crate::project::Project;
 use crate::resolve::LookupMiss;
 
-/// The three v1 builtins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Builtin {
+    // Existing
     Merge,
     Map,
     Reduce,
+    // String
+    Split,
+    Join,
+    Trim,
+    Upper,
+    Lower,
+    Replace,
+    // Array
+    Filter,
+    Sort,
+    Reverse,
+    Unique,
+    Flatten,
+    First,
+    Last,
+    Slice,
+    // Object
+    Keys,
+    Values,
+    Entries,
+    FromEntries,
+    Pick,
+    Omit,
+    // Type
+    Type,
+    IsArray,
+    IsObject,
+    IsString,
+    IsNumber,
+    IsNull,
+    ToString,
+    ToNumber,
+    Coalesce,
+    // Math aggregates
+    Sum,
+    Avg,
+    Min,
+    Max,
+    // Conditional
+    If,
+    When,
 }
 
 /// Result type for `eval_resolve_call_args`: (named args, positional args).
@@ -45,6 +86,47 @@ impl Builtin {
             "merge" => Some(Builtin::Merge),
             "map" => Some(Builtin::Map),
             "reduce" => Some(Builtin::Reduce),
+            // String
+            "split" => Some(Builtin::Split),
+            "join" => Some(Builtin::Join),
+            "trim" => Some(Builtin::Trim),
+            "upper" => Some(Builtin::Upper),
+            "lower" => Some(Builtin::Lower),
+            "replace" => Some(Builtin::Replace),
+            // Array
+            "filter" => Some(Builtin::Filter),
+            "sort" => Some(Builtin::Sort),
+            "reverse" => Some(Builtin::Reverse),
+            "unique" => Some(Builtin::Unique),
+            "flatten" => Some(Builtin::Flatten),
+            "first" => Some(Builtin::First),
+            "last" => Some(Builtin::Last),
+            "slice" => Some(Builtin::Slice),
+            // Object
+            "keys" => Some(Builtin::Keys),
+            "values" => Some(Builtin::Values),
+            "entries" => Some(Builtin::Entries),
+            "from_entries" => Some(Builtin::FromEntries),
+            "pick" => Some(Builtin::Pick),
+            "omit" => Some(Builtin::Omit),
+            // Type
+            "type" => Some(Builtin::Type),
+            "is_array" => Some(Builtin::IsArray),
+            "is_object" => Some(Builtin::IsObject),
+            "is_string" => Some(Builtin::IsString),
+            "is_number" => Some(Builtin::IsNumber),
+            "is_null" => Some(Builtin::IsNull),
+            "to_string" => Some(Builtin::ToString),
+            "to_number" => Some(Builtin::ToNumber),
+            "coalesce" => Some(Builtin::Coalesce),
+            // Math aggregates
+            "sum" => Some(Builtin::Sum),
+            "avg" => Some(Builtin::Avg),
+            "min" => Some(Builtin::Min),
+            "max" => Some(Builtin::Max),
+            // Conditional
+            "if" => Some(Builtin::If),
+            "when" => Some(Builtin::When),
             _ => None,
         }
     }
@@ -741,6 +823,181 @@ fn eval_builtin_call(
         Builtin::Merge => MergeBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Map => MapBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Reduce => ReduceBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Split => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$split is not yet implemented".to_string(),
+        )),
+        Builtin::Join => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$join is not yet implemented".to_string(),
+        )),
+        Builtin::Trim => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$trim is not yet implemented".to_string(),
+        )),
+        Builtin::Upper => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$upper is not yet implemented".to_string(),
+        )),
+        Builtin::Lower => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$lower is not yet implemented".to_string(),
+        )),
+        Builtin::Replace => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$replace is not yet implemented".to_string(),
+        )),
+        Builtin::Filter => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$filter is not yet implemented".to_string(),
+        )),
+        Builtin::Sort => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$sort is not yet implemented".to_string(),
+        )),
+        Builtin::Reverse => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$reverse is not yet implemented".to_string(),
+        )),
+        Builtin::Unique => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$unique is not yet implemented".to_string(),
+        )),
+        Builtin::Flatten => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$flatten is not yet implemented".to_string(),
+        )),
+        Builtin::First => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$first is not yet implemented".to_string(),
+        )),
+        Builtin::Last => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$last is not yet implemented".to_string(),
+        )),
+        Builtin::Slice => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$slice is not yet implemented".to_string(),
+        )),
+        Builtin::Keys => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$keys is not yet implemented".to_string(),
+        )),
+        Builtin::Values => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$values is not yet implemented".to_string(),
+        )),
+        Builtin::Entries => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$entries is not yet implemented".to_string(),
+        )),
+        Builtin::FromEntries => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$from_entries is not yet implemented".to_string(),
+        )),
+        Builtin::Pick => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$pick is not yet implemented".to_string(),
+        )),
+        Builtin::Omit => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$omit is not yet implemented".to_string(),
+        )),
+        Builtin::Type => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$type is not yet implemented".to_string(),
+        )),
+        Builtin::IsArray => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$is_array is not yet implemented".to_string(),
+        )),
+        Builtin::IsObject => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$is_object is not yet implemented".to_string(),
+        )),
+        Builtin::IsString => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$is_string is not yet implemented".to_string(),
+        )),
+        Builtin::IsNumber => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$is_number is not yet implemented".to_string(),
+        )),
+        Builtin::IsNull => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$is_null is not yet implemented".to_string(),
+        )),
+        Builtin::ToString => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$to_string is not yet implemented".to_string(),
+        )),
+        Builtin::ToNumber => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$to_number is not yet implemented".to_string(),
+        )),
+        Builtin::Coalesce => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$coalesce is not yet implemented".to_string(),
+        )),
+        Builtin::Sum => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$sum is not yet implemented".to_string(),
+        )),
+        Builtin::Avg => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$avg is not yet implemented".to_string(),
+        )),
+        Builtin::Min => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$min is not yet implemented".to_string(),
+        )),
+        Builtin::Max => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$max is not yet implemented".to_string(),
+        )),
+        Builtin::If => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$if is not yet implemented".to_string(),
+        )),
+        Builtin::When => Err(ctx_err(
+            &sub_ctx,
+            E011,
+            "$when is not yet implemented".to_string(),
+        )),
     }
 }
 

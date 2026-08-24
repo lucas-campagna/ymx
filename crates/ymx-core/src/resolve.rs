@@ -1954,6 +1954,41 @@ impl<'a> Resolver<'a> {
                 Builtin::Merge => MergeBuiltin.eval(&ctx, &call.args),
                 Builtin::Map => MapBuiltin.eval(&ctx, &call.args),
                 Builtin::Reduce => ReduceBuiltin.eval(&ctx, &call.args),
+                Builtin::Split => Err(builtin_not_yet_implemented(ctx, "$split")),
+                Builtin::Join => Err(builtin_not_yet_implemented(ctx, "$join")),
+                Builtin::Trim => Err(builtin_not_yet_implemented(ctx, "$trim")),
+                Builtin::Upper => Err(builtin_not_yet_implemented(ctx, "$upper")),
+                Builtin::Lower => Err(builtin_not_yet_implemented(ctx, "$lower")),
+                Builtin::Replace => Err(builtin_not_yet_implemented(ctx, "$replace")),
+                Builtin::Filter => Err(builtin_not_yet_implemented(ctx, "$filter")),
+                Builtin::Sort => Err(builtin_not_yet_implemented(ctx, "$sort")),
+                Builtin::Reverse => Err(builtin_not_yet_implemented(ctx, "$reverse")),
+                Builtin::Unique => Err(builtin_not_yet_implemented(ctx, "$unique")),
+                Builtin::Flatten => Err(builtin_not_yet_implemented(ctx, "$flatten")),
+                Builtin::First => Err(builtin_not_yet_implemented(ctx, "$first")),
+                Builtin::Last => Err(builtin_not_yet_implemented(ctx, "$last")),
+                Builtin::Slice => Err(builtin_not_yet_implemented(ctx, "$slice")),
+                Builtin::Keys => Err(builtin_not_yet_implemented(ctx, "$keys")),
+                Builtin::Values => Err(builtin_not_yet_implemented(ctx, "$values")),
+                Builtin::Entries => Err(builtin_not_yet_implemented(ctx, "$entries")),
+                Builtin::FromEntries => Err(builtin_not_yet_implemented(ctx, "$from_entries")),
+                Builtin::Pick => Err(builtin_not_yet_implemented(ctx, "$pick")),
+                Builtin::Omit => Err(builtin_not_yet_implemented(ctx, "$omit")),
+                Builtin::Type => Err(builtin_not_yet_implemented(ctx, "$type")),
+                Builtin::IsArray => Err(builtin_not_yet_implemented(ctx, "$is_array")),
+                Builtin::IsObject => Err(builtin_not_yet_implemented(ctx, "$is_object")),
+                Builtin::IsString => Err(builtin_not_yet_implemented(ctx, "$is_string")),
+                Builtin::IsNumber => Err(builtin_not_yet_implemented(ctx, "$is_number")),
+                Builtin::IsNull => Err(builtin_not_yet_implemented(ctx, "$is_null")),
+                Builtin::ToString => Err(builtin_not_yet_implemented(ctx, "$to_string")),
+                Builtin::ToNumber => Err(builtin_not_yet_implemented(ctx, "$to_number")),
+                Builtin::Coalesce => Err(builtin_not_yet_implemented(ctx, "$coalesce")),
+                Builtin::Sum => Err(builtin_not_yet_implemented(ctx, "$sum")),
+                Builtin::Avg => Err(builtin_not_yet_implemented(ctx, "$avg")),
+                Builtin::Min => Err(builtin_not_yet_implemented(ctx, "$min")),
+                Builtin::Max => Err(builtin_not_yet_implemented(ctx, "$max")),
+                Builtin::If => Err(builtin_not_yet_implemented(ctx, "$if")),
+                Builtin::When => Err(builtin_not_yet_implemented(ctx, "$when")),
             };
         }
 
@@ -2120,6 +2155,17 @@ fn ctx_err(scope: &Scope<'_>, code: &'static str, message: String) -> Diagnostic
         component: scope.component.clone(),
         code,
         message,
+    }
+}
+
+fn builtin_not_yet_implemented(ctx: BuiltinCtx<'_>, name: &str) -> Diagnostic {
+    Diagnostic {
+        file: ctx.file,
+        line: ctx.span.line,
+        col: ctx.span.col,
+        component: ctx.component,
+        code: E011,
+        message: format!("{name} is not yet implemented"),
     }
 }
 
@@ -2906,7 +2952,7 @@ mod tests {
     fn inline_call_site_binds_positional_and_named_args() {
         let p = project_with(&[(
             "main.yml",
-            "sum: \"$0 + $1\"\ngreet: \"hi $name\"\nmain: [\"$sum(12, 34)\", \"$greet(name=Bob)\"]\n",
+            "add: \"$0 + $1\"\ngreet: \"hi $name\"\nmain: [\"$add(12, 34)\", \"$greet(name=Bob)\"]\n",
         )]);
         assert_eq!(
             compile_ok(&p, "main", &Args::None),

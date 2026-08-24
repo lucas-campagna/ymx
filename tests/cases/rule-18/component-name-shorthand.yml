@@ -2,15 +2,15 @@
 comp:
   a$: x + y
 
-# sum$: x + y — top-level key ends with $, value is math source, stored as component "sum"
-# with math_shorthand=true; equivalent to sum: ${x + y}
-sum$:
+# add$: x + y — top-level key ends with $, value is math source, stored as component "add"
+# with math_shorthand=true; equivalent to add: ${x + y}
+add$:
   x + y
 
 _test:
   comp:
     args: {x: 3, y: 5}
     result: {a: 8}
-  sum:
+  add:
     args: {x: 3, y: 5}
     result: 8

@@ -1,13 +1,13 @@
 _ymx:
   max_depth: 1
-sum: ${$0 + $1}
+add: ${$0 + $1}
 named_sum: ${$a * 100 + $b}
 noop: ready
 obj:
   a: 1
 recurse: $sh{echo $recurse()}
 positional:
-  out: $sh{echo $sum(12, 34)}
+  out: $sh{echo $add(12, 34)}
 named:
   out: $sh{echo $named_sum(a=1, b=2)}
 no_args:
