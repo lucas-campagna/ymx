@@ -336,14 +336,8 @@ fn render_attrs(map: &IndexMap<String, Value>) -> String {
             Value::Bool(false) | Value::Null => continue,
             Value::String(s) if s.is_empty() => continue,
             Value::Bool(true) => {
-                if is_boolean_attr(key) {
-                    out.push(' ');
-                    out.push_str(key);
-                } else {
-                    out.push(' ');
-                    out.push_str(key);
-                    out.push_str("=\"true\"");
-                }
+                out.push(' ');
+                out.push_str(key);
             }
             _ => {
                 let normalized = match key.as_str() {
