@@ -30,9 +30,11 @@ use std::rc::Rc;
 use indexmap::IndexMap;
 
 use crate::builtin::{
-    Builtin, BuiltinCtx, BuiltinImpl, EntriesBuiltin, FromEntriesBuiltin, JoinBuiltin,
-    KeysBuiltin, LowerBuiltin, MapBuiltin, MergeBuiltin, OmitBuiltin, PickBuiltin,
-    ReduceBuiltin, ReplaceBuiltin, SplitBuiltin, TrimBuiltin, UpperBuiltin, ValuesBuiltin,
+    Builtin, BuiltinCtx, BuiltinImpl, CoalesceBuiltin, EntriesBuiltin, FromEntriesBuiltin,
+    IsArrayBuiltin, IsNullBuiltin, IsNumberBuiltin, IsObjectBuiltin, IsStringBuiltin,
+    JoinBuiltin, KeysBuiltin, LowerBuiltin, MapBuiltin, MergeBuiltin, OmitBuiltin, PickBuiltin,
+    ReduceBuiltin, ReplaceBuiltin, SplitBuiltin, ToNumberBuiltin, ToStringBuiltin, TrimBuiltin,
+    TypeBuiltin, UpperBuiltin, ValuesBuiltin,
 };
 use crate::callsite;
 use crate::diag::{Diagnostic, FileId, Span, E002, E003, E005, E006, E008, E009, E010, E011, E016};
@@ -1978,15 +1980,15 @@ impl<'a> Resolver<'a> {
                 Builtin::FromEntries => FromEntriesBuiltin.eval(&ctx, &call.args),
                 Builtin::Pick => PickBuiltin.eval(&ctx, &call.args),
                 Builtin::Omit => OmitBuiltin.eval(&ctx, &call.args),
-                Builtin::Type => Err(builtin_not_yet_implemented(ctx, "$type")),
-                Builtin::IsArray => Err(builtin_not_yet_implemented(ctx, "$is_array")),
-                Builtin::IsObject => Err(builtin_not_yet_implemented(ctx, "$is_object")),
-                Builtin::IsString => Err(builtin_not_yet_implemented(ctx, "$is_string")),
-                Builtin::IsNumber => Err(builtin_not_yet_implemented(ctx, "$is_number")),
-                Builtin::IsNull => Err(builtin_not_yet_implemented(ctx, "$is_null")),
-                Builtin::ToString => Err(builtin_not_yet_implemented(ctx, "$to_string")),
-                Builtin::ToNumber => Err(builtin_not_yet_implemented(ctx, "$to_number")),
-                Builtin::Coalesce => Err(builtin_not_yet_implemented(ctx, "$coalesce")),
+                Builtin::Type => TypeBuiltin.eval(&ctx, &call.args),
+                Builtin::IsArray => IsArrayBuiltin.eval(&ctx, &call.args),
+                Builtin::IsObject => IsObjectBuiltin.eval(&ctx, &call.args),
+                Builtin::IsString => IsStringBuiltin.eval(&ctx, &call.args),
+                Builtin::IsNumber => IsNumberBuiltin.eval(&ctx, &call.args),
+                Builtin::IsNull => IsNullBuiltin.eval(&ctx, &call.args),
+                Builtin::ToString => ToStringBuiltin.eval(&ctx, &call.args),
+                Builtin::ToNumber => ToNumberBuiltin.eval(&ctx, &call.args),
+                Builtin::Coalesce => CoalesceBuiltin.eval(&ctx, &call.args),
                 Builtin::Sum => Err(builtin_not_yet_implemented(ctx, "$sum")),
                 Builtin::Avg => Err(builtin_not_yet_implemented(ctx, "$avg")),
                 Builtin::Min => Err(builtin_not_yet_implemented(ctx, "$min")),

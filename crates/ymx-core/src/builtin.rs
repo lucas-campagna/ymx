@@ -1363,6 +1363,255 @@ impl BuiltinImpl for OmitBuiltin {
     }
 }
 
+// ---- $type ----
+
+pub struct TypeBuiltin;
+
+impl BuiltinImpl for TypeBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$type expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let val = resolve_parsed_value(&args[0].value, ctx)?;
+        let type_name = match &val {
+            Value::Null => "null",
+            Value::Bool(_) => "bool",
+            Value::Int(_) => "int",
+            Value::Float(_) => "float",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => "object",
+        };
+        Ok(Value::string(type_name.to_string()))
+    }
+}
+
+// ---- $is_array ----
+
+pub struct IsArrayBuiltin;
+
+impl BuiltinImpl for IsArrayBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$is_array expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let val = resolve_parsed_value(&args[0].value, ctx)?;
+        Ok(Value::Bool(matches!(val, Value::Array(_))))
+    }
+}
+
+// ---- $is_object ----
+
+pub struct IsObjectBuiltin;
+
+impl BuiltinImpl for IsObjectBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!(
+                    "$is_object expects exactly 1 argument, got {}",
+                    args.len()
+                ),
+            ));
+        }
+
+        let val = resolve_parsed_value(&args[0].value, ctx)?;
+        Ok(Value::Bool(matches!(val, Value::Object(_))))
+    }
+}
+
+// ---- $is_string ----
+
+pub struct IsStringBuiltin;
+
+impl BuiltinImpl for IsStringBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!(
+                    "$is_string expects exactly 1 argument, got {}",
+                    args.len()
+                ),
+            ));
+        }
+
+        let val = resolve_parsed_value(&args[0].value, ctx)?;
+        Ok(Value::Bool(matches!(val, Value::String(_))))
+    }
+}
+
+// ---- $is_number ----
+
+pub struct IsNumberBuiltin;
+
+impl BuiltinImpl for IsNumberBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!(
+                    "$is_number expects exactly 1 argument, got {}",
+                    args.len()
+                ),
+            ));
+        }
+
+        let val = resolve_parsed_value(&args[0].value, ctx)?;
+        Ok(Value::Bool(matches!(val, Value::Int(_) | Value::Float(_))))
+    }
+}
+
+// ---- $is_null ----
+
+pub struct IsNullBuiltin;
+
+impl BuiltinImpl for IsNullBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$is_null expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let val = resolve_parsed_value(&args[0].value, ctx)?;
+        Ok(Value::Bool(matches!(val, Value::Null)))
+    }
+}
+
+// ---- $to_string ----
+
+pub struct ToStringBuiltin;
+
+impl BuiltinImpl for ToStringBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!(
+                    "$to_string expects exactly 1 argument, got {}",
+                    args.len()
+                ),
+            ));
+        }
+
+        let val = resolve_parsed_value(&args[0].value, ctx)?;
+        let s = value_to_string(&val).map_err(|_| {
+            ctx_err(
+                ctx,
+                E011,
+                format!("$to_string: cannot coerce {:?} to string", val),
+            )
+        })?;
+        Ok(Value::string(s))
+    }
+}
+
+// ---- $to_number ----
+
+pub struct ToNumberBuiltin;
+
+impl BuiltinImpl for ToNumberBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!(
+                    "$to_number expects exactly 1 argument, got {}",
+                    args.len()
+                ),
+            ));
+        }
+
+        let val = resolve_parsed_value(&args[0].value, ctx)?;
+        match &val {
+            Value::String(s) => {
+                // Try Int first, then Float; if neither → Null.
+                if let Ok(i) = s.parse::<i64>() {
+                    Ok(Value::Int(i))
+                } else if let Ok(f) = s.parse::<f64>() {
+                    Ok(Value::Float(f))
+                } else {
+                    Ok(Value::Null)
+                }
+            }
+            Value::Int(_) | Value::Float(_) => Ok(val),
+            _ => Ok(Value::Null),
+        }
+    }
+}
+
+// ---- $coalesce ----
+
+pub struct CoalesceBuiltin;
+
+impl BuiltinImpl for CoalesceBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        // Variadic: accepts 0+ args, all evaluated eagerly.
+        for arg in args {
+            let val = resolve_parsed_value(&arg.value, ctx)?;
+            if !matches!(val, Value::Null) {
+                return Ok(val);
+            }
+        }
+        Ok(Value::Null)
+    }
+}
+
 // ---- Shared helper functions ----
 
 /// Check if a value is truthy: `Bool(true)` is truthy, `Bool(false)` and
@@ -1797,51 +2046,15 @@ fn eval_builtin_call(
         Builtin::FromEntries => FromEntriesBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Pick => PickBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Omit => OmitBuiltin.eval(&sub_ctx, &call.args),
-        Builtin::Type => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$type is not yet implemented".to_string(),
-        )),
-        Builtin::IsArray => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$is_array is not yet implemented".to_string(),
-        )),
-        Builtin::IsObject => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$is_object is not yet implemented".to_string(),
-        )),
-        Builtin::IsString => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$is_string is not yet implemented".to_string(),
-        )),
-        Builtin::IsNumber => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$is_number is not yet implemented".to_string(),
-        )),
-        Builtin::IsNull => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$is_null is not yet implemented".to_string(),
-        )),
-        Builtin::ToString => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$to_string is not yet implemented".to_string(),
-        )),
-        Builtin::ToNumber => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$to_number is not yet implemented".to_string(),
-        )),
-        Builtin::Coalesce => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$coalesce is not yet implemented".to_string(),
-        )),
+        Builtin::Type => TypeBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::IsArray => IsArrayBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::IsObject => IsObjectBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::IsString => IsStringBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::IsNumber => IsNumberBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::IsNull => IsNullBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::ToString => ToStringBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::ToNumber => ToNumberBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Coalesce => CoalesceBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Sum => Err(ctx_err(
             &sub_ctx,
             E011,
