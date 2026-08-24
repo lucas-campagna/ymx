@@ -582,7 +582,10 @@ mod tests {
     #[test]
     fn find_tag_shortcut_accepts_array_value() {
         let mut map = IndexMap::new();
-        map.insert("body".into(), Value::array(vec![Value::string("a"), Value::string("b")]));
+        map.insert(
+            "body".into(),
+            Value::array(vec![Value::string("a"), Value::string("b")]),
+        );
         let result = find_tag_shortcut(&map);
         assert!(result.is_some());
         let (tag, val) = result.unwrap();
