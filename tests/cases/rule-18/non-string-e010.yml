@@ -1,7 +1,0 @@
-# Non-string value with $ modifier is E010
-comp:
-  x$: [1, 2]
-_test:
-  comp:
-    args: {}
-    error: E010

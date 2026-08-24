@@ -1,5 +1,6 @@
+# $ modifier with array/object value is still E010 (containers not allowed)
 comp:
-  x$: 1
+  x$: [1, 2]
 _test:
   comp:
     error: E010

@@ -1,0 +1,7 @@
+# Array value with $ modifier is E010 (containers not allowed as math source)
+comp:
+  x$: [1, 2]
+_test:
+  comp:
+    args: {}
+    error: E010

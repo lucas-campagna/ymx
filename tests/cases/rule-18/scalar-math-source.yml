@@ -1,0 +1,12 @@
+# Scalar values (Int, Float) with $ modifier are converted to string math source.
+# x$: 1  is equivalent to  x$: "1" and evaluates to integer 1
+# x$: 2.5 is equivalent to  x$: "2.5" and evaluates to float 2.5
+# Note: String values like "3" are evaluated as math, resulting in number 3.
+comp:
+  int$: 1
+  float$: 2.5
+  from_string$: "3"
+_test:
+  comp:
+    args: {}
+    result: {int: 1, float: 2.5, from_string: 3}

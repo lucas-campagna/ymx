@@ -1414,20 +1414,8 @@ impl<'a> Resolver<'a> {
                                 format!("slot key `{s}` is too large (max {MAX_SLOTS})"),
                             ));
                         }
-                        let Node::String(math_src, span) = &entry.value else {
-                            let value_span = entry.value.span();
-                            return Err(Diagnostic {
-                                file: scope.file.clone(),
-                                line: value_span.line,
-                                col: value_span.col,
-                                component: scope.component.clone(),
-                                code: E010,
-                                message: format!(
-                                    "value for slot shorthand `{s}` must be a string (math source)"
-                                ),
-                            });
-                        };
-                        let segments = interp::scan(&format!("${{{math_src}}}"), *span)?;
+                        let (math_src, span) = self.math_source_string(&entry.value, scope, s)?;
+                        let segments = interp::scan(&format!("${{{math_src}}}"), span)?;
                         let value = interp::resolve(&segments, scope, &V1Engine)?;
                         if set.slots.len() <= idx {
                             set.slots.resize(idx + 1, Value::Null);
@@ -1437,20 +1425,8 @@ impl<'a> Resolver<'a> {
                     } else {
                         // `x$` — named property with math shorthand value.
                         // Value must be a string; wrap it in `${...}` and resolve.
-                        let Node::String(math_src, span) = &entry.value else {
-                            let value_span = entry.value.span();
-                            return Err(Diagnostic {
-                                file: scope.file.clone(),
-                                line: value_span.line,
-                                col: value_span.col,
-                                component: scope.component.clone(),
-                                code: E010,
-                                message: format!(
-                                    "value for property shorthand `{s}` must be a string (math source)"
-                                ),
-                            });
-                        };
-                        let segments = interp::scan(&format!("${{{math_src}}}"), *span)?;
+                        let (math_src, span) = self.math_source_string(&entry.value, scope, s)?;
+                        let segments = interp::scan(&format!("${{{math_src}}}"), span)?;
                         let value = interp::resolve(&segments, scope, &V1Engine)?;
                         set.named.insert(base.to_string(), value);
                         set.order.push(PropKey::Named(base.to_string()));
@@ -1579,9 +1555,10 @@ impl<'a> Resolver<'a> {
         for entry in entries {
             match &entry.key {
                 crate::parse::Key::String(name) => {
-                    // Skip `?` and `?$` entries — they're handled in the first match
-                    // arms above and evaluated lazily (or in the lazy phase for ?$).
-                    if name.ends_with('?') || name.ends_with("?$") {
+                    // Skip `?`, `?$`, and `$` entries — they're all handled in the
+                    // first match arms above. `?`/`?$` are lazy (or ?$ math-lazy),
+                    // and `$` is the eager math shorthand.
+                    if name.ends_with('?') || name.ends_with("?$") || name.ends_with('$') {
                         continue;
                     }
                     let is_math_key = name.ends_with('$');
@@ -1680,6 +1657,34 @@ impl<'a> Resolver<'a> {
                 code: E011,
                 message: "executor command must be a scalar value (array/object not allowed)"
                     .to_string(),
+            }),
+        }
+    }
+
+    /// Extract a scalar value as a math source string for the `$` shorthand
+    /// (rule 18). Strings pass through; other scalars (Int, Float, Bool, Null)
+    /// are rendered to string; arrays/objects are E010.
+    fn math_source_string(
+        &self,
+        node: &Node,
+        scope: &Scope<'_>,
+        key: &str,
+    ) -> Result<(String, Span), Diagnostic> {
+        match node {
+            Node::String(s, span) => Ok((s.clone(), *span)),
+            Node::Int(i, span) => Ok((i.to_string(), *span)),
+            Node::Float(f, span) => Ok((crate::ir::render_f64(*f), *span)),
+            Node::Bool(b, span) => Ok((b.to_string(), *span)),
+            Node::Null(span) => Ok(("null".to_string(), *span)),
+            Node::Array(_, value_span) | Node::Object(_, value_span) => Err(Diagnostic {
+                file: scope.file.clone(),
+                line: value_span.line,
+                col: value_span.col,
+                component: scope.component.clone(),
+                code: E010,
+                message: format!(
+                    "value for property shorthand `{key}` must be a scalar (array/object not allowed)"
+                ),
             }),
         }
     }
