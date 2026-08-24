@@ -1,0 +1,15 @@
+_test:
+  alpine:
+    format: html
+    result: "<script src=\"//unpkg.com/alpinejs\" defer></script><div x-data=\"{\"open\":false}\"><button @click=\"open = true\">Expand</button><span x-show=\"open\">Content...</span></div>"
+
+alpine:
+  - from: script
+    src: "//unpkg.com/alpinejs"
+    defer: true
+  - div:
+      - button: Expand
+        "@click": "open = true"
+      - span: Content...
+        x-show: open
+    x-data: {open: false}

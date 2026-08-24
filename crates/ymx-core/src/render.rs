@@ -1,4 +1,5 @@
 use indexmap::IndexMap;
+use serde_json;
 
 use crate::ir::{render_f64, Value};
 
@@ -31,6 +32,7 @@ const BOOLEAN_ATTRS: &[&str] = &[
     "formnovalidate",
     "reversed",
     "indeterminate",
+    "defer",
 ];
 
 /// Lowercase set of HTML void (self-closing) elements that have no closing tag.
@@ -165,15 +167,83 @@ fn render_tag(map: &IndexMap<String, Value>) -> String {
         })
         .unwrap_or("div");
 
-    let attrs = render_attrs(map);
+    let mut attrs = render_attrs(map);
 
-    let inner = map.get("children").map(render_value).unwrap_or_default();
+    // Determine inner content and any additional attrs from nested children object
+    let inner = if let Some(Value::Object(children_obj)) = map.get("children") {
+        // If children value is an object with a `children` key AND no `from` key,
+        // extract inner children and use the remaining keys as additional attributes.
+        // If the children object has `from`, it's a nested tag — render normally.
+        if children_obj.get("children").is_some() && !children_obj.contains_key("from") {
+            let inner_children = children_obj.get("children").unwrap();
+            // Build extra attr string for the outer tag from the children object's other keys
+            let extra_attrs = render_attrs_from_map(children_obj, Some(&["children".into(), "from".into()]));
+            if !extra_attrs.is_empty() {
+                attrs.push_str(&extra_attrs);
+            }
+            // Render the inner children value
+            render_value(inner_children)
+        } else {
+            // Either no `children` key, or has `from` — treat as normal nested tag
+            render_value(&Value::Object(children_obj.clone()))
+        }
+    } else {
+        // Children is not an object (scalar, array, etc.)
+        map.get("children").map(render_value).unwrap_or_default()
+    };
 
     if inner.is_empty() && is_void_element(tag) {
         format!("<{tag}{attrs}>")
     } else {
         format!("<{tag}{attrs}>{inner}</{tag}>")
     }
+}
+
+/// Render attributes from an object map, optionally skipping certain keys.
+fn render_attrs_from_map(map: &IndexMap<String, Value>, skip_keys: Option<&[std::borrow::Cow<'_, str>]>) -> String {
+    let mut out = String::new();
+
+    for (key, val) in map {
+        if key == "from" || key == "children" {
+            continue;
+        }
+        if let Some(skip) = skip_keys {
+            if skip.iter().any(|k| k.eq_ignore_ascii_case(key)) {
+                continue;
+            }
+        }
+
+        match val {
+            Value::Bool(false) | Value::Null => continue,
+            Value::String(s) if s.is_empty() => continue,
+            Value::Bool(true) => {
+                if is_boolean_attr(key) {
+                    out.push(' ');
+                    out.push_str(key);
+                } else {
+                    out.push(' ');
+                    out.push_str(key);
+                    out.push_str("=\"true\"");
+                }
+            }
+            _ => {
+                let normalized = match key.as_str() {
+                    "style" => normalize_style(val),
+                    "class" => normalize_class(val),
+                    _ => stringify_attr_value(val),
+                };
+                if !normalized.is_empty() {
+                    out.push(' ');
+                    out.push_str(key);
+                    out.push_str("=\"");
+                    out.push_str(&normalized);
+                    out.push('"');
+                }
+            }
+        }
+    }
+
+    out
 }
 
 /// Render an object without `from` as text content for each key-value pair.
@@ -198,21 +268,59 @@ fn render_object_text(map: &IndexMap<String, Value>) -> String {
     out
 }
 
-/// Find a single key that is not a known HTML attribute.
-/// Scalars, objects, and arrays are all valid shortcut values.
-/// If found, returns Some((key, &value)) representing the implied tag name and children.
+/// Return `true` if `key` looks like a framework/directive attribute rather than a tag name.
+/// Matches patterns like: `x-data`, `@click`, `x-show`, `hx-target`, `:value`, etc.
+fn looks_like_attr(key: &str) -> bool {
+    let k = key.as_bytes();
+    // @click, @submit, @change, etc. (event handlers)
+    k.first() == Some(&b'@')
+    // x-data, x-show, x-model, x-bind, x-for, x-if, x-scope, etc. (Alpine/livewire)
+    || (k.first() == Some(&b'x') && k.get(1) == Some(&b'-'))
+    // :value, :disabled, etc. (Vue bindings / Alpine x-bind shorthand)
+    || (k.first() == Some(&b':') && k.len() > 1)
+    // hx-target, hx-post, etc. (HTMX attributes)
+    || key.starts_with("hx-")
+    // v-if, v-for, v-show, v-model, etc. (Vue directives)
+    || (k.first() == Some(&b'v') && k.get(1) == Some(&b'-'))
+}
+
+/// Find a single key that is a likely HTML tag name.
+/// Keys that look like framework attributes (@, x-, :, hx-, v-) are excluded.
+/// If the object has a `children` key plus exactly one other non-attribute key,
+/// the other key is treated as the tag name.
 fn find_tag_shortcut<'a>(map: &'a IndexMap<String, Value>) -> Option<(&'a str, &'a Value)> {
-    let mut found: Option<(&'a str, &'a Value)> = None;
-    for (key, val) in map {
-        if is_known_html_attr(key) {
-            continue;
+    // If object has `children` plus exactly one other non-attribute key, that other key is the tag
+    if map.contains_key("children") {
+        let others: Vec<_> = map
+            .iter()
+            .filter(|(k, _)| {
+                !is_known_html_attr(k)
+                && !k.eq_ignore_ascii_case("children")
+                && !looks_like_attr(k)
+            })
+            .collect();
+        if others.len() == 1 {
+            let (key, val) = others[0];
+            return Some((key.as_str(), val));
         }
-        if found.is_some() {
-            return None; // more than one candidate — not a shortcut
-        }
-        found = Some((key.as_str(), val));
     }
-    found
+
+    // Otherwise, find exactly one non-attribute key (excluding children and attr-like keys)
+    let candidates: Vec<_> = map
+        .iter()
+        .filter(|(k, _v)| {
+            !is_known_html_attr(k)
+            && !k.eq_ignore_ascii_case("children")
+            && !looks_like_attr(k)
+        })
+        .collect();
+
+    if candidates.len() == 1 {
+        let (key, val) = candidates[0];
+        Some((key.as_str(), val))
+    } else {
+        None
+    }
 }
 
 /// Render HTML attributes from an object map, skipping `from` and `children`.
@@ -337,13 +445,13 @@ pub fn stringify_attr_value(v: &Value) -> String {
         Value::Int(i) => i.to_string(),
         Value::Float(f) => render_f64(*f),
         Value::String(s) => s.clone(),
-        Value::Array(arr) => arr
-            .iter()
-            .map(stringify_attr_value)
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join(" "),
-        Value::Object(_) => "{...}".to_string(),
+        Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(stringify_attr_value).collect();
+            serde_json::to_string(&items).unwrap_or_else(|_| items.join(" "))
+        }
+        Value::Object(obj) => {
+            serde_json::to_string(obj).unwrap_or_else(|_| "{...}".to_string())
+        }
     }
 }
 
@@ -501,7 +609,7 @@ mod tests {
     #[test]
     fn stringify_attr_value_array() {
         let arr = Value::array(vec![Value::string("a"), Value::string("b")]);
-        assert_eq!(stringify_attr_value(&arr), "a b");
+        assert_eq!(stringify_attr_value(&arr), "[\"a\",\"b\"]");
     }
 
     #[test]
