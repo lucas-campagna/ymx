@@ -46,7 +46,7 @@ use yaml_rust2::{Yaml, YamlLoader};
 use ymx_config::{extract_options, CliOverrides};
 use ymx_lib::ymx_core::ir::Args;
 use ymx_lib::ymx_core::project::{Format, Options, Project};
-use ymx_lib::ymx_core::render::{DefaultHtmlRenderer, HtmlRenderer};
+use ymx_lib::ymx_core::render::{DefaultHtmlRenderer, HtmlRenderer, pretty_print_html};
 use ymx_lib::ymx_core::resolve::{compile, compile_component};
 use ymx_lib::{load_project, load_project_with_override, Diagnostic, StdExecutor, Value};
 use ymx_test::{parse_tests, run_tests, Expected, TestResult};
@@ -752,10 +752,15 @@ fn emit_json(cli: &ParsedCli, pretty: bool, value: &Value) -> RunOutcome {
 /// `--output` or stdout.
 fn emit_html(cli: &ParsedCli, value: &Value) -> RunOutcome {
     let html = DefaultHtmlRenderer.render_html(value);
+    let output = if cli.pretty.unwrap_or(false) {
+        pretty_print_html(&html)
+    } else {
+        html
+    };
     match cli.output.as_deref() {
-        Some(path) => write_file(path, &html),
+        Some(path) => write_file(path, &output),
         None => {
-            print!("{html}");
+            print!("{output}");
             RunOutcome::Success
         }
     }

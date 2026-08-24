@@ -487,6 +487,94 @@ fn html_escape(s: &str) -> String {
     out
 }
 
+/// Pretty-print an HTML string with proper indentation.
+pub fn pretty_print_html(html: &str) -> String {
+    let void_elements: &[&str] = &[
+        "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+        "meta", "param", "source", "track", "wbr",
+    ];
+    
+    let mut result = String::new();
+    let mut depth: usize = 0;
+    let mut in_tag = false;
+    let mut current_tag = String::new();
+    // Stack to track if each open tag had child tags
+    let mut had_children_stack: Vec<bool> = Vec::new();
+    
+    let chars = html.chars();
+    
+    for c in chars {
+        match c {
+            '<' => {
+                in_tag = true;
+                current_tag.clear();
+                current_tag.push(c);
+            }
+            '>' if in_tag => {
+                in_tag = false;
+                current_tag.push(c);
+                
+                let is_closing = current_tag.starts_with("</");
+                let is_void = {
+                    let inner = current_tag.trim_start_matches("<").trim_start_matches("</").split_whitespace().next().unwrap_or("");
+                    void_elements.contains(&inner)
+                };
+                
+                if is_closing {
+                    // Remove trailing whitespace before closing tag
+                    while result.ends_with('\n') || result.ends_with(' ') {
+                        result.pop();
+                    }
+                    // Check if this tag had children (pop from stack)
+                    let had_children = had_children_stack.pop().unwrap_or(false);
+                    if had_children {
+                        // Use depth-1 for indent since we're closing the current tag
+                        result.push('\n');
+                        result.push_str(&"  ".repeat(depth.saturating_sub(1)));
+                    }
+                    result.push_str(&current_tag);
+                    depth = depth.saturating_sub(1);
+                } else {
+                    // Remove trailing whitespace before opening tag
+                    while result.ends_with('\n') || result.ends_with(' ') {
+                        result.pop();
+                    }
+                    result.push('\n');
+                    result.push_str(&"  ".repeat(depth));
+                    result.push_str(&current_tag);
+                    // If we're already inside a tag (depth > 0), then this new tag
+                    // is a child, so mark the parent as having children
+                    if depth > 0 {
+                        if let Some(parent_had_children) = had_children_stack.last_mut() {
+                            *parent_had_children = true;
+                        }
+                    }
+                    if !is_void {
+                        depth += 1;
+                    }
+                    // New tag hasn't had children yet
+                    had_children_stack.push(false);
+                }
+            }
+            _ => {
+                if !in_tag {
+                    // Text content - just append
+                    result.push(c);
+                } else {
+                    current_tag.push(c);
+                }
+            }
+        }
+    }
+    
+    while result.ends_with('\n') || result.ends_with(' ') {
+        result.pop();
+    }
+    result.push('\n');
+    
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

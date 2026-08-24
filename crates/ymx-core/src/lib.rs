@@ -35,7 +35,7 @@ pub mod interp;
 pub mod ir;
 pub mod math;
 pub mod render;
-pub use render::{DefaultHtmlRenderer, HtmlRenderer};
+pub use render::{DefaultHtmlRenderer, HtmlRenderer, pretty_print_html};
 pub mod namespace;
 pub mod parse;
 pub mod project;
