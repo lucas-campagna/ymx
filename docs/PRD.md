@@ -30,7 +30,7 @@ The project is written in Rust. Rust provides type and memory safety without a g
 
 YMX is being built in versions. The rules in this document describe the language and are stable across versions; the *output targets* arrive incrementally.
 
-**v1 (current)**: the resolver for rules 1–18, emits JSON. CLI and library only. HTML, PDF, and WEB are intentionally not in v1.
+**v1 (current)**: the resolver for rules 1–18, emits JSON. CLI and library only. HTML rendering (rule 20) is being implemented incrementally in v1.x releases.
 
 **v2**: HTML renderer + CLI flag to pick the target.
 
@@ -86,6 +86,7 @@ Every diagnostic renders to stderr as `[code] file:line:col (component): message
 | `E013` | compile | Array/object literal as a direct call argument. Not supported in v1. | `$f([1,2,3])` or `$g({a:1})` → v1 does not support passing inline collection literals as call arguments. |
 | `E015` | load | Meta-key reserved name used as a component or template. A top-level key that is a leading-`$` variant of `_ymx` or `_test`. | `$_ymx:\n  v: 1` or `$$_test: 2` → leading-`$` variants of meta keys are rejected as reserved. |
 | `E016` | compile | Shell execution error (unknown backend, disallowed backend, spawn failure, or executor not provided). | `$sh{echo hi}` with no executor → E016. `$pw{...}` when `allowed_backends: [sh]` → E016. |
+| `E017` | render | Array/object children without a `from` component wrapper. | `$mycomp: {a: 1, b: 2}` with no `from` in children → E017. |
 
 ## Multi-file projects
 
@@ -415,7 +416,7 @@ pub struct ParsedCli {
 
 **Later**
 
-- HTML and PDF renderers.
+- PDF renderer.
 - WEB service (REST endpoint that compiles submitted YAML).
 - Swappable math/engine backends.
 - User-defined builtins via a plugin system.
@@ -1183,4 +1184,50 @@ lines: $sh{echo $sum(1,2)}
 ```yml
 _ymx:
   allowed_backends: [sh]
+```
+
+### 20. HTML renderer (rule 20)
+
+The HTML renderer performs a **second pass** over the resolved `Value` IR to produce an HTML string.
+
+**Recursive rendering.** `children` is rendered depth-first before wrapping in the parent's tag — inner content is produced first and placed inside the tag. This means nested `from`/`children` structures emit outer tags that contain fully-rendered inner HTML.
+
+**Tag resolution.** A `from` property names a component; if absent the default tag is `div`. The component is looked up in the global namespace (per `plain` mode).
+
+**`children` shape:**
+- **Scalar** (string, number, bool, null): rendered as text content (HTML-escaped).
+- **Object with `from`**: recursive — the renderer calls itself to produce the inner HTML.
+- **Array or Object without `from`**: raises `E017` ("array/object children must be wrapped in a component with `from`").
+- **Null**: empty content.
+
+**`class` normalization:**
+- **String**: split on whitespace, space-joined.
+- **Array**: space-joined.
+- **Truthy-object**: keys of truthy entries, space-joined.
+- **`false` / `null` / empty string**: the attribute is omitted entirely.
+
+**`style` normalization:**
+- **String**: passed through unchanged.
+- **Object**: `"key: value; ..."` — each key-value pair joined by `"; "`.
+
+**All other object keys** are emitted as HTML attributes:
+- String / number: `attr="value"`.
+- Boolean attrs (the bare-attr list): `disabled`, `readonly`, `checked`, `selected`, `multiple`, `autofocus`, `autocomplete`, `hidden`, `controls`, `loop`, `muted`, `playsinline`, `autoplay`, `preload`, `required`, `novalidate`, `formnovalidate`, `reversed`, `indeterminate` — output the bare name when `true`, omit when `false`/`null`/`""`.
+- Array values: space-joined before output.
+- `false` / `null` / empty string: attribute omitted.
+
+**E017:** When `children` is an Array or Object and `from` resolves to a component, the renderer raises `E017` because the array/object must first be wrapped in a component that provides `from`.
+
+```yml
+# E017 case — children is an array with no from wrapper
+mycomp:
+  from: ul
+  children: [a, b, c]   # → E017: array children must be wrapped in a component with `from`
+
+# Correct: wrap the array in a component
+mycomp:
+  from: ul
+  children:
+    from: li
+    $0: item
 ```
