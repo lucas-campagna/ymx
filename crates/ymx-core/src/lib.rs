@@ -18,6 +18,7 @@
 //! - [`namespace`] — namespace registry and lookup
 //! - [`parse`] — YAML document parser (produces spanned nodes)
 //! - [`project`] — [`Project`] and [`Options`] types
+//! - [`render`] — HTML rendering: [`HtmlRenderer`] trait, [`DefaultHtmlRenderer`], attribute/style/class normalization
 //! - [`resolve`] — rule resolver: rules 1–16 (component resolution pipeline)
 //!
 //! ## Public API
@@ -33,6 +34,8 @@ pub mod exec;
 pub mod interp;
 pub mod ir;
 pub mod math;
+pub mod render;
+pub use render::{DefaultHtmlRenderer, HtmlRenderer};
 pub mod namespace;
 pub mod parse;
 pub mod project;
