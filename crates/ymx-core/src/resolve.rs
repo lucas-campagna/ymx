@@ -30,12 +30,13 @@ use std::rc::Rc;
 use indexmap::IndexMap;
 
 use crate::builtin::{
-    AvgBuiltin, Builtin, BuiltinCtx, BuiltinImpl, CoalesceBuiltin, EntriesBuiltin,
-    FromEntriesBuiltin, IfBuiltin, IsArrayBuiltin, IsNullBuiltin, IsNumberBuiltin, IsObjectBuiltin,
-    IsStringBuiltin, JoinBuiltin, KeysBuiltin, LowerBuiltin, MapBuiltin, MaxBuiltin, MergeBuiltin,
-    MinBuiltin, OmitBuiltin, PickBuiltin, ReduceBuiltin, ReplaceBuiltin, SplitBuiltin, SumBuiltin,
-    ToNumberBuiltin, ToStringBuiltin, TrimBuiltin, TypeBuiltin, UpperBuiltin, ValuesBuiltin,
-    WhenBuiltin,
+    AvgBuiltin, Builtin, BuiltinCtx, BuiltinImpl, CoalesceBuiltin, EntriesBuiltin, FilterBuiltin,
+    FirstBuiltin, FlattenBuiltin, FromEntriesBuiltin, IfBuiltin, IsArrayBuiltin, IsNullBuiltin,
+    IsNumberBuiltin, IsObjectBuiltin, IsStringBuiltin, JoinBuiltin, KeysBuiltin, LastBuiltin,
+    LowerBuiltin, MapBuiltin, MaxBuiltin, MergeBuiltin, MinBuiltin, OmitBuiltin, PickBuiltin,
+    ReduceBuiltin, ReplaceBuiltin, ReverseBuiltin, SliceBuiltin, SortBuiltin, SplitBuiltin,
+    SumBuiltin, ToNumberBuiltin, ToStringBuiltin, TrimBuiltin, TypeBuiltin, UniqueBuiltin,
+    UpperBuiltin, ValuesBuiltin, WhenBuiltin,
 };
 use crate::callsite;
 use crate::diag::{Diagnostic, FileId, Span, E002, E003, E005, E006, E008, E009, E010, E011, E016};
@@ -2028,14 +2029,14 @@ impl<'a> Resolver<'a> {
                 Builtin::Upper => UpperBuiltin.eval(&ctx, &call.args),
                 Builtin::Lower => LowerBuiltin.eval(&ctx, &call.args),
                 Builtin::Replace => ReplaceBuiltin.eval(&ctx, &call.args),
-                Builtin::Filter => Err(builtin_not_yet_implemented(ctx, "$filter")),
-                Builtin::Sort => Err(builtin_not_yet_implemented(ctx, "$sort")),
-                Builtin::Reverse => Err(builtin_not_yet_implemented(ctx, "$reverse")),
-                Builtin::Unique => Err(builtin_not_yet_implemented(ctx, "$unique")),
-                Builtin::Flatten => Err(builtin_not_yet_implemented(ctx, "$flatten")),
-                Builtin::First => Err(builtin_not_yet_implemented(ctx, "$first")),
-                Builtin::Last => Err(builtin_not_yet_implemented(ctx, "$last")),
-                Builtin::Slice => Err(builtin_not_yet_implemented(ctx, "$slice")),
+                Builtin::Filter => FilterBuiltin.eval(&ctx, &call.args),
+                Builtin::Sort => SortBuiltin.eval(&ctx, &call.args),
+                Builtin::Reverse => ReverseBuiltin.eval(&ctx, &call.args),
+                Builtin::Unique => UniqueBuiltin.eval(&ctx, &call.args),
+                Builtin::Flatten => FlattenBuiltin.eval(&ctx, &call.args),
+                Builtin::First => FirstBuiltin.eval(&ctx, &call.args),
+                Builtin::Last => LastBuiltin.eval(&ctx, &call.args),
+                Builtin::Slice => SliceBuiltin.eval(&ctx, &call.args),
                 Builtin::Keys => KeysBuiltin.eval(&ctx, &call.args),
                 Builtin::Values => ValuesBuiltin.eval(&ctx, &call.args),
                 Builtin::Entries => EntriesBuiltin.eval(&ctx, &call.args),
@@ -2223,17 +2224,6 @@ fn ctx_err(scope: &Scope<'_>, code: &'static str, message: String) -> Diagnostic
         component: scope.component.clone(),
         code,
         message,
-    }
-}
-
-fn builtin_not_yet_implemented(ctx: BuiltinCtx<'_>, name: &str) -> Diagnostic {
-    Diagnostic {
-        file: ctx.file,
-        line: ctx.span.line,
-        col: ctx.span.col,
-        component: ctx.component,
-        code: E011,
-        message: format!("{name} is not yet implemented"),
     }
 }
 

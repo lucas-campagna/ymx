@@ -800,9 +800,7 @@ impl BuiltinImpl for SortBuiltin {
                 })
                 .collect();
             nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            Ok(Value::Array(
-                nums.into_iter().map(Value::Float).collect(),
-            ))
+            Ok(Value::Array(nums.into_iter().map(Value::Float).collect()))
         } else if all_string {
             let mut strs: Vec<String> = items
                 .iter()
@@ -812,9 +810,7 @@ impl BuiltinImpl for SortBuiltin {
                 })
                 .collect();
             strs.sort();
-            Ok(Value::Array(
-                strs.into_iter().map(Value::String).collect(),
-            ))
+            Ok(Value::Array(strs.into_iter().map(Value::String).collect()))
         } else {
             Err(ctx_err(
                 ctx,
@@ -966,7 +962,10 @@ impl BuiltinImpl for SliceBuiltin {
             return Err(ctx_err(
                 ctx,
                 E011,
-                format!("$slice second argument (start) must be an Int, got {:?}", start_val),
+                format!(
+                    "$slice second argument (start) must be an Int, got {:?}",
+                    start_val
+                ),
             ));
         };
 
@@ -975,7 +974,10 @@ impl BuiltinImpl for SliceBuiltin {
             return Err(ctx_err(
                 ctx,
                 E011,
-                format!("$slice third argument (end) must be an Int, got {:?}", end_val),
+                format!(
+                    "$slice third argument (end) must be an Int, got {:?}",
+                    end_val
+                ),
             ));
         };
 
@@ -995,7 +997,11 @@ impl BuiltinImpl for SliceBuiltin {
         };
 
         // Ensure start <= end (swap if needed is not spec'd; clamp instead).
-        let (start, end) = if start > end { (end, start) } else { (start, end) };
+        let (start, end) = if start > end {
+            (end, start)
+        } else {
+            (start, end)
+        };
 
         Ok(Value::Array(items[start..end].to_vec()))
     }
@@ -1097,7 +1103,9 @@ impl BuiltinImpl for KeysBuiltin {
             ));
         };
 
-        Ok(Value::Array(m.keys().map(|k| Value::string(k.clone())).collect()))
+        Ok(Value::Array(
+            m.keys().map(|k| Value::string(k.clone())).collect(),
+        ))
     }
 }
 
@@ -1199,10 +1207,7 @@ impl BuiltinImpl for FromEntriesBuiltin {
             return Err(ctx_err(
                 ctx,
                 E011,
-                format!(
-                    "$from_entries argument must be an Array, got {:?}",
-                    arr
-                ),
+                format!("$from_entries argument must be an Array, got {:?}", arr),
             ));
         };
 
@@ -1212,10 +1217,7 @@ impl BuiltinImpl for FromEntriesBuiltin {
                 return Err(ctx_err(
                     ctx,
                     E011,
-                    format!(
-                        "$from_entries: element at index {} is not an Object",
-                        i
-                    ),
+                    format!("$from_entries: element at index {} is not an Object", i),
                 ));
             };
 
@@ -1283,10 +1285,7 @@ impl BuiltinImpl for PickBuiltin {
                 return Err(ctx_err(
                     ctx,
                     E011,
-                    format!(
-                        "$pick: key list contains a non-string element {:?}",
-                        item
-                    ),
+                    format!("$pick: key list contains a non-string element {:?}", item),
                 ));
             };
             if let Some(v) = m.get(&k) {
@@ -1343,10 +1342,7 @@ impl BuiltinImpl for OmitBuiltin {
                 return Err(ctx_err(
                     ctx,
                     E011,
-                    format!(
-                        "$omit: key list contains a non-string element {:?}",
-                        item
-                    ),
+                    format!("$omit: key list contains a non-string element {:?}", item),
                 ));
             };
             omit_set.push(k.clone());
@@ -1432,10 +1428,7 @@ impl BuiltinImpl for IsObjectBuiltin {
             return Err(ctx_err(
                 ctx,
                 E011,
-                format!(
-                    "$is_object expects exactly 1 argument, got {}",
-                    args.len()
-                ),
+                format!("$is_object expects exactly 1 argument, got {}", args.len()),
             ));
         }
 
@@ -1458,10 +1451,7 @@ impl BuiltinImpl for IsStringBuiltin {
             return Err(ctx_err(
                 ctx,
                 E011,
-                format!(
-                    "$is_string expects exactly 1 argument, got {}",
-                    args.len()
-                ),
+                format!("$is_string expects exactly 1 argument, got {}", args.len()),
             ));
         }
 
@@ -1484,10 +1474,7 @@ impl BuiltinImpl for IsNumberBuiltin {
             return Err(ctx_err(
                 ctx,
                 E011,
-                format!(
-                    "$is_number expects exactly 1 argument, got {}",
-                    args.len()
-                ),
+                format!("$is_number expects exactly 1 argument, got {}", args.len()),
             ));
         }
 
@@ -1533,10 +1520,7 @@ impl BuiltinImpl for ToStringBuiltin {
             return Err(ctx_err(
                 ctx,
                 E011,
-                format!(
-                    "$to_string expects exactly 1 argument, got {}",
-                    args.len()
-                ),
+                format!("$to_string expects exactly 1 argument, got {}", args.len()),
             ));
         }
 
@@ -1566,10 +1550,7 @@ impl BuiltinImpl for ToNumberBuiltin {
             return Err(ctx_err(
                 ctx,
                 E011,
-                format!(
-                    "$to_number expects exactly 1 argument, got {}",
-                    args.len()
-                ),
+                format!("$to_number expects exactly 1 argument, got {}", args.len()),
             ));
         }
 
@@ -1778,11 +1759,7 @@ impl BuiltinImpl for MinBuiltin {
 
         for item in items.iter().skip(1) {
             let f = value_to_f64(item).ok_or_else(|| {
-                ctx_err(
-                    ctx,
-                    E011,
-                    format!("$min: non-numeric element {:?}", item),
-                )
+                ctx_err(ctx, E011, format!("$min: non-numeric element {:?}", item))
             })?;
             if f < min_float {
                 min_float = f;
@@ -1836,11 +1813,7 @@ impl BuiltinImpl for MaxBuiltin {
 
         for item in items.iter().skip(1) {
             let f = value_to_f64(item).ok_or_else(|| {
-                ctx_err(
-                    ctx,
-                    E011,
-                    format!("$max: non-numeric element {:?}", item),
-                )
+                ctx_err(ctx, E011, format!("$max: non-numeric element {:?}", item))
             })?;
             if f > max_float {
                 max_float = f;
@@ -2612,5 +2585,1831 @@ fn ctx_err(ctx: &BuiltinCtx<'_>, code: &'static str, message: String) -> Diagnos
         component: ctx.component.clone(),
         code,
         message,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diag::{E002, E011};
+    use crate::ir::Value;
+    use crate::project::Options;
+    use crate::resolve::compile_component;
+    use indexmap::IndexMap;
+    use std::path::{Path, PathBuf};
+
+    fn project_with(files: &[(&str, &str)]) -> crate::project::Project {
+        let mut p = crate::project::Project::new();
+        p.root = PathBuf::from("/proj");
+        for (i, (path, src)) in files.iter().enumerate() {
+            p.files.push(PathBuf::from("/proj").join(path));
+            let node = crate::parse::parse_document(src).expect("parse fixture");
+            let ex = crate::namespace::extract_document(FileId(i as u32), &node);
+            let namespace = Path::new(path)
+                .parent()
+                .unwrap_or(Path::new(""))
+                .to_string_lossy()
+                .replace('/', ".");
+            for def in ex.defs {
+                p.namespaces.register(&namespace, def).unwrap();
+            }
+            for def in ex.file_scoped_defs {
+                p.file_scoped.register(FileId(i as u32), def).unwrap();
+            }
+        }
+        p
+    }
+
+    fn compile_ok(p: &crate::project::Project, component: &str, args: &crate::ir::Args) -> Value {
+        compile_component(p, component, args, &Options::default())
+            .unwrap_or_else(|ds| panic!("{component}: {}", ds[0].message))
+    }
+
+    fn compile_err(
+        p: &crate::project::Project,
+        component: &str,
+        args: &crate::ir::Args,
+    ) -> Diagnostic {
+        compile_component(p, component, args, &Options::default())
+            .unwrap_err()
+            .into_iter()
+            .next()
+            .expect("at least one diagnostic")
+    }
+
+    // =====================================================
+    // String builtins
+    // =====================================================
+
+    #[test]
+    fn split_basic() {
+        let p = project_with(&[("main.yml", "main: $split(\"a,b,c\", \",\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![
+                Value::string("a"),
+                Value::string("b"),
+                Value::string("c")
+            ])
+        );
+    }
+
+    #[test]
+    fn split_no_match() {
+        let p = project_with(&[("main.yml", "main: $split(\"abc\", \",\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::string("abc")])
+        );
+    }
+
+    #[test]
+    fn split_multi_char_delim() {
+        let p = project_with(&[("main.yml", "main: $split(\"a::b::c\", \"::\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![
+                Value::string("a"),
+                Value::string("b"),
+                Value::string("c")
+            ])
+        );
+    }
+
+    #[test]
+    fn split_empty_delim_is_e011() {
+        let p = project_with(&[("main.yml", "main: $split(\"hello\", \"\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+        assert!(err.message.contains("empty delimiter"), "{}", err.message);
+    }
+
+    #[test]
+    fn split_first_arg_not_string_is_e011() {
+        let p = project_with(&[("main.yml", "main: $split(123, \",\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn split_second_arg_not_string_is_e011() {
+        let p = project_with(&[("main.yml", "main: $split(\"abc\", 123)\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn join_basic() {
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [\"a\", \"b\", \"c\"]\nmain: $join(${arr()}, \"-\")\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("a-b-c")
+        );
+    }
+
+    #[test]
+    fn join_empty_array() {
+        let p = project_with(&[("main.yml", "arr: []\nmain: $join(${arr()}, \"x\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("")
+        );
+    }
+
+    #[test]
+    fn join_empty_delim() {
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [\"a\", \"b\"]\nmain: $join(${arr()}, \"\")\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("ab")
+        );
+    }
+
+    #[test]
+    fn join_first_arg_not_array_is_e011() {
+        let p = project_with(&[("main.yml", "main: $join(\"not an array\", \",\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn join_second_arg_not_string_is_e011() {
+        let p = project_with(&[("main.yml", "arr: [1]\nmain: $join(${arr()}, 123)\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn join_non_string_elements_coerce() {
+        let p = project_with(&[("main.yml", "arr: [1, 2, 3]\nmain: $join(${arr()}, \",\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("1,2,3")
+        );
+    }
+
+    #[test]
+    fn trim_basic() {
+        let p = project_with(&[("main.yml", "main: $trim(\"  hello  \")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("hello")
+        );
+    }
+
+    #[test]
+    fn trim_no_whitespace() {
+        let p = project_with(&[("main.yml", "main: $trim(\"hello\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("hello")
+        );
+    }
+
+    #[test]
+    fn trim_not_string_is_e011() {
+        let p = project_with(&[("main.yml", "main: $trim(123)\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn upper_basic() {
+        let p = project_with(&[("main.yml", "main: $upper(\"hello\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("HELLO")
+        );
+    }
+
+    #[test]
+    fn upper_not_string_is_e011() {
+        let p = project_with(&[("main.yml", "main: $upper([])\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn lower_basic() {
+        let p = project_with(&[("main.yml", "main: $lower(\"HELLO\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("hello")
+        );
+    }
+
+    #[test]
+    fn lower_not_string_is_e011() {
+        let p = project_with(&[("main.yml", "main: $lower(123)\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn replace_basic() {
+        let p = project_with(&[(
+            "main.yml",
+            "main: $replace(\"hello world\", \"world\", \"rust\")\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("hello rust")
+        );
+    }
+
+    #[test]
+    fn replace_all_occurrences() {
+        let p = project_with(&[("main.yml", "main: $replace(\"aaaa\", \"a\", \"b\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("bbbb")
+        );
+    }
+
+    #[test]
+    fn replace_no_match() {
+        let p = project_with(&[("main.yml", "main: $replace(\"abc\", \"x\", \"y\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("abc")
+        );
+    }
+
+    #[test]
+    fn replace_empty_pattern_is_e011() {
+        let p = project_with(&[("main.yml", "main: $replace(\"abc\", \"\", \"y\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+        assert!(err.message.contains("empty pattern"), "{}", err.message);
+    }
+
+    #[test]
+    fn replace_first_arg_not_string_is_e011() {
+        let p = project_with(&[("main.yml", "main: $replace(123, \"a\", \"b\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    // =====================================================
+    // Array builtins
+    // =====================================================
+
+    #[test]
+    fn first_basic() {
+        let p = project_with(&[("main.yml", "arr: [1, 2, 3]\nmain: $first(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(1)
+        );
+    }
+
+    #[test]
+    fn first_empty_array() {
+        let p = project_with(&[("main.yml", "arr: []\nmain: $first(${arr()})\n")]);
+        assert_eq!(compile_ok(&p, "main", &crate::ir::Args::None), Value::Null);
+    }
+
+    #[test]
+    fn first_not_array_is_e011() {
+        let p = project_with(&[("main.yml", "main: $first(\"not array\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn last_basic() {
+        let p = project_with(&[("main.yml", "arr: [1, 2, 3]\nmain: $last(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(3)
+        );
+    }
+
+    #[test]
+    fn last_empty_array() {
+        let p = project_with(&[("main.yml", "arr: []\nmain: $last(${arr()})\n")]);
+        assert_eq!(compile_ok(&p, "main", &crate::ir::Args::None), Value::Null);
+    }
+
+    #[test]
+    fn last_not_array_is_e011() {
+        let p = project_with(&[("main.yml", "main: $last(123)\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn sort_ints() {
+        let p = project_with(&[("main.yml", "arr: [3, 1, 2]\nmain: $sort(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(1), Value::int(2), Value::int(3)])
+        );
+    }
+
+    #[test]
+    fn sort_strings() {
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [\"c\", \"a\", \"b\"]\nmain: $sort(${arr()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![
+                Value::string("a"),
+                Value::string("b"),
+                Value::string("c")
+            ])
+        );
+    }
+
+    #[test]
+    fn sort_mixed_types_is_e011() {
+        let p = project_with(&[("main.yml", "arr: [1, \"a\"]\nmain: $sort(${arr()})\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn sort_not_array_is_e011() {
+        let p = project_with(&[("main.yml", "main: $sort(\"not array\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn sort_empty_array() {
+        let p = project_with(&[("main.yml", "arr: []\nmain: $sort(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![])
+        );
+    }
+
+    #[test]
+    fn reverse_basic() {
+        let p = project_with(&[("main.yml", "arr: [1, 2, 3]\nmain: $reverse(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(3), Value::int(2), Value::int(1)])
+        );
+    }
+
+    #[test]
+    fn reverse_not_array_is_e011() {
+        let p = project_with(&[("main.yml", "main: $reverse(123)\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn unique_basic() {
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [1, 2, 1, 3, 2]\nmain: $unique(${arr()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(1), Value::int(2), Value::int(3)])
+        );
+    }
+
+    #[test]
+    fn unique_not_array_is_e011() {
+        let p = project_with(&[("main.yml", "main: $unique(\"not array\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn flatten_basic() {
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [[1, 2], [3, [4]]]\nmain: $flatten(${arr()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![
+                Value::int(1),
+                Value::int(2),
+                Value::int(3),
+                Value::array(vec![Value::int(4)])
+            ])
+        );
+    }
+
+    #[test]
+    fn flatten_one_level() {
+        let p = project_with(&[("main.yml", "arr: [1, [2], 3]\nmain: $flatten(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(1), Value::int(2), Value::int(3)])
+        );
+    }
+
+    #[test]
+    fn flatten_not_array_is_e011() {
+        let p = project_with(&[("main.yml", "main: $flatten(\"not array\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn slice_basic() {
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [0, 1, 2, 3, 4]\nmain: $slice(${arr()}, 1, 3)\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(1), Value::int(2)])
+        );
+    }
+
+    #[test]
+    fn slice_negative_end() {
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [0, 1, 2, 3, 4]\nmain: $slice(${arr()}, 2, -1)\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(2), Value::int(3)])
+        );
+    }
+
+    #[test]
+    fn slice_clamped() {
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [0, 1, 2]\nmain: $slice(${arr()}, 0, 99)\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(0), Value::int(1), Value::int(2)])
+        );
+    }
+
+    #[test]
+    fn slice_not_array_is_e011() {
+        let p = project_with(&[("main.yml", "main: $slice(123, 0, 1)\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn filter_basic() {
+        let p = project_with(&[(
+            "main.yml",
+            "identity: \"$0\"\narr: [1, false, 2, null, 3]\nmain: $filter($identity, ${arr()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(1), Value::int(2), Value::int(3)])
+        );
+    }
+
+    #[test]
+    fn filter_empty_array() {
+        let p = project_with(&[(
+            "main.yml",
+            "is_true: \"true\"\narr: []\nmain: $filter($is_true, ${arr()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![])
+        );
+    }
+
+    #[test]
+    fn filter_not_array_is_e011() {
+        let p = project_with(&[(
+            "main.yml",
+            "is_true: \"true\"\nmain: $filter($is_true, 5)\n",
+        )]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn filter_array_item_is_e011() {
+        let p = project_with(&[(
+            "main.yml",
+            "is_true: \"true\"\narr: [[1, 2]]\nmain: $filter($is_true, ${arr()})\n",
+        )]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn filter_unknown_callable_is_e002() {
+        let p = project_with(&[("main.yml", "arr: [1]\nmain: $filter($nope, ${arr()})\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E002);
+    }
+
+    // =====================================================
+    // Object builtins
+    // =====================================================
+
+    #[test]
+    fn keys_basic() {
+        let p = project_with(&[("main.yml", "obj:\n  b: 2\n  a: 1\nmain: $keys(${obj()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::string("b"), Value::string("a")])
+        );
+    }
+
+    #[test]
+    fn keys_not_object_is_e011() {
+        let p = project_with(&[("main.yml", "main: $keys(\"not object\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn values_basic() {
+        let p = project_with(&[(
+            "main.yml",
+            "obj:\n  b: 2\n  a: 1\nmain: $values(${obj()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(2), Value::int(1)])
+        );
+    }
+
+    #[test]
+    fn values_not_object_is_e011() {
+        let p = project_with(&[("main.yml", "main: $values(123)\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn entries_basic() {
+        let p = project_with(&[(
+            "main.yml",
+            "obj:\n  b: 2\n  a: 1\nmain: $entries(${obj()})\n",
+        )]);
+        let result = compile_ok(&p, "main", &crate::ir::Args::None);
+        let Value::Array(entries) = result else {
+            panic!("expected array");
+        };
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[0],
+            Value::object(IndexMap::from([
+                ("key".to_string(), Value::string("b")),
+                ("value".to_string(), Value::int(2)),
+            ]))
+        );
+        assert_eq!(
+            entries[1],
+            Value::object(IndexMap::from([
+                ("key".to_string(), Value::string("a")),
+                ("value".to_string(), Value::int(1)),
+            ]))
+        );
+    }
+
+    #[test]
+    fn entries_not_object_is_e011() {
+        let p = project_with(&[("main.yml", "main: $entries([])\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn from_entries_basic() {
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [{key: \"a\", value: 1}, {key: \"b\", value: 2}]\nmain: $from_entries(${arr()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::object(IndexMap::from([
+                ("a".to_string(), Value::int(1)),
+                ("b".to_string(), Value::int(2)),
+            ]))
+        );
+    }
+
+    #[test]
+    fn from_entries_empty() {
+        let p = project_with(&[("main.yml", "arr: []\nmain: $from_entries(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::object(IndexMap::new())
+        );
+    }
+
+    #[test]
+    fn from_entries_later_wins() {
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [{key: \"a\", value: 1}, {key: \"a\", value: 2}]\nmain: $from_entries(${arr()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::object(IndexMap::from([("a".to_string(), Value::int(2))]))
+        );
+    }
+
+    #[test]
+    fn from_entries_not_array_is_e011() {
+        let p = project_with(&[("main.yml", "main: $from_entries(\"not an array\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn pick_basic() {
+        let p = project_with(&[(
+            "main.yml",
+            "obj:\n  a: 1\n  b: 2\n  c: 3\nmain: $pick(${obj()}, [\"a\", \"c\"])\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::object(IndexMap::from([
+                ("a".to_string(), Value::int(1)),
+                ("c".to_string(), Value::int(3)),
+            ]))
+        );
+    }
+
+    #[test]
+    fn pick_nonexistent_key() {
+        let p = project_with(&[(
+            "main.yml",
+            "obj:\n  a: 1\nmain: $pick(${obj()}, [\"nonexistent\"])\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::object(IndexMap::new())
+        );
+    }
+
+    #[test]
+    fn pick_first_arg_not_object_is_e011() {
+        let p = project_with(&[("main.yml", "main: $pick(123, [])\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn pick_second_arg_not_array_is_e011() {
+        let p = project_with(&[(
+            "main.yml",
+            "obj:\n  a: 1\nmain: $pick(${obj()}, \"not array\")\n",
+        )]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn omit_basic() {
+        let p = project_with(&[(
+            "main.yml",
+            "obj:\n  a: 1\n  b: 2\n  c: 3\nmain: $omit(${obj()}, [\"b\"])\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::object(IndexMap::from([
+                ("a".to_string(), Value::int(1)),
+                ("c".to_string(), Value::int(3)),
+            ]))
+        );
+    }
+
+    #[test]
+    fn omit_first_arg_not_object_is_e011() {
+        let p = project_with(&[("main.yml", "main: $omit(123, [])\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn omit_second_arg_not_array_is_e011() {
+        let p = project_with(&[("main.yml", "obj:\n  a: 1\nmain: $omit(${obj()}, 123)\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    // =====================================================
+    // Type builtins
+    // =====================================================
+
+    #[test]
+    fn type_null() {
+        let p = project_with(&[("main.yml", "main: $type(null)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("null")
+        );
+    }
+
+    #[test]
+    fn type_bool() {
+        let p = project_with(&[("main.yml", "main: $type(true)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("bool")
+        );
+    }
+
+    #[test]
+    fn type_int() {
+        let p = project_with(&[("main.yml", "main: $type(1)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("int")
+        );
+    }
+
+    #[test]
+    fn type_float() {
+        let p = project_with(&[("main.yml", "main: $type(1.5)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("float")
+        );
+    }
+
+    #[test]
+    fn type_string() {
+        let p = project_with(&[("main.yml", "main: $type(\"hello\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("string")
+        );
+    }
+
+    #[test]
+    fn type_array() {
+        let p = project_with(&[("main.yml", "arr: [1, 2]\nmain: $type(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("array")
+        );
+    }
+
+    #[test]
+    fn type_object() {
+        let p = project_with(&[("main.yml", "obj:\n  a: 1\nmain: $type(${obj()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("object")
+        );
+    }
+
+    #[test]
+    fn is_array_true() {
+        let p = project_with(&[("main.yml", "arr: [1, 2]\nmain: $is_array(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(true)
+        );
+    }
+
+    #[test]
+    fn is_array_false() {
+        let p = project_with(&[("main.yml", "obj:\n  a: 1\nmain: $is_array(${obj()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(false)
+        );
+    }
+
+    #[test]
+    fn is_object_true() {
+        let p = project_with(&[("main.yml", "obj:\n  a: 1\nmain: $is_object(${obj()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(true)
+        );
+    }
+
+    #[test]
+    fn is_object_false() {
+        let p = project_with(&[("main.yml", "arr: [1, 2]\nmain: $is_object(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(false)
+        );
+    }
+
+    #[test]
+    fn is_string_true() {
+        let p = project_with(&[("main.yml", "main: $is_string(\"hello\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(true)
+        );
+    }
+
+    #[test]
+    fn is_string_false() {
+        let p = project_with(&[("main.yml", "main: $is_string(42)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(false)
+        );
+    }
+
+    #[test]
+    fn is_number_true_int() {
+        let p = project_with(&[("main.yml", "main: $is_number(42)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(true)
+        );
+    }
+
+    #[test]
+    fn is_number_true_float() {
+        let p = project_with(&[("main.yml", "main: $is_number(3.14)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(true)
+        );
+    }
+
+    #[test]
+    fn is_number_false() {
+        let p = project_with(&[("main.yml", "main: $is_number(\"42\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(false)
+        );
+    }
+
+    #[test]
+    fn is_null_true() {
+        let p = project_with(&[("main.yml", "main: $is_null(null)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(true)
+        );
+    }
+
+    #[test]
+    fn is_null_false() {
+        let p = project_with(&[("main.yml", "main: $is_null(false)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(false)
+        );
+    }
+
+    #[test]
+    fn to_string_int() {
+        let p = project_with(&[("main.yml", "main: $to_string(123)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("123")
+        );
+    }
+
+    #[test]
+    fn to_string_float() {
+        let p = project_with(&[("main.yml", "main: $to_string(2.5)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("2.5")
+        );
+    }
+
+    #[test]
+    fn to_string_null() {
+        let p = project_with(&[("main.yml", "main: $to_string(null)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("null")
+        );
+    }
+
+    #[test]
+    fn to_string_bool() {
+        let p = project_with(&[("main.yml", "main: $to_string(true)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("true")
+        );
+    }
+
+    #[test]
+    fn to_number_int_string() {
+        let p = project_with(&[("main.yml", "main: $to_number(\"42\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(42)
+        );
+    }
+
+    #[test]
+    fn to_number_float_string() {
+        let p = project_with(&[("main.yml", "main: $to_number(\"3.5\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::float(3.5)
+        );
+    }
+
+    #[test]
+    fn to_number_not_parseable() {
+        let p = project_with(&[("main.yml", "main: $to_number(\"hello\")\n")]);
+        assert_eq!(compile_ok(&p, "main", &crate::ir::Args::None), Value::Null);
+    }
+
+    #[test]
+    fn to_number_pass_through_int() {
+        let p = project_with(&[("main.yml", "main: $to_number(123)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(123)
+        );
+    }
+
+    #[test]
+    fn to_number_pass_through_float() {
+        let p = project_with(&[("main.yml", "main: $to_number(2.5)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::float(2.5)
+        );
+    }
+
+    #[test]
+    fn coalesce_first_non_null() {
+        let p = project_with(&[("main.yml", "main: $coalesce(null, null, 1, 2)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(1)
+        );
+    }
+
+    #[test]
+    fn coalesce_false_is_not_null() {
+        let p = project_with(&[("main.yml", "main: $coalesce(null, false, 0)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(false)
+        );
+    }
+
+    #[test]
+    fn coalesce_all_null() {
+        let p = project_with(&[("main.yml", "main: $coalesce(null, null)\n")]);
+        assert_eq!(compile_ok(&p, "main", &crate::ir::Args::None), Value::Null);
+    }
+
+    #[test]
+    fn coalesce_zero_is_not_null() {
+        let p = project_with(&[("main.yml", "main: $coalesce(null, 0)\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(0)
+        );
+    }
+
+    #[test]
+    fn coalesce_empty_string_is_not_null() {
+        let p = project_with(&[("main.yml", "main: $coalesce(null, \"\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("")
+        );
+    }
+
+    // =====================================================
+    // Math aggregates
+    // =====================================================
+
+    #[test]
+    fn sum_basic() {
+        let p = project_with(&[("main.yml", "arr: [1, 2, 3]\nmain: $sum(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(6)
+        );
+    }
+
+    #[test]
+    fn sum_empty() {
+        let p = project_with(&[("main.yml", "arr: []\nmain: $sum(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(0)
+        );
+    }
+
+    #[test]
+    fn sum_floats() {
+        let p = project_with(&[("main.yml", "arr: [1.5, 2.5]\nmain: $sum(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::float(4.0)
+        );
+    }
+
+    #[test]
+    fn sum_mixed_int_float() {
+        let p = project_with(&[("main.yml", "arr: [1, 2.5]\nmain: $sum(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::float(3.5)
+        );
+    }
+
+    #[test]
+    fn sum_non_numeric_is_e011() {
+        let p = project_with(&[("main.yml", "arr: [\"a\", \"b\"]\nmain: $sum(${arr()})\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn sum_not_array_is_e011() {
+        let p = project_with(&[("main.yml", "main: $sum(\"not array\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn avg_basic() {
+        let p = project_with(&[("main.yml", "arr: [1, 2, 3]\nmain: $avg(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::float(2.0)
+        );
+    }
+
+    #[test]
+    fn avg_empty() {
+        let p = project_with(&[("main.yml", "arr: []\nmain: $avg(${arr()})\n")]);
+        assert_eq!(compile_ok(&p, "main", &crate::ir::Args::None), Value::Null);
+    }
+
+    #[test]
+    fn avg_non_numeric_is_e011() {
+        let p = project_with(&[("main.yml", "arr: [\"a\"]\nmain: $avg(${arr()})\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn min_basic() {
+        let p = project_with(&[("main.yml", "arr: [3, 1, 2]\nmain: $min(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(1)
+        );
+    }
+
+    #[test]
+    fn min_empty() {
+        let p = project_with(&[("main.yml", "arr: []\nmain: $min(${arr()})\n")]);
+        assert_eq!(compile_ok(&p, "main", &crate::ir::Args::None), Value::Null);
+    }
+
+    #[test]
+    fn min_non_numeric_is_e011() {
+        let p = project_with(&[("main.yml", "arr: [\"a\"]\nmain: $min(${arr()})\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn max_basic() {
+        let p = project_with(&[("main.yml", "arr: [3, 1, 2]\nmain: $max(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(3)
+        );
+    }
+
+    #[test]
+    fn max_empty() {
+        let p = project_with(&[("main.yml", "arr: []\nmain: $max(${arr()})\n")]);
+        assert_eq!(compile_ok(&p, "main", &crate::ir::Args::None), Value::Null);
+    }
+
+    #[test]
+    fn max_non_numeric_is_e011() {
+        let p = project_with(&[("main.yml", "arr: [true]\nmain: $max(${arr()})\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    // =====================================================
+    // Conditional builtins
+    // =====================================================
+
+    #[test]
+    fn if_true() {
+        let p = project_with(&[("main.yml", "main: $if(true, \"yes\", \"no\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("yes")
+        );
+    }
+
+    #[test]
+    fn if_false() {
+        let p = project_with(&[("main.yml", "main: $if(false, \"yes\", \"no\")\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("no")
+        );
+    }
+
+    #[test]
+    fn if_null_condition_is_e011() {
+        let p = project_with(&[("main.yml", "main: $if(null, \"yes\", \"no\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+        assert!(err.message.contains("Bool"), "{}", err.message);
+    }
+
+    #[test]
+    fn if_zero_condition_is_e011() {
+        let p = project_with(&[("main.yml", "main: $if(0, \"yes\", \"no\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn if_wrong_arg_count_is_e011() {
+        let p = project_with(&[("main.yml", "main: $if(true, \"yes\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn if_lazy_then_branch() {
+        let p = project_with(&[(
+            "main.yml",
+            "bad: $noexist()\nmain: $if(true, \"ok\", ${bad()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("ok")
+        );
+    }
+
+    #[test]
+    fn if_lazy_else_branch() {
+        let p = project_with(&[(
+            "main.yml",
+            "bad: $noexist()\nmain: $if(false, ${bad()}, \"ok\")\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("ok")
+        );
+    }
+
+    #[test]
+    fn when_basic() {
+        let p = project_with(&[(
+            "main.yml",
+            "double: \"${$0 * 2}\"\narr: [1, 2, 3]\nmain: $when($double, ${arr()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(2), Value::int(4), Value::int(6)])
+        );
+    }
+
+    #[test]
+    fn when_filters_falsy() {
+        let p = project_with(&[(
+            "main.yml",
+            "identity: \"$0\"\narr: [1, false, 2, null, 3]\nmain: $when($identity, ${arr()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(1), Value::int(2), Value::int(3)])
+        );
+    }
+
+    #[test]
+    fn when_empty_array() {
+        let p = project_with(&[(
+            "main.yml",
+            "double: \"${$0 * 2}\"\narr: []\nmain: $when($double, ${arr()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![])
+        );
+    }
+
+    #[test]
+    fn when_not_array_is_e011() {
+        let p = project_with(&[(
+            "main.yml",
+            "double: \"${$0 * 2}\"\nmain: $when($double, 5)\n",
+        )]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn when_array_item_is_e011() {
+        let p = project_with(&[(
+            "main.yml",
+            "double: \"${$0 * 2}\"\narr: [[1, 2]]\nmain: $when($double, ${arr()})\n",
+        )]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn when_unknown_callable_is_e002() {
+        let p = project_with(&[("main.yml", "arr: [1]\nmain: $when($nope, ${arr()})\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E002);
+    }
+
+    // =====================================================
+    // Component reference args
+    // =====================================================
+
+    #[test]
+    fn split_with_component_refs() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_str: \"a,b,c\"\ndelim: \",\"\nmain: $split(${my_str()}, ${delim()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![
+                Value::string("a"),
+                Value::string("b"),
+                Value::string("c")
+            ])
+        );
+    }
+
+    #[test]
+    fn join_with_component_refs() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_arr: [\"a\", \"b\"]\nsep: \"-\"\nmain: $join(${my_arr()}, ${sep()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("a-b")
+        );
+    }
+
+    #[test]
+    fn trim_with_component_ref() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_str: \"  hello  \"\nmain: $trim(${my_str()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("hello")
+        );
+    }
+
+    #[test]
+    fn upper_with_component_ref() {
+        let p = project_with(&[("main.yml", "my_str: \"hello\"\nmain: $upper(${my_str()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("HELLO")
+        );
+    }
+
+    #[test]
+    fn lower_with_component_ref() {
+        let p = project_with(&[("main.yml", "my_str: \"HELLO\"\nmain: $lower(${my_str()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("hello")
+        );
+    }
+
+    #[test]
+    fn replace_with_component_refs() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_str: \"hello world\"\nold: \"world\"\nnew: \"rust\"\nmain: $replace(${my_str()}, ${old()}, ${new()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("hello rust")
+        );
+    }
+
+    #[test]
+    fn first_with_component_ref() {
+        let p = project_with(&[("main.yml", "my_arr: [1, 2, 3]\nmain: $first(${my_arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(1)
+        );
+    }
+
+    #[test]
+    fn last_with_component_ref() {
+        let p = project_with(&[("main.yml", "my_arr: [1, 2, 3]\nmain: $last(${my_arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(3)
+        );
+    }
+
+    #[test]
+    fn sort_with_component_ref() {
+        let p = project_with(&[("main.yml", "my_arr: [3, 1, 2]\nmain: $sort(${my_arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(1), Value::int(2), Value::int(3)])
+        );
+    }
+
+    #[test]
+    fn reverse_with_component_ref() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_arr: [1, 2, 3]\nmain: $reverse(${my_arr()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(3), Value::int(2), Value::int(1)])
+        );
+    }
+
+    #[test]
+    fn unique_with_component_ref() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_arr: [1, 2, 1, 3]\nmain: $unique(${my_arr()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(1), Value::int(2), Value::int(3)])
+        );
+    }
+
+    #[test]
+    fn flatten_with_component_ref() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_arr: [[1, 2], [3]]\nmain: $flatten(${my_arr()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(1), Value::int(2), Value::int(3)])
+        );
+    }
+
+    #[test]
+    fn slice_with_component_ref() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_arr: [0, 1, 2, 3, 4]\nmain: $slice(${my_arr()}, 1, 3)\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(1), Value::int(2)])
+        );
+    }
+
+    #[test]
+    fn filter_with_component_ref() {
+        let p = project_with(&[(
+            "main.yml",
+            "identity: \"$0\"\nnums: [1, false, 2, null, 3]\nmain: $filter($identity, ${nums()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(1), Value::int(2), Value::int(3)])
+        );
+    }
+
+    #[test]
+    fn keys_with_component_ref() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_obj:\n  b: 2\n  a: 1\nmain: $keys(${my_obj()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::string("b"), Value::string("a")])
+        );
+    }
+
+    #[test]
+    fn values_with_component_ref() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_obj:\n  b: 2\n  a: 1\nmain: $values(${my_obj()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(2), Value::int(1)])
+        );
+    }
+
+    #[test]
+    fn entries_with_component_ref() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_obj:\n  b: 2\n  a: 1\nmain: $entries(${my_obj()})\n",
+        )]);
+        let result = compile_ok(&p, "main", &crate::ir::Args::None);
+        let Value::Array(entries) = result else {
+            panic!("expected array");
+        };
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn from_entries_with_component_ref() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_arr: [{key: \"a\", value: 1}]\nmain: $from_entries(${my_arr()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::object(IndexMap::from([("a".to_string(), Value::int(1))]))
+        );
+    }
+
+    #[test]
+    fn pick_with_component_refs() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_obj:\n  a: 1\n  b: 2\n  c: 3\nkey_list: [\"a\", \"c\"]\nmain: $pick(${my_obj()}, ${key_list()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::object(IndexMap::from([
+                ("a".to_string(), Value::int(1)),
+                ("c".to_string(), Value::int(3)),
+            ]))
+        );
+    }
+
+    #[test]
+    fn omit_with_component_refs() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_obj:\n  a: 1\n  b: 2\n  c: 3\nkey_list: [\"b\"]\nmain: $omit(${my_obj()}, ${key_list()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::object(IndexMap::from([
+                ("a".to_string(), Value::int(1)),
+                ("c".to_string(), Value::int(3)),
+            ]))
+        );
+    }
+
+    #[test]
+    fn type_with_component_ref() {
+        let p = project_with(&[("main.yml", "my_val: \"hello\"\nmain: $type(${my_val()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("string")
+        );
+    }
+
+    #[test]
+    fn is_array_with_component_ref() {
+        let p = project_with(&[("main.yml", "my_val: [1, 2]\nmain: $is_array(${my_val()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(true)
+        );
+    }
+
+    #[test]
+    fn is_object_with_component_ref() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_val:\n  a: 1\nmain: $is_object(${my_val()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(true)
+        );
+    }
+
+    #[test]
+    fn is_string_with_component_ref() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_val: \"hello\"\nmain: $is_string(${my_val()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(true)
+        );
+    }
+
+    #[test]
+    fn is_number_with_component_ref() {
+        let p = project_with(&[("main.yml", "my_val: 42\nmain: $is_number(${my_val()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(true)
+        );
+    }
+
+    #[test]
+    fn is_null_with_component_ref() {
+        let p = project_with(&[("main.yml", "my_val: null\nmain: $is_null(${my_val()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::bool(true)
+        );
+    }
+
+    #[test]
+    fn to_string_with_component_ref() {
+        let p = project_with(&[("main.yml", "my_val: 123\nmain: $to_string(${my_val()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("123")
+        );
+    }
+
+    #[test]
+    fn to_number_with_component_ref() {
+        let p = project_with(&[(
+            "main.yml",
+            "my_str: \"3.5\"\nmain: $to_number(${my_str()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::float(3.5)
+        );
+    }
+
+    #[test]
+    fn coalesce_with_component_refs() {
+        let p = project_with(&[(
+            "main.yml",
+            "a: null\nb: null\nmain: $coalesce(${a()}, ${b()}, 1)\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(1)
+        );
+    }
+
+    #[test]
+    fn sum_with_component_ref() {
+        let p = project_with(&[("main.yml", "my_arr: [1, 2, 3]\nmain: $sum(${my_arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(6)
+        );
+    }
+
+    #[test]
+    fn avg_with_component_ref() {
+        let p = project_with(&[("main.yml", "my_arr: [1, 2, 3]\nmain: $avg(${my_arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::float(2.0)
+        );
+    }
+
+    #[test]
+    fn min_with_component_ref() {
+        let p = project_with(&[("main.yml", "my_arr: [3, 1, 2]\nmain: $min(${my_arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(1)
+        );
+    }
+
+    #[test]
+    fn max_with_component_ref() {
+        let p = project_with(&[("main.yml", "my_arr: [3, 1, 2]\nmain: $max(${my_arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(3)
+        );
+    }
+
+    #[test]
+    fn if_with_component_refs() {
+        let p = project_with(&[(
+            "main.yml",
+            "cond: true\nyes: \"yes\"\nno: \"no\"\nmain: $if(${cond()}, ${yes()}, ${no()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::string("yes")
+        );
+    }
+
+    #[test]
+    fn when_with_component_ref() {
+        let p = project_with(&[(
+            "main.yml",
+            "double: \"${$0 * 2}\"\nnums: [1, 2, 3]\nmain: $when($double, ${nums()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(2), Value::int(4), Value::int(6)])
+        );
+    }
+
+    // =====================================================
+    // Additional E011 cases
+    // =====================================================
+
+    #[test]
+    fn sum_with_boolean_is_e011() {
+        let p = project_with(&[("main.yml", "arr: [true, false]\nmain: $sum(${arr()})\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn avg_with_string_is_e011() {
+        let p = project_with(&[("main.yml", "arr: [\"a\"]\nmain: $avg(${arr()})\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn min_with_string_is_e011() {
+        let p = project_with(&[("main.yml", "arr: [\"a\"]\nmain: $min(${arr()})\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn max_with_boolean_is_e011() {
+        let p = project_with(&[("main.yml", "arr: [true]\nmain: $max(${arr()})\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn slice_second_arg_not_int_is_e011() {
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [0, 1, 2]\nmain: $slice(${arr()}, \"a\", 2)\n",
+        )]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn slice_third_arg_not_int_is_e011() {
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [0, 1, 2]\nmain: $slice(${arr()}, 0, \"b\")\n",
+        )]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn from_entries_element_not_object_is_e011() {
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [\"not an object\"]\nmain: $from_entries(${arr()})\n",
+        )]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn from_entries_missing_key_field_is_e011() {
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [{wrong: \"field\"}]\nmain: $from_entries(${arr()})\n",
+        )]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn from_entries_key_not_string_is_e011() {
+        let p = project_with(&[(
+            "main.yml",
+            "arr: [{key: 1, value: 2}]\nmain: $from_entries(${arr()})\n",
+        )]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn pick_key_list_non_string_is_e011() {
+        let p = project_with(&[("main.yml", "obj:\n  a: 1\nmain: $pick(${obj()}, [123])\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn omit_key_list_non_string_is_e011() {
+        let p = project_with(&[("main.yml", "obj:\n  a: 1\nmain: $omit(${obj()}, [123])\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn sort_floats() {
+        let p = project_with(&[("main.yml", "arr: [3.0, 1.0, 2.0]\nmain: $sort(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![
+                Value::float(1.0),
+                Value::float(2.0),
+                Value::float(3.0)
+            ])
+        );
+    }
+
+    #[test]
+    fn join_object_elements_is_e011() {
+        let p = project_with(&[("main.yml", "arr: [{a: 1}]\nmain: $join(${arr()}, \",\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn join_array_elements_is_e011() {
+        let p = project_with(&[("main.yml", "arr: [[1, 2]]\nmain: $join(${arr()}, \",\")\n")]);
+        let err = compile_err(&p, "main", &crate::ir::Args::None);
+        assert_eq!(err.code, E011);
+    }
+
+    #[test]
+    fn to_number_bool_is_null() {
+        let p = project_with(&[("main.yml", "main: $to_number(true)\n")]);
+        assert_eq!(compile_ok(&p, "main", &crate::ir::Args::None), Value::Null);
+    }
+
+    #[test]
+    fn when_transform_and_filter_combined() {
+        let p = project_with(&[(
+            "main.yml",
+            "add_ten: \"${$0 + 10}\"\narr: [5, 0, -3]\nmain: $when($add_ten, ${arr()})\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::array(vec![Value::int(15), Value::int(10), Value::int(7)])
+        );
+    }
+
+    #[test]
+    fn reduce_with_init_value() {
+        let p = project_with(&[(
+            "main.yml",
+            "add: \"${$0 + last}\"\narr: [1, 2, 3]\nmain: $reduce($add, ${arr()}, 10)\n",
+        )]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::int(16)
+        );
+    }
+
+    #[test]
+    fn sum_float_array() {
+        let p = project_with(&[("main.yml", "arr: [1.5, 2.5, 3.0]\nmain: $sum(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::float(7.0)
+        );
+    }
+
+    #[test]
+    fn min_float() {
+        let p = project_with(&[("main.yml", "arr: [3.14, 1.5, 2.7]\nmain: $min(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::float(1.5)
+        );
+    }
+
+    #[test]
+    fn max_float() {
+        let p = project_with(&[("main.yml", "arr: [3.5, 1.5, 2.7]\nmain: $max(${arr()})\n")]);
+        assert_eq!(
+            compile_ok(&p, "main", &crate::ir::Args::None),
+            Value::float(3.5)
+        );
     }
 }
