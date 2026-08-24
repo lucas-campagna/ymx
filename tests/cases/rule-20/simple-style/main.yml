@@ -1,0 +1,25 @@
+_test:
+  string_style:
+    result:
+      from: div
+      style: "color: red"
+      children: text
+  object_style:
+    result:
+      from: div
+      style:
+        color: red
+        margin: "0 auto"
+      children: text
+
+string_style:
+  from: div
+  style: "color: red"
+  children: text
+
+object_style:
+  from: div
+  style:
+    color: red
+    margin: "0 auto"
+  children: text

@@ -1,0 +1,33 @@
+_test:
+  disabled_true:
+    result:
+      from: input
+      disabled: true
+  disabled_false:
+    result:
+      from: input
+      disabled: false
+  checked_true:
+    result:
+      from: input
+      checked: true
+  readonly_true:
+    result:
+      from: input
+      readonly: true
+
+disabled_true:
+  from: input
+  disabled: true
+
+disabled_false:
+  from: input
+  disabled: false
+
+checked_true:
+  from: input
+  checked: true
+
+readonly_true:
+  from: input
+  readonly: true

@@ -1,0 +1,43 @@
+_test:
+  class_string:
+    result:
+      from: div
+      class: "a b c"
+      children: text
+  class_array:
+    result:
+      from: div
+      class:
+        - a
+        - b
+        - c
+      children: text
+  class_object:
+    result:
+      from: div
+      class:
+        active: true
+        hidden: false
+        visible: true
+      children: text
+
+class_string:
+  from: div
+  class: "a b c"
+  children: text
+
+class_array:
+  from: div
+  class:
+    - a
+    - b
+    - c
+  children: text
+
+class_object:
+  from: div
+  class:
+    active: true
+    hidden: false
+    visible: true
+  children: text

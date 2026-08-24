@@ -1,0 +1,13 @@
+_test:
+  nested:
+    result:
+      from: div
+      children:
+        from: span
+        children: inner text
+
+nested:
+  from: div
+  children:
+    from: span
+    children: inner text

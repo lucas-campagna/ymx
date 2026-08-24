@@ -1,0 +1,19 @@
+_test:
+  htmx:
+    result:
+      from: div
+      hx-target: "#result"
+      hx-get: "/api/data"
+  vue:
+    result:
+      from: input
+      v-model: name
+
+htmx:
+  from: div
+  hx-target: "#result"
+  hx-get: "/api/data"
+
+vue:
+  from: input
+  v-model: name

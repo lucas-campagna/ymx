@@ -1,0 +1,25 @@
+_test:
+  string_child:
+    result:
+      from: p
+      children: "hello"
+  int_child:
+    result:
+      from: p
+      children: 42
+  bool_child:
+    result:
+      from: p
+      children: true
+
+string_child:
+  from: p
+  children: "hello"
+
+int_child:
+  from: p
+  children: 42
+
+bool_child:
+  from: p
+  children: true

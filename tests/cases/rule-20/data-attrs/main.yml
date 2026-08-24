@@ -1,0 +1,17 @@
+_test:
+  data_attrs:
+    result:
+      from: div
+      data-id: "123"
+      data-values:
+        - 1
+        - 2
+        - 3
+
+data_attrs:
+  from: div
+  data-id: "123"
+  data-values:
+    - 1
+    - 2
+    - 3
