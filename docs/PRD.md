@@ -1212,7 +1212,7 @@ The HTML renderer performs a **second pass** over the resolved `Value` IR to pro
 
 **All other object keys** are emitted as HTML attributes:
 - String / number: `attr="value"`.
-- Boolean attrs (the bare-attr list): `disabled`, `readonly`, `checked`, `selected`, `multiple`, `autofocus`, `autocomplete`, `hidden`, `controls`, `loop`, `muted`, `playsinline`, `autoplay`, `preload`, `required`, `novalidate`, `formnovalidate`, `reversed`, `indeterminate` — output the bare name when `true`, omit when `false`/`null`/`""`.
+- Boolean: `true` values output as bare attributes (e.g., `disabled` not `disabled="true"`); `false`/`null`/`""` omitted entirely. This applies to all property names, not just a fixed list.
 - Array values: space-joined before output.
 - `false` / `null` / empty string: attribute omitted.
 
