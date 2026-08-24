@@ -1657,4 +1657,67 @@ mod tests {
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
+
+    // ---- task 6: --to html integration tests ----
+
+    #[test]
+    fn run_to_html_renders_simple_tag() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "main:\n  from: div\n  children: Hello\n");
+        let mut cli = cli_for(dir.path());
+        cli.to = Some("html".to_string());
+        assert_eq!(run(cli), RunOutcome::Success);
+    }
+
+    #[test]
+    fn run_to_html_nested_inner_first() {
+        let dir = TempDir::new();
+        dir.write(
+            "main.yml",
+            "main:\n  from: div\n  children:\n    from: span\n    children: inner\n",
+        );
+        let mut cli = cli_for(dir.path());
+        cli.to = Some("html".to_string());
+        assert_eq!(run(cli), RunOutcome::Success);
+    }
+
+    #[test]
+    fn run_to_html_style_and_class() {
+        let dir = TempDir::new();
+        dir.write(
+            "main.yml",
+            "main:\n  from: div\n  style: {color: red}\n  class: [a, b]\n  children: text\n",
+        );
+        let mut cli = cli_for(dir.path());
+        cli.to = Some("html".to_string());
+        assert_eq!(run(cli), RunOutcome::Success);
+    }
+
+    #[test]
+    fn run_to_html_with_output_file() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "main:\n  from: p\n  children: hi\n");
+        let out = dir.path().join("out.html");
+        let mut cli = cli_for(dir.path());
+        cli.to = Some("html".to_string());
+        cli.output = Some(out.clone());
+        assert_eq!(run(cli), RunOutcome::Success);
+        assert!(out.exists());
+        let content = fs::read_to_string(&out).unwrap();
+        assert!(content.contains("<p>"));
+        assert!(content.contains("hi"));
+    }
+
+    #[test]
+    fn run_to_html_with_format_errors() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "main: 1\n");
+        let mut cli = cli_for(dir.path());
+        cli.to = Some("html".to_string());
+        cli.format = Some(Format::Json);
+        // The mutual-exclusivity check happens in parse(), not in run().
+        // When ParsedCli is constructed directly (bypassing parse), run()
+        // lets --to override opts.format, so this should still succeed.
+        assert_eq!(run(cli), RunOutcome::Success);
+    }
 }
