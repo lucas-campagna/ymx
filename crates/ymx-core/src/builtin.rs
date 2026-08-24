@@ -1852,6 +1852,171 @@ impl BuiltinImpl for MaxBuiltin {
     }
 }
 
+// ---- $if (conditional — lazy branches) ----
+
+pub struct IfBuiltin;
+
+impl BuiltinImpl for IfBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 3 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!(
+                    "$if expects exactly 3 arguments (cond, then, else), got {}",
+                    args.len()
+                ),
+            ));
+        }
+
+        // Arg 0 (cond): evaluated eagerly, must be Bool.
+        let cond = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Bool(b) = cond else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$if: condition must be a Bool, got {:?}", cond),
+            ));
+        };
+
+        // Args 1 and 2 (then/else): resolved lazily — only the selected branch.
+        if b {
+            resolve_parsed_value(&args[1].value, ctx)
+        } else {
+            resolve_parsed_value(&args[2].value, ctx)
+        }
+    }
+}
+
+/// Handle the property-call form of `$if`:
+/// ```yaml
+/// if: <cond>
+///   then: <then_val>
+///   else: <else_val>
+/// ```
+/// Returns `Some(result)` if this is an `if/then/else` property object,
+/// `None` otherwise.
+pub fn try_eval_if_property(
+    entries: &[super::parse::Entry],
+    scope: &Scope<'_>,
+    ctx: &BuiltinCtx<'_>,
+) -> Option<Result<Value, Diagnostic>> {
+    // Must be exactly three entries with keys "if", "then", "else" (in any order).
+    if entries.len() != 3 {
+        return None;
+    }
+    let mut if_entry = None;
+    let mut then_entry = None;
+    let mut else_entry = None;
+    for entry in entries {
+        let key = super::parse::key_to_string(&entry.key);
+        match key.as_str() {
+            "if" => if_entry = Some(entry),
+            "then" => then_entry = Some(entry),
+            "else" => else_entry = Some(entry),
+            _ => return None,
+        }
+    }
+    let (if_e, then_e, else_e) = match (if_entry, then_entry, else_entry) {
+        (Some(a), Some(b), Some(c)) => (a, b, c),
+        _ => return None,
+    };
+
+    // Resolve condition eagerly — must be Bool.
+    let cond_result = eval_resolve_node(&if_e.value, scope, ctx);
+    let cond = match cond_result {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    let Value::Bool(b) = cond else {
+        return Some(Err(ctx_err(
+            ctx,
+            E011,
+            format!("$if: condition must be a Bool, got {:?}", cond),
+        )));
+    };
+
+    // Lazily resolve only the selected branch.
+    if b {
+        Some(eval_resolve_node(&then_e.value, scope, ctx))
+    } else {
+        Some(eval_resolve_node(&else_e.value, scope, ctx))
+    }
+}
+
+// ---- $when (map + filter combined) ----
+
+pub struct WhenBuiltin;
+
+impl BuiltinImpl for WhenBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 2 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$when expects exactly 2 arguments, got {}", args.len()),
+            ));
+        }
+
+        // First arg: unevaluated callable component reference (same as $map/$filter).
+        let fn_name = match &args[0].value {
+            super::callsite::ParsedValue::Ref { name } => name.clone(),
+            other => {
+                return Err(ctx_err(ctx, E011,
+                    format!("first argument of $when must be an unevaluated callable component reference, got {:?}", other)));
+            }
+        };
+
+        // Second arg: eagerly evaluated, must be Array.
+        let arr = resolve_parsed_value(&args[1].value, ctx)?;
+        let Value::Array(items) = arr else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("second argument of $when must be an Array, got {:?}", arr),
+            ));
+        };
+
+        // Empty array → empty array.
+        if items.is_empty() {
+            return Ok(Value::Array(Vec::new()));
+        }
+
+        // Look up the callable component.
+        let def = resolve_callable(ctx, &fn_name)?;
+
+        let mut out = Vec::new();
+        for item in items {
+            let item_args = match &item {
+                Value::Object(m) => {
+                    super::ir::Args::Named(m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                }
+                v if v.is_scalar() => super::ir::Args::Positional(vec![v.clone()]),
+                Value::Array(_) => {
+                    return Err(ctx_err(ctx, E011,
+                        "array item in $when argument is not supported (array items must be objects or scalars)".to_string()));
+                }
+                _ => unreachable!("Value::Object and scalar cover all non-array cases"),
+            };
+
+            let result = eval_call(ctx, def.clone(), &item_args)?;
+            if is_truthy(&result) {
+                out.push(result);
+            }
+        }
+
+        Ok(Value::Array(out))
+    }
+}
+
 // ---- Shared helper functions ----
 
 /// Check if a value is truthy: `Bool(true)` is truthy, `Bool(false)` and
@@ -2050,7 +2215,13 @@ fn eval_resolve_body(
     ctx: &BuiltinCtx<'_>,
 ) -> Result<ResolvedBody, Diagnostic> {
     match node {
-        super::parse::Node::Object(entries, _) => eval_resolve_property_set(entries, scope, ctx),
+        super::parse::Node::Object(entries, _) => {
+            // Property-call form of `$if`: object with exactly keys `if`, `then`, `else`.
+            if let Some(result) = try_eval_if_property(entries, scope, ctx) {
+                return Ok(ResolvedBody::Value(result?));
+            }
+            eval_resolve_property_set(entries, scope, ctx)
+        }
         other => {
             let v = eval_resolve_node(other, scope, ctx)?;
             Ok(ResolvedBody::Value(v))
@@ -2128,6 +2299,10 @@ fn eval_resolve_node(
             Ok(Value::Array(values))
         }
         super::parse::Node::Object(entries, _) => {
+            // Property-call form of `$if`: object with exactly keys `if`, `then`, `else`.
+            if let Some(result) = try_eval_if_property(entries, scope, ctx) {
+                return result;
+            }
             if entries
                 .iter()
                 .any(|e| is_from_key(&e.key, &ctx.opts.from_keyword))
@@ -2308,16 +2483,8 @@ fn eval_builtin_call(
         Builtin::Avg => AvgBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Min => MinBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Max => MaxBuiltin.eval(&sub_ctx, &call.args),
-        Builtin::If => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$if is not yet implemented".to_string(),
-        )),
-        Builtin::When => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$when is not yet implemented".to_string(),
-        )),
+        Builtin::If => IfBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::When => WhenBuiltin.eval(&sub_ctx, &call.args),
     }
 }
 

@@ -31,10 +31,11 @@ use indexmap::IndexMap;
 
 use crate::builtin::{
     AvgBuiltin, Builtin, BuiltinCtx, BuiltinImpl, CoalesceBuiltin, EntriesBuiltin,
-    FromEntriesBuiltin, IsArrayBuiltin, IsNullBuiltin, IsNumberBuiltin, IsObjectBuiltin,
+    FromEntriesBuiltin, IfBuiltin, IsArrayBuiltin, IsNullBuiltin, IsNumberBuiltin, IsObjectBuiltin,
     IsStringBuiltin, JoinBuiltin, KeysBuiltin, LowerBuiltin, MapBuiltin, MaxBuiltin, MergeBuiltin,
     MinBuiltin, OmitBuiltin, PickBuiltin, ReduceBuiltin, ReplaceBuiltin, SplitBuiltin, SumBuiltin,
     ToNumberBuiltin, ToStringBuiltin, TrimBuiltin, TypeBuiltin, UpperBuiltin, ValuesBuiltin,
+    WhenBuiltin,
 };
 use crate::callsite;
 use crate::diag::{Diagnostic, FileId, Span, E002, E003, E005, E006, E008, E009, E010, E011, E016};
@@ -1204,10 +1205,67 @@ impl<'a> Resolver<'a> {
         file: FileId,
     ) -> Result<ResolvedBody, Diagnostic> {
         match node {
-            Node::Object(entries, _) => self.resolve_property_set(entries, scope, file),
+            Node::Object(entries, _) => {
+                // Property-call form of `$if`: object with exactly keys `if`, `then`, `else`.
+                // Handle with lazy branch evaluation (only the selected branch is resolved).
+                if let Some(result) = self.try_if_property(entries, scope, file)? {
+                    return Ok(ResolvedBody::Value(result));
+                }
+                self.resolve_property_set(entries, scope, file)
+            }
             other => self
                 .resolve_node(other, scope, file)
                 .map(ResolvedBody::Value),
+        }
+    }
+
+    /// Try to interpret an object body as the property-call form of `$if`:
+    /// exactly keys `if`, `then`, `else` (in any order). Returns `Some(result)`
+    /// if this is a conditional, `None` otherwise.
+    fn try_if_property(
+        &self,
+        entries: &[crate::parse::Entry],
+        scope: &Scope<'_>,
+        file: FileId,
+    ) -> Result<Option<Value>, Diagnostic> {
+        if entries.len() != 3 {
+            return Ok(None);
+        }
+        let mut if_entry = None;
+        let mut then_entry = None;
+        let mut else_entry = None;
+        for entry in entries {
+            let key = crate::parse::key_to_string(&entry.key);
+            match key.as_str() {
+                "if" => if_entry = Some(entry),
+                "then" => then_entry = Some(entry),
+                "else" => else_entry = Some(entry),
+                _ => return Ok(None),
+            }
+        }
+        let (if_e, then_e, else_e) = match (if_entry, then_entry, else_entry) {
+            (Some(a), Some(b), Some(c)) => (a, b, c),
+            _ => return Ok(None),
+        };
+
+        // Resolve condition eagerly — must be Bool.
+        let cond = self.resolve_node(&if_e.value, scope, file)?;
+        let Value::Bool(b) = cond else {
+            return Err(Diagnostic {
+                file: Some(self.project.files[file.0 as usize].clone()),
+                line: scope.span.line,
+                col: scope.span.col,
+                component: scope.component.clone(),
+                code: E011,
+                message: format!("$if: condition must be a Bool, got {:?}", cond),
+            });
+        };
+
+        // Lazily resolve only the selected branch.
+        if b {
+            Ok(Some(self.resolve_node(&then_e.value, scope, file)?))
+        } else {
+            Ok(Some(self.resolve_node(&else_e.value, scope, file)?))
         }
     }
 
@@ -1552,6 +1610,10 @@ impl<'a> Resolver<'a> {
                 .map(Value::array),
             Node::Object(entries, _) => {
                 self.reject_dollar_modifier_keys(entries, scope)?;
+                // Property-call form of `$if`: object with exactly keys `if`, `then`, `else`.
+                if let Some(result) = self.try_if_property(entries, scope, file)? {
+                    return Ok(result);
+                }
                 if entries.iter().any(|e| self.is_from_key(&e.key)) {
                     return self.resolve_mini(entries, scope, file);
                 }
@@ -1993,8 +2055,8 @@ impl<'a> Resolver<'a> {
                 Builtin::Avg => AvgBuiltin.eval(&ctx, &call.args),
                 Builtin::Min => MinBuiltin.eval(&ctx, &call.args),
                 Builtin::Max => MaxBuiltin.eval(&ctx, &call.args),
-                Builtin::If => Err(builtin_not_yet_implemented(ctx, "$if")),
-                Builtin::When => Err(builtin_not_yet_implemented(ctx, "$when")),
+                Builtin::If => IfBuiltin.eval(&ctx, &call.args),
+                Builtin::When => WhenBuiltin.eval(&ctx, &call.args),
             };
         }
 
