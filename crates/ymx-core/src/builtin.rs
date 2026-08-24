@@ -426,7 +426,271 @@ impl BuiltinImpl for ReduceBuiltin {
     }
 }
 
+// ---- $split ----
+
+pub struct SplitBuiltin;
+
+impl BuiltinImpl for SplitBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 2 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$split expects exactly 2 arguments, got {}", args.len()),
+            ));
+        }
+
+        let s = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::String(s) = s else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$split first argument must be a String, got {:?}", s),
+            ));
+        };
+
+        let delim = resolve_parsed_value(&args[1].value, ctx)?;
+        let Value::String(delim) = delim else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$split second argument must be a String, got {:?}", delim),
+            ));
+        };
+
+        if delim.is_empty() {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                "$split: empty delimiter is not allowed".to_string(),
+            ));
+        }
+
+        let parts: Vec<Value> = s.split(&delim).map(Value::string).collect();
+        Ok(Value::Array(parts))
+    }
+}
+
+// ---- $join ----
+
+pub struct JoinBuiltin;
+
+impl BuiltinImpl for JoinBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 2 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$join expects exactly 2 arguments, got {}", args.len()),
+            ));
+        }
+
+        let arr = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::Array(items) = arr else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$join first argument must be an Array, got {:?}", arr),
+            ));
+        };
+
+        let delim = resolve_parsed_value(&args[1].value, ctx)?;
+        let Value::String(delim) = delim else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$join second argument must be a String, got {:?}", delim),
+            ));
+        };
+
+        let mut parts = Vec::with_capacity(items.len());
+        for item in &items {
+            let s = value_to_string(item).map_err(|_| {
+                ctx_err(
+                    ctx,
+                    E011,
+                    format!("$join: cannot coerce {:?} to string", item),
+                )
+            })?;
+            parts.push(s);
+        }
+
+        Ok(Value::string(parts.join(&delim)))
+    }
+}
+
+// ---- $trim ----
+
+pub struct TrimBuiltin;
+
+impl BuiltinImpl for TrimBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$trim expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let s = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::String(s) = s else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$trim argument must be a String, got {:?}", s),
+            ));
+        };
+
+        Ok(Value::string(s.trim().to_string()))
+    }
+}
+
+// ---- $upper ----
+
+pub struct UpperBuiltin;
+
+impl BuiltinImpl for UpperBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$upper expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let s = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::String(s) = s else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$upper argument must be a String, got {:?}", s),
+            ));
+        };
+
+        Ok(Value::string(s.to_uppercase()))
+    }
+}
+
+// ---- $lower ----
+
+pub struct LowerBuiltin;
+
+impl BuiltinImpl for LowerBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 1 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$lower expects exactly 1 argument, got {}", args.len()),
+            ));
+        }
+
+        let s = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::String(s) = s else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$lower argument must be a String, got {:?}", s),
+            ));
+        };
+
+        Ok(Value::string(s.to_lowercase()))
+    }
+}
+
+// ---- $replace ----
+
+pub struct ReplaceBuiltin;
+
+impl BuiltinImpl for ReplaceBuiltin {
+    fn eval(
+        &self,
+        ctx: &BuiltinCtx<'_>,
+        args: &[super::callsite::ParsedArg],
+    ) -> Result<Value, Diagnostic> {
+        if args.len() != 3 {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$replace expects exactly 3 arguments, got {}", args.len()),
+            ));
+        }
+
+        let s = resolve_parsed_value(&args[0].value, ctx)?;
+        let Value::String(s) = s else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!("$replace first argument must be a String, got {:?}", s),
+            ));
+        };
+
+        let pattern = resolve_parsed_value(&args[1].value, ctx)?;
+        let Value::String(pattern) = pattern else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!(
+                    "$replace second argument must be a String, got {:?}",
+                    pattern
+                ),
+            ));
+        };
+
+        let replacement = resolve_parsed_value(&args[2].value, ctx)?;
+        let Value::String(replacement) = replacement else {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                format!(
+                    "$replace third argument must be a String, got {:?}",
+                    replacement
+                ),
+            ));
+        };
+
+        if pattern.is_empty() {
+            return Err(ctx_err(
+                ctx,
+                E011,
+                "$replace: empty pattern is not allowed".to_string(),
+            ));
+        }
+
+        Ok(Value::string(s.replace(&pattern, &replacement)))
+    }
+}
+
 // ---- Shared helper functions ----
+
+/// Render a [`Value`] to a string using the same rules as interpolation.
+/// Int renders plainly, Float via `render_f64`, Bool as `"true"`/`"false"`,
+/// Null as `"null"`, String passes through. Array/Object → `Err(NoStringRender)`.
+fn value_to_string(v: &Value) -> Result<String, crate::ir::NoStringRender> {
+    crate::ir::render_value(v)
+}
 
 /// Resolve a parsed call-site argument value through the caller's scope.
 /// Used for eagerly-evaluated builtin arguments.
@@ -823,36 +1087,12 @@ fn eval_builtin_call(
         Builtin::Merge => MergeBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Map => MapBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Reduce => ReduceBuiltin.eval(&sub_ctx, &call.args),
-        Builtin::Split => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$split is not yet implemented".to_string(),
-        )),
-        Builtin::Join => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$join is not yet implemented".to_string(),
-        )),
-        Builtin::Trim => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$trim is not yet implemented".to_string(),
-        )),
-        Builtin::Upper => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$upper is not yet implemented".to_string(),
-        )),
-        Builtin::Lower => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$lower is not yet implemented".to_string(),
-        )),
-        Builtin::Replace => Err(ctx_err(
-            &sub_ctx,
-            E011,
-            "$replace is not yet implemented".to_string(),
-        )),
+        Builtin::Split => SplitBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Join => JoinBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Trim => TrimBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Upper => UpperBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Lower => LowerBuiltin.eval(&sub_ctx, &call.args),
+        Builtin::Replace => ReplaceBuiltin.eval(&sub_ctx, &call.args),
         Builtin::Filter => Err(ctx_err(
             &sub_ctx,
             E011,

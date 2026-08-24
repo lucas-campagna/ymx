@@ -29,7 +29,10 @@ use std::rc::Rc;
 
 use indexmap::IndexMap;
 
-use crate::builtin::{Builtin, BuiltinCtx, BuiltinImpl, MapBuiltin, MergeBuiltin, ReduceBuiltin};
+use crate::builtin::{
+    Builtin, BuiltinCtx, BuiltinImpl, JoinBuiltin, LowerBuiltin, MapBuiltin, MergeBuiltin,
+    ReduceBuiltin, ReplaceBuiltin, SplitBuiltin, TrimBuiltin, UpperBuiltin,
+};
 use crate::callsite;
 use crate::diag::{Diagnostic, FileId, Span, E002, E003, E005, E006, E008, E009, E010, E011, E016};
 use crate::interp;
@@ -1954,12 +1957,12 @@ impl<'a> Resolver<'a> {
                 Builtin::Merge => MergeBuiltin.eval(&ctx, &call.args),
                 Builtin::Map => MapBuiltin.eval(&ctx, &call.args),
                 Builtin::Reduce => ReduceBuiltin.eval(&ctx, &call.args),
-                Builtin::Split => Err(builtin_not_yet_implemented(ctx, "$split")),
-                Builtin::Join => Err(builtin_not_yet_implemented(ctx, "$join")),
-                Builtin::Trim => Err(builtin_not_yet_implemented(ctx, "$trim")),
-                Builtin::Upper => Err(builtin_not_yet_implemented(ctx, "$upper")),
-                Builtin::Lower => Err(builtin_not_yet_implemented(ctx, "$lower")),
-                Builtin::Replace => Err(builtin_not_yet_implemented(ctx, "$replace")),
+                Builtin::Split => SplitBuiltin.eval(&ctx, &call.args),
+                Builtin::Join => JoinBuiltin.eval(&ctx, &call.args),
+                Builtin::Trim => TrimBuiltin.eval(&ctx, &call.args),
+                Builtin::Upper => UpperBuiltin.eval(&ctx, &call.args),
+                Builtin::Lower => LowerBuiltin.eval(&ctx, &call.args),
+                Builtin::Replace => ReplaceBuiltin.eval(&ctx, &call.args),
                 Builtin::Filter => Err(builtin_not_yet_implemented(ctx, "$filter")),
                 Builtin::Sort => Err(builtin_not_yet_implemented(ctx, "$sort")),
                 Builtin::Reverse => Err(builtin_not_yet_implemented(ctx, "$reverse")),
