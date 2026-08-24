@@ -1,0 +1,14 @@
+# tests/cases/rule-21/split-basic.yml
+---
+main: $split("a,b,c", ",")
+_test:
+  main: {result: ["a","b","c"]}
+  multi: {result: ["a","b","c"]}
+  no_match: {result: ["abc"]}
+  empty_str: {error: E011}
+  chars: {error: E011}
+
+multi: $split("a::b::c", "::")
+no_match: $split("abc", ",")
+empty_str: $split("hello", "")
+chars: $split("abc", "")

@@ -1,0 +1,14 @@
+# tests/cases/rule-21/if-lazy.yml
+---
+_test:
+  if_true: {result: "yes"}
+  if_false: {result: "no"}
+  if_null: {error: E011}
+  if_zero: {error: E011}
+  if_bad_cond: {error: E011}
+
+if_true: $if(true, "yes", "no")
+if_false: $if(false, "yes", "no")
+if_null: $if(null, "yes", "no")
+if_zero: $if(0, "yes", "no")
+if_bad_cond: $if("not bool", 1, 2)

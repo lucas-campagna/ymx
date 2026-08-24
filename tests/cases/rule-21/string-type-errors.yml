@@ -1,0 +1,18 @@
+# tests/cases/rule-21/string-type-errors.yml
+---
+_test:
+  bad_split1: {error: E011}
+  bad_split2: {error: E011}
+  bad_join: {error: E011}
+  bad_trim: {error: E011}
+  bad_upper: {error: E011}
+  bad_lower: {error: E011}
+  bad_replace: {error: E011}
+
+bad_split1: $split(123, ",")
+bad_split2: $split("a", 123)
+bad_join: $join("not array", ",")
+bad_trim: $trim(123)
+bad_upper: $upper([])
+bad_lower: $lower(123)
+bad_replace: $replace(123, "a", "b")

@@ -1,0 +1,10 @@
+# tests/cases/rule-21/replace-basic.yml
+---
+main: $replace("hello world", "world", "rust")
+_test:
+  main: {result: "hello rust"}
+  all: {result: "bbbb"}
+  none: {result: "abc"}
+
+all: $replace("aaaa", "a", "b")
+none: $replace("abc", "x", "y")

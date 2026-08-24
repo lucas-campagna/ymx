@@ -1,0 +1,22 @@
+# tests/cases/rule-21/math-aggregates.yml
+---
+_test:
+  sum_main: {result: 6}
+  sum_empty: {result: 0}
+  avg_main: {result: 2.0}
+  avg_empty: {result: null}
+  min_main: {result: 1}
+  max_main: {result: 3}
+  min_empty: {result: null}
+  max_empty: {result: null}
+  sum_bad: {error: E011}
+
+sum_main: $sum([1,2,3])
+sum_empty: $sum([])
+avg_main: $avg([1,2,3])
+avg_empty: $avg([])
+min_main: $min([3,1,2])
+max_main: $max([3,1,2])
+min_empty: $min([])
+max_empty: $max([])
+sum_bad: $sum(["a","b"])

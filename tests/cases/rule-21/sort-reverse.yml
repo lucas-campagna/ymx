@@ -1,0 +1,12 @@
+# tests/cases/rule-21/sort-reverse.yml
+---
+sort_nums: $sort([3,1,2])
+_test:
+  sort_nums: {result: [1,2,3]}
+  sort_strs: {result: ["a","b","c"]}
+  sort_mixed: {error: E011}
+  reverse_main: {result: [3,2,1]}
+
+sort_strs: $sort(["c","a","b"])
+sort_mixed: $sort([1,"a"])
+reverse_main: $reverse([1,2,3])

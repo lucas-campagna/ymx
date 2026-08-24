@@ -1,0 +1,25 @@
+# tests/cases/rule-21/component-refs.yml
+---
+_test:
+  split_ref: {result: ["a","b","c"]}
+  keys_ref: {result: ["b","a"]}
+  sum_ref: {result: 6}
+  if_ref: {result: "yes"}
+  filter_ref: {result: [1,2,3,4]}
+
+my_str: "a,b,c"
+delim: ","
+split_ref: $split(${my_str()}, ${delim()})
+my_obj:
+  b: 2
+  a: 1
+keys_ref: $keys(${my_obj()})
+my_arr: [1,2,3]
+sum_ref: $sum(${my_arr()})
+cond: true
+yes: "yes"
+no: "no"
+if_ref: $if(${cond()}, ${yes()}, ${no()})
+is_even: "$0"
+nums: [1,2,3,4]
+filter_ref: $filter($is_even, ${nums()})

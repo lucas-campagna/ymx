@@ -1,0 +1,10 @@
+# tests/cases/rule-21/if-property-call.yml
+---
+_test:
+  prop_true: {result: "yes"}
+  prop_false: {result: "no"}
+  prop_bad_key: {result: {if: true, then: "yes", unless: "no"}}
+
+prop_true: {if: true, then: "yes", else: "no"}
+prop_false: {if: false, then: "yes", else: "no"}
+prop_bad_key: {if: true, then: "yes", unless: "no"}

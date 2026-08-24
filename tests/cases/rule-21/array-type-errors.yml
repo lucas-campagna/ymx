@@ -1,0 +1,16 @@
+# tests/cases/rule-21/array-type-errors.yml
+---
+_test:
+  bad_sort: {error: E011}
+  bad_reverse: {error: E011}
+  bad_unique: {error: E011}
+  bad_flatten: {error: E011}
+  bad_first: {error: E011}
+  bad_last: {error: E011}
+
+bad_sort: $sort("not array")
+bad_reverse: $reverse(123)
+bad_unique: $unique("not array")
+bad_flatten: $flatten("not array")
+bad_first: $first("not array")
+bad_last: $last(123)

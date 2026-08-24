@@ -1,0 +1,12 @@
+# tests/cases/rule-21/join-basic.yml
+---
+main: $join(["a","b","c"], "-")
+_test:
+  main: {result: "a-b-c"}
+  empty_arr: {result: ""}
+  empty_delim: {result: "hello"}
+  single: {result: "a"}
+
+empty_arr: $join([], "x")
+empty_delim: $join(["hello"], "")
+single: $join(["a"], "-")

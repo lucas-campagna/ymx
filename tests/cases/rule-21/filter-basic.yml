@@ -1,0 +1,14 @@
+# tests/cases/rule-21/filter-basic.yml
+---
+_test:
+  main: {result: [1,2,3,4]}
+  empty: {result: []}
+  bad_callable: {error: E011}
+  bad_array: {error: E011}
+
+is_even: "$0"
+nums: [1,2,3,4]
+main: $filter($is_even, ${nums()})
+empty: $filter($is_even, [])
+bad_callable: $filter("not a callable", [1,2,3])
+bad_array: $filter($is_even, "not array")

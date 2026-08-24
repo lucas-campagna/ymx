@@ -1,0 +1,10 @@
+# tests/cases/rule-21/coalesce-basic.yml
+---
+_test:
+  main: {result: 1}
+  false_not_null: {result: false}
+  all_null: {result: null}
+
+main: $coalesce(null, null, 1, 2)
+false_not_null: $coalesce(null, false, 0)
+all_null: $coalesce(null, null)

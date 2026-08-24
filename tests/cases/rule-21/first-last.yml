@@ -1,0 +1,12 @@
+# tests/cases/rule-21/first-last.yml
+---
+first_main: $first([1,2,3])
+_test:
+  first_main: {result: 1}
+  first_empty: {result: null}
+  last_main: {result: 3}
+  last_empty: {result: null}
+
+first_empty: $first([])
+last_main: $last([1,2,3])
+last_empty: $last([])

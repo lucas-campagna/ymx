@@ -1,0 +1,38 @@
+# tests/cases/rule-21/type-is-*.yml
+---
+_test:
+  t_null: {result: "null"}
+  t_bool: {result: "bool"}
+  t_int: {result: "int"}
+  t_float: {result: "float"}
+  t_str: {result: "string"}
+  t_arr: {result: "array"}
+  t_obj: {result: "object"}
+  is_arr_yes: {result: true}
+  is_arr_no: {result: false}
+  is_obj_yes: {result: true}
+  is_obj_no: {result: false}
+  is_str_yes: {result: true}
+  is_num_yes_int: {result: true}
+  is_num_yes_float: {result: true}
+  is_num_no_str: {result: false}
+  is_null_yes: {result: true}
+  is_null_no: {result: false}
+
+t_null: $type(null)
+t_bool: $type(true)
+t_int: $type(1)
+t_float: $type(1.5)
+t_str: $type("hello")
+t_arr: $type([1,2])
+t_obj: $type({a:1})
+is_arr_yes: $is_array([1,2])
+is_arr_no: $is_array({a:1})
+is_obj_yes: $is_object({a:1})
+is_obj_no: $is_object([1,2])
+is_str_yes: $is_string("hello")
+is_num_yes_int: $is_number(42)
+is_num_yes_float: $is_number(3.14)
+is_num_no_str: $is_number("42")
+is_null_yes: $is_null(null)
+is_null_no: $is_null(false)
