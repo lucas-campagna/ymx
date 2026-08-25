@@ -33,7 +33,7 @@
 //! 4. Otherwise `compile(&project, &opts)` — any diagnostic renders to
 //!    stderr and yields [`RunOutcome::Diagnostic`]; success hits [`emit`].
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -46,7 +46,11 @@ use yaml_rust2::{Yaml, YamlLoader};
 use ymx_config::{extract_options, CliOverrides};
 use ymx_lib::ymx_core::ir::Args;
 use ymx_lib::ymx_core::project::{Format, Options, Project};
-use ymx_lib::ymx_core::render::{DefaultHtmlRenderer, HtmlRenderer, pretty_print_html};
+#[cfg(feature = "pdf-bundled")]
+use ymx_lib::ymx_core::render::BundledChromeBackend;
+use ymx_lib::ymx_core::render::{
+    pretty_print_html, DefaultHtmlRenderer, HtmlRenderer, PdfBackend, PdfError, SystemChromeBackend,
+};
 use ymx_lib::ymx_core::resolve::{compile, compile_component};
 use ymx_lib::{load_project, load_project_with_override, Diagnostic, StdExecutor, Value};
 use ymx_test::{parse_tests, run_tests, Expected, TestResult};
@@ -725,6 +729,8 @@ fn emit(cli: &ParsedCli, opts: &Options, value: &Value) -> RunOutcome {
         Format::Compact => emit_json(cli, opts.pretty, value),
         // HTML format renders the value tree to HTML via DefaultHtmlRenderer.
         Format::Html => emit_html(cli, value),
+        // PDF format renders the value tree to HTML then converts to PDF.
+        Format::Pdf => emit_pdf(cli, value),
     }
 }
 
@@ -764,6 +770,121 @@ fn emit_html(cli: &ParsedCli, value: &Value) -> RunOutcome {
             RunOutcome::Success
         }
     }
+}
+
+/// Render `value` to PDF via [`DefaultHtmlRenderer`] + [`PdfBackend`] and
+/// dispatch binary output to `--output` or stdout.
+fn emit_pdf(cli: &ParsedCli, value: &Value) -> RunOutcome {
+    let html = DefaultHtmlRenderer.render_html(value);
+    let pdf_bytes: Result<Vec<u8>, PdfError> = match cli.pdf_backend {
+        None | Some(crate::args::PdfBackendKind::System) => {
+            let backend = SystemChromeBackend;
+            backend.render(&html)
+        }
+        #[cfg(feature = "pdf-bundled")]
+        Some(crate::args::PdfBackendKind::Bundled) => {
+            let backend = BundledChromeBackend;
+            backend.render(&html)
+        }
+        #[cfg(not(feature = "pdf-bundled"))]
+        Some(crate::args::PdfBackendKind::Bundled) => Err(PdfError {
+            message: "bundled backend not available: rebuild with --features pdf-bundled"
+                .to_string(),
+        }),
+        Some(crate::args::PdfBackendKind::Docker) => render_pdf_docker(&html),
+    };
+    match pdf_bytes {
+        Ok(bytes) => match cli.output.as_deref() {
+            Some(path) => write_file_binary(path, &bytes),
+            None => {
+                if let Err(e) = std::io::stdout().lock().write_all(&bytes) {
+                    eprintln!("ymx: failed to write PDF to stdout: {e}");
+                    return RunOutcome::Diagnostic;
+                }
+                RunOutcome::Success
+            }
+        },
+        Err(e) => {
+            eprintln!("ymx: PDF render error: {}", e.message);
+            RunOutcome::Diagnostic
+        }
+    }
+}
+
+/// Render HTML to PDF using Docker (pdfix/html-to-pdf image).
+#[cfg(feature = "pdf-docker")]
+fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
+    use std::fs;
+    use std::process::Command;
+
+    let cwd = std::env::current_dir().map_err(|e| PdfError {
+        message: e.to_string(),
+    })?;
+    let html_path = cwd.join("index.html");
+    let pdf_path = cwd.join("convert.pdf");
+
+    fs::write(&html_path, html).map_err(|e| PdfError {
+        message: e.to_string(),
+    })?;
+
+    let output = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{}:/data/", cwd.display()),
+            "-w",
+            "/data/",
+            "pdfix/html-to-pdf:latest",
+            "html-to-pdf",
+            "-i",
+            "index.html",
+            "-o",
+            "convert.pdf",
+        ])
+        .output()
+        .map_err(|e| PdfError {
+            message: format!("docker run failed: {}", e),
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(PdfError {
+            message: format!("docker exited with {}: {}", output.status, stderr),
+        });
+    }
+
+    let pdf_bytes = fs::read(&pdf_path).map_err(|e| PdfError {
+        message: format!("failed to read convert.pdf: {}", e),
+    })?;
+
+    let _ = fs::remove_file(&html_path);
+    let _ = fs::remove_file(&pdf_path);
+
+    Ok(pdf_bytes)
+}
+
+/// Stub for pdf-docker feature when not enabled.
+#[cfg(not(feature = "pdf-docker"))]
+fn render_pdf_docker(_html: &str) -> Result<Vec<u8>, PdfError> {
+    Err(PdfError {
+        message: "docker backend not available: rebuild with --features pdf-docker".to_string(),
+    })
+}
+
+/// Write binary `bytes` to `path`. A write failure prints a diagnostic-style
+/// error to stderr, best-effort removes any partial file, and yields
+/// [`RunOutcome::Diagnostic`].
+fn write_file_binary(path: &Path, bytes: &[u8]) -> RunOutcome {
+    if let Err(e) = std::fs::write(path, bytes) {
+        let _ = std::fs::remove_file(path);
+        eprintln!(
+            "ymx: failed to write output file `{path}`: {e}",
+            path = path.display()
+        );
+        return RunOutcome::Diagnostic;
+    }
+    RunOutcome::Success
 }
 
 /// Serialize `value` to a JSON `String`: compact by default, pretty when
@@ -871,6 +992,7 @@ mod tests {
             allowed_backends: None,
             no_exec: false,
             code: None,
+            pdf_backend: None,
         }
     }
 
@@ -895,6 +1017,7 @@ mod tests {
             allowed_backends: None,
             no_exec: false,
             code: None,
+            pdf_backend: None,
         }
     }
 
@@ -913,6 +1036,7 @@ mod tests {
             allowed_backends: None,
             no_exec: false,
             code: None,
+            pdf_backend: None,
         }
     }
 
@@ -1466,6 +1590,7 @@ mod tests {
             allowed_backends: None,
             no_exec: false,
             code: Some("main: hello world".to_string()),
+            pdf_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1487,6 +1612,7 @@ mod tests {
             allowed_backends: None,
             no_exec: false,
             code: Some("comp1: 20\nmain: ${comp1()}".to_string()),
+            pdf_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1508,6 +1634,7 @@ mod tests {
             allowed_backends: None,
             no_exec: false,
             code: Some("comp2: 20\nmain: ${comp1()} + ${comp2()}".to_string()),
+            pdf_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1534,6 +1661,7 @@ mod tests {
             allowed_backends: None,
             no_exec: false,
             code: Some("{\"main\": \"${1 + 2}\"}".to_string()),
+            pdf_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1554,6 +1682,7 @@ mod tests {
             allowed_backends: None,
             no_exec: false,
             code: Some("main: ${10 / 2}".to_string()),
+            pdf_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1574,6 +1703,7 @@ mod tests {
             allowed_backends: None,
             no_exec: false,
             code: Some("greeting: \"hi\"\nmain: ${greeting()}".to_string()),
+            pdf_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1595,6 +1725,7 @@ mod tests {
             allowed_backends: None,
             no_exec: false,
             code: Some("{\"comp2\": 20, \"main\": \"${comp1()} + ${comp2()}\"}".to_string()),
+            pdf_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1616,6 +1747,7 @@ mod tests {
             allowed_backends: None,
             no_exec: false,
             code: Some("main: ${base() * 3 + 1}".to_string()),
+            pdf_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1637,6 +1769,7 @@ mod tests {
             allowed_backends: None,
             no_exec: false,
             code: Some("main: ${greet()}".to_string()),
+            pdf_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }

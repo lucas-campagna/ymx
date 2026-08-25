@@ -37,20 +37,8 @@ const BOOLEAN_ATTRS: &[&str] = &[
 
 /// Lowercase set of HTML void (self-closing) elements that have no closing tag.
 const VOID_ELEMENTS: &[&str] = &[
-    "area",
-    "base",
-    "br",
-    "col",
-    "embed",
-    "hr",
-    "img",
-    "input",
-    "link",
-    "meta",
-    "param",
-    "source",
-    "track",
-    "wbr",
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
 ];
 
 /// Case-insensitive set of known HTML attribute names.
@@ -177,7 +165,8 @@ fn render_tag(map: &IndexMap<String, Value>) -> String {
         if children_obj.get("children").is_some() && !children_obj.contains_key("from") {
             let inner_children = children_obj.get("children").unwrap();
             // Build extra attr string for the outer tag from the children object's other keys
-            let extra_attrs = render_attrs_from_map(children_obj, Some(&["children".into(), "from".into()]));
+            let extra_attrs =
+                render_attrs_from_map(children_obj, Some(&["children".into(), "from".into()]));
             if !extra_attrs.is_empty() {
                 attrs.push_str(&extra_attrs);
             }
@@ -200,7 +189,10 @@ fn render_tag(map: &IndexMap<String, Value>) -> String {
 }
 
 /// Render attributes from an object map, optionally skipping certain keys.
-fn render_attrs_from_map(map: &IndexMap<String, Value>, skip_keys: Option<&[std::borrow::Cow<'_, str>]>) -> String {
+fn render_attrs_from_map(
+    map: &IndexMap<String, Value>,
+    skip_keys: Option<&[std::borrow::Cow<'_, str>]>,
+) -> String {
     let mut out = String::new();
 
     for (key, val) in map {
@@ -300,44 +292,43 @@ fn looks_like_attr(key: &str) -> bool {
 /// If the object has a `children` key plus exactly one other non-attribute key,
 /// the other key is treated as the tag name.
 fn find_tag_shortcut<'a>(map: &'a IndexMap<String, Value>) -> Option<(&'a str, &'a Value)> {
-    let non_attr: Vec<_> = map.iter()
+    let non_attr: Vec<_> = map
+        .iter()
         .filter(|(k, _)| !is_known_html_attr(k) && !k.eq_ignore_ascii_case("children"))
         .collect();
-    
+
     // If object has `children` plus exactly one other non-attribute key, that other key is the tag
     if map.contains_key("children") && non_attr.len() == 1 {
         let (key, val) = non_attr[0];
         return Some((key.as_str(), val));
     }
-    
+
     // If exactly one non-attribute key (existing behavior)
     if non_attr.len() == 1 {
         let (key, val) = non_attr[0];
         return Some((key.as_str(), val));
     }
-    
+
     // If multiple non-attribute keys, check if one is a tag and others are booleans
     // A key is a potential tag if its value is NOT boolean and NOT array and key doesn't look like an attr
-    let tag_candidates: Vec<_> = non_attr.iter()
-        .filter(|(k, v)| {
-            !matches!(v, Value::Bool(_) | Value::Array(_)) && !looks_like_attr(k)
-        })
+    let tag_candidates: Vec<_> = non_attr
+        .iter()
+        .filter(|(k, v)| !matches!(v, Value::Bool(_) | Value::Array(_)) && !looks_like_attr(k))
         .collect();
-    
+
     // If exactly one tag candidate AND all other non-attr keys are booleans or attr-like
     if tag_candidates.len() == 1 && non_attr.len() > 1 {
-        let remaining_all_ok = non_attr.iter()
+        let remaining_all_ok = non_attr
+            .iter()
             .filter(|(k, _)| !matches!(k.as_str(), _ if *k == tag_candidates[0].0))
-            .all(|(k, v)| {
-                matches!(v, Value::Bool(_)) || looks_like_attr(k)
-            });
-        
+            .all(|(k, v)| matches!(v, Value::Bool(_)) || looks_like_attr(k));
+
         if remaining_all_ok {
             let (key, val) = tag_candidates[0];
             return Some((key.as_str(), val));
         }
     }
-    
+
     None
 }
 
@@ -467,11 +458,9 @@ pub fn stringify_attr_value(v: &Value) -> String {
                 .map(|s| s.replace('"', "'"))
                 .unwrap_or_else(|_| items.join(" "))
         }
-        Value::Object(obj) => {
-            serde_json::to_string(obj)
-                .map(|s| s.replace('"', "'"))
-                .unwrap_or_else(|_| "{...}".to_string())
-        }
+        Value::Object(obj) => serde_json::to_string(obj)
+            .map(|s| s.replace('"', "'"))
+            .unwrap_or_else(|_| "{...}".to_string()),
     }
 }
 
@@ -527,20 +516,27 @@ impl PdfBackend for SystemChromeBackend {
         use headless_chrome::types::PrintToPdfOptions;
         use headless_chrome::{Browser, LaunchOptions};
 
-        let browser = Browser::new(LaunchOptions::default())
-            .map_err(|e| PdfError { message: e.to_string() })?;
-        let tab = browser
-            .new_tab()
-            .map_err(|e| PdfError { message: e.to_string() })?;
+        let browser = Browser::new(LaunchOptions::default()).map_err(|e| PdfError {
+            message: e.to_string(),
+        })?;
+        let tab = browser.new_tab().map_err(|e| PdfError {
+            message: e.to_string(),
+        })?;
 
         let data_url = format!("data:text/html;charset=utf-8,{}", urlencoding::encode(html));
         tab.navigate_to(&data_url)
-            .map_err(|e| PdfError { message: e.to_string() })?
+            .map_err(|e| PdfError {
+                message: e.to_string(),
+            })?
             .wait_until_navigated()
-            .map_err(|e| PdfError { message: e.to_string() })?;
+            .map_err(|e| PdfError {
+                message: e.to_string(),
+            })?;
 
         tab.print_to_pdf(Some(PrintToPdfOptions::default()))
-            .map_err(|e| PdfError { message: e.to_string() })
+            .map_err(|e| PdfError {
+                message: e.to_string(),
+            })
     }
 }
 
@@ -566,39 +562,46 @@ impl PdfBackend for BundledChromeBackend {
         use headless_chrome::types::PrintToPdfOptions;
         use headless_chrome::{Browser, LaunchOptions};
 
-        let browser = Browser::new(LaunchOptions::default())
-            .map_err(|e| PdfError { message: e.to_string() })?;
-        let tab = browser
-            .new_tab()
-            .map_err(|e| PdfError { message: e.to_string() })?;
+        let browser = Browser::new(LaunchOptions::default()).map_err(|e| PdfError {
+            message: e.to_string(),
+        })?;
+        let tab = browser.new_tab().map_err(|e| PdfError {
+            message: e.to_string(),
+        })?;
 
         let data_url = format!("data:text/html;charset=utf-8,{}", urlencoding::encode(html));
         tab.navigate_to(&data_url)
-            .map_err(|e| PdfError { message: e.to_string() })?
+            .map_err(|e| PdfError {
+                message: e.to_string(),
+            })?
             .wait_until_navigated()
-            .map_err(|e| PdfError { message: e.to_string() })?;
+            .map_err(|e| PdfError {
+                message: e.to_string(),
+            })?;
 
         tab.print_to_pdf(Some(PrintToPdfOptions::default()))
-            .map_err(|e| PdfError { message: e.to_string() })
+            .map_err(|e| PdfError {
+                message: e.to_string(),
+            })
     }
 }
 
 /// Pretty-print an HTML string with proper indentation.
 pub fn pretty_print_html(html: &str) -> String {
     let void_elements: &[&str] = &[
-        "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
-        "meta", "param", "source", "track", "wbr",
+        "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+        "source", "track", "wbr",
     ];
-    
+
     let mut result = String::new();
     let mut depth: usize = 0;
     let mut in_tag = false;
     let mut current_tag = String::new();
     // Stack to track if each open tag had child tags
     let mut had_children_stack: Vec<bool> = Vec::new();
-    
+
     let chars = html.chars();
-    
+
     for c in chars {
         match c {
             '<' => {
@@ -609,13 +612,18 @@ pub fn pretty_print_html(html: &str) -> String {
             '>' if in_tag => {
                 in_tag = false;
                 current_tag.push(c);
-                
+
                 let is_closing = current_tag.starts_with("</");
                 let is_void = {
-                    let inner = current_tag.trim_start_matches("<").trim_start_matches("</").split_whitespace().next().unwrap_or("");
+                    let inner = current_tag
+                        .trim_start_matches("<")
+                        .trim_start_matches("</")
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("");
                     void_elements.contains(&inner)
                 };
-                
+
                 if is_closing {
                     // Remove trailing whitespace before closing tag
                     while result.ends_with('\n') || result.ends_with(' ') {
@@ -662,12 +670,12 @@ pub fn pretty_print_html(html: &str) -> String {
             }
         }
     }
-    
+
     while result.ends_with('\n') || result.ends_with(' ') {
         result.pop();
     }
     result.push('\n');
-    
+
     result
 }
 

@@ -20,6 +20,14 @@ use std::path::PathBuf;
 use ymx_config::CliOverrides;
 use ymx_lib::ymx_core::project::Format;
 
+/// PDF backend selection for `-f pdf`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PdfBackendKind {
+    System,
+    Bundled,
+    Docker,
+}
+
 /// The parsed command line: the file positional and per-flag inputs
 /// (`None` when the flag was absent — i.e. defer to `_ymx` then engine
 /// default), plus the CLI-only orchestration concerns (`output`, `test`)
@@ -69,6 +77,9 @@ pub struct ParsedCli {
     /// into the global namespace, overriding any file-loaded definitions
     /// with the same name.
     pub code: Option<String>,
+    /// `--pdf-backend <system|bundled|docker>` — which PDF backend to use
+    /// when `-f pdf` is active. Defaults to `None` (system).
+    pub pdf_backend: Option<PdfBackendKind>,
 }
 
 impl ParsedCli {
@@ -139,6 +150,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     let mut allowed_backends: Option<Vec<String>> = None;
     let mut no_exec = false;
     let mut code: Option<String> = None;
+    let mut pdf_backend: Option<PdfBackendKind> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -162,11 +174,12 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
                     "json" => Format::Json,
                     "compact" => Format::Compact,
                     "html" => Format::Html,
+                    "pdf" => Format::Pdf,
                     "diagnostics" => Format::Diagnostics,
                     other => {
                         return Err(ParseError {
                             message: format!(
-                                "--format: `{other}` is not `json`, `compact`, `html`, or `diagnostics`"
+                                "--format: `{other}` is not `json`, `compact`, `html`, `pdf`, or `diagnostics`"
                             ),
                         })
                     }
@@ -188,6 +201,21 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
                 allowed_backends = Some(list);
             }
             "--no-exec" => no_exec = true,
+            "--pdf-backend" => {
+                let raw = take_value(args, &mut i, "--pdf-backend")?;
+                pdf_backend = Some(match raw.as_str() {
+                    "system" => PdfBackendKind::System,
+                    "bundled" => PdfBackendKind::Bundled,
+                    "docker" => PdfBackendKind::Docker,
+                    other => {
+                        return Err(ParseError {
+                            message: format!(
+                                "--pdf-backend: `{other}` is not `system`, `bundled`, or `docker`"
+                            ),
+                        })
+                    }
+                });
+            }
             "-c" | "--code" => code = Some(take_value(args, &mut i, "--code")?),
             other => {
                 if other.starts_with("--") {
@@ -278,6 +306,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         allowed_backends,
         no_exec,
         code,
+        pdf_backend,
     }))
 }
 
@@ -381,6 +410,33 @@ mod tests {
 
         let err = err_of(&["--format", "xml", "proj/main.yml"]);
         assert!(err.message.contains("xml"));
+    }
+
+    #[test]
+    fn format_parses_pdf() {
+        let c = cli_of(&["--format", "pdf", "proj/main.yml"]);
+        assert_eq!(c.format, Some(Format::Pdf));
+    }
+
+    #[test]
+    fn pdf_backend_parses_all_values() {
+        let c = cli_of(&["--pdf-backend", "system", "proj/main.yml"]);
+        assert_eq!(c.pdf_backend, Some(PdfBackendKind::System));
+
+        let c = cli_of(&["--pdf-backend", "bundled", "proj/main.yml"]);
+        assert_eq!(c.pdf_backend, Some(PdfBackendKind::Bundled));
+
+        let c = cli_of(&["--pdf-backend", "docker", "proj/main.yml"]);
+        assert_eq!(c.pdf_backend, Some(PdfBackendKind::Docker));
+
+        let err = err_of(&["--pdf-backend", "invalid", "proj/main.yml"]);
+        assert!(err.message.contains("pdf-backend"));
+    }
+
+    #[test]
+    fn pdf_backend_absent_when_not_provided() {
+        let c = cli_of(&["proj/main.yml"]);
+        assert_eq!(c.pdf_backend, None);
     }
 
     #[test]
