@@ -36,8 +36,9 @@
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use indexmap::IndexMap;
 
@@ -53,6 +54,8 @@ use ymx_test::{parse_tests, run_tests, Expected, TestResult};
 
 use crate::args::ParsedCli;
 use crate::diagnostic::render_with_guidance;
+
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 
 // PDF rendering types — live here in ymx-cli so ymx-core stays I/O-free.
 
@@ -1012,6 +1015,132 @@ fn render_diags_load_error(diags: &[Diagnostic]) -> RunOutcome {
     RunOutcome::LoadError
 }
 
+/// Returns true if any path in the event has a `.yml` or `.yaml` extension.
+fn is_yaml_file(paths: &[PathBuf]) -> bool {
+    paths.iter().any(|p| {
+        p.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e == "yml" || e == "yaml")
+            .unwrap_or(false)
+    })
+}
+
+/// Run a single compile cycle for watch mode: load -> extract -> compile -> emit.
+/// Uses the file at `cli.path` directly (not stdin or temp files).
+fn run_single_compile(cli: &ParsedCli) -> RunOutcome {
+    let project = match load_project(&cli.path) {
+        Ok(p) => p,
+        Err(diags) => {
+            render_diags_load_error(&diags);
+            return RunOutcome::LoadError;
+        }
+    };
+
+    let overrides = cli.overrides();
+    let mut opts = match extract_options(&project, &overrides) {
+        Ok(o) => o,
+        Err(diags) => {
+            render_diags(&diags);
+            return RunOutcome::Diagnostic;
+        }
+    };
+
+    opts.executor = Some(Arc::new(StdExecutor));
+    if cli.no_exec {
+        opts.executor = None;
+    }
+
+    match compile(&project, &opts) {
+        Ok(value) => emit(cli, &opts, &value),
+        Err(diags) => {
+            render_diags(&diags);
+            RunOutcome::Diagnostic
+        }
+    }
+}
+
+/// Watch mode: runs the compile pipeline on every .yml/.yaml file change.
+/// Exits cleanly on SIGINT/SIGTERM (exit 0).
+pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
+    let watch_path = cli.watch.as_ref().expect("--watch value must be present");
+    println!("Watching {}...", watch_path.display());
+
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_clone = shutdown.clone();
+
+    if let Err(e) = ctrlc::set_handler(move || {
+        shutdown_clone.store(true, Ordering::SeqCst);
+    }) {
+        eprintln!("ymx: warning: could not set Ctrl-C handler: {e}");
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut watcher = match RecommendedWatcher::new(
+        move |res| {
+            let _ = tx.send(res);
+        },
+        Config::default().with_poll_interval(Duration::from_millis(100)),
+    ) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("ymx: failed to create watcher: {e}");
+            return RunOutcome::Diagnostic;
+        }
+    };
+
+    let mode = if watch_path.is_dir() {
+        RecursiveMode::Recursive
+    } else {
+        RecursiveMode::NonRecursive
+    };
+
+    if let Err(e) = watcher.watch(watch_path, mode) {
+        eprintln!("ymx: failed to watch {}: {e}", watch_path.display());
+        return RunOutcome::Diagnostic;
+    }
+
+    let debounce_duration = Duration::from_millis(100);
+    let mut pending = false;
+
+    // Run initial compile
+    run_single_compile(cli);
+    if shutdown.load(Ordering::SeqCst) {
+        return RunOutcome::Success;
+    }
+    // Don't exit on first compile error — keep watching
+
+    loop {
+        if shutdown.load(Ordering::SeqCst) {
+            return RunOutcome::Success;
+        }
+
+        match rx.recv_timeout(debounce_duration) {
+            Ok(Ok(event)) => {
+                if is_yaml_file(&event.paths) {
+                    pending = true;
+                }
+            }
+            Ok(Err(e)) => {
+                eprintln!("ymx: watch error: {e}");
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if pending {
+                    pending = false;
+                    run_single_compile(cli);
+                    if shutdown.load(Ordering::SeqCst) {
+                        return RunOutcome::Success;
+                    }
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                break;
+            }
+        }
+    }
+
+    RunOutcome::Success
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1072,6 +1201,7 @@ mod tests {
             no_exec: false,
             code: None,
             pdf_backend: None,
+            watch: None,
         }
     }
 
@@ -1097,6 +1227,7 @@ mod tests {
             no_exec: false,
             code: None,
             pdf_backend: None,
+            watch: None,
         }
     }
 
@@ -1116,6 +1247,7 @@ mod tests {
             no_exec: false,
             code: None,
             pdf_backend: None,
+            watch: None,
         }
     }
 
@@ -1670,6 +1802,7 @@ mod tests {
             no_exec: false,
             code: Some("main: hello world".to_string()),
             pdf_backend: None,
+            watch: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1692,6 +1825,7 @@ mod tests {
             no_exec: false,
             code: Some("comp1: 20\nmain: ${comp1()}".to_string()),
             pdf_backend: None,
+            watch: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1714,6 +1848,7 @@ mod tests {
             no_exec: false,
             code: Some("comp2: 20\nmain: ${comp1()} + ${comp2()}".to_string()),
             pdf_backend: None,
+            watch: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1741,6 +1876,7 @@ mod tests {
             no_exec: false,
             code: Some("{\"main\": \"${1 + 2}\"}".to_string()),
             pdf_backend: None,
+            watch: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1762,6 +1898,7 @@ mod tests {
             no_exec: false,
             code: Some("main: ${10 / 2}".to_string()),
             pdf_backend: None,
+            watch: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1783,6 +1920,7 @@ mod tests {
             no_exec: false,
             code: Some("greeting: \"hi\"\nmain: ${greeting()}".to_string()),
             pdf_backend: None,
+            watch: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1805,6 +1943,7 @@ mod tests {
             no_exec: false,
             code: Some("{\"comp2\": 20, \"main\": \"${comp1()} + ${comp2()}\"}".to_string()),
             pdf_backend: None,
+            watch: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1827,6 +1966,7 @@ mod tests {
             no_exec: false,
             code: Some("main: ${base() * 3 + 1}".to_string()),
             pdf_backend: None,
+            watch: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1849,6 +1989,7 @@ mod tests {
             no_exec: false,
             code: Some("main: ${greet()}".to_string()),
             pdf_backend: None,
+            watch: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }

@@ -18,6 +18,7 @@ ymx-test.workspace = true
 serde_json.workspace = true
 yaml-rust2.workspace = true
 notify = "6"
+ctrlc = "3"
 
 [features]
 pdf-system  = ["headless_chrome"]
