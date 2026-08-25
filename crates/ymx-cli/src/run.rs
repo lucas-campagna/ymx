@@ -45,7 +45,7 @@ use yaml_rust2::{Yaml, YamlLoader};
 
 use ymx_config::{extract_options, CliOverrides};
 use ymx_lib::ymx_core::ir::Args;
-use ymx_lib::ymx_core::project::{Format, Options, Project};
+use ymx_lib::ymx_core::project::{Format, Options, PdfBackendKind, Project};
 #[cfg(feature = "pdf-bundled")]
 use ymx_lib::ymx_core::render::BundledChromeBackend;
 use ymx_lib::ymx_core::render::{
@@ -735,7 +735,7 @@ fn emit(cli: &ParsedCli, opts: &Options, value: &Value) -> RunOutcome {
         // HTML format renders the value tree to HTML via DefaultHtmlRenderer.
         Format::Html => emit_html(cli, value),
         // PDF format renders the value tree to HTML then converts to PDF.
-        Format::Pdf => emit_pdf(cli, value),
+        Format::Pdf => emit_pdf(cli, opts, value),
     }
 }
 
@@ -779,24 +779,24 @@ fn emit_html(cli: &ParsedCli, value: &Value) -> RunOutcome {
 
 /// Render `value` to PDF via [`DefaultHtmlRenderer`] + [`PdfBackend`] and
 /// dispatch binary output to `--output` or stdout.
-fn emit_pdf(cli: &ParsedCli, value: &Value) -> RunOutcome {
+fn emit_pdf(cli: &ParsedCli, opts: &Options, value: &Value) -> RunOutcome {
     let html = DefaultHtmlRenderer.render_html(value);
-    let pdf_bytes: Result<Vec<u8>, PdfError> = match cli.pdf_backend {
-        None | Some(crate::args::PdfBackendKind::System) => {
+    let pdf_bytes: Result<Vec<u8>, PdfError> = match opts.pdf_backend {
+        PdfBackendKind::System => {
             let backend = SystemChromeBackend;
             backend.render(&html)
         }
         #[cfg(feature = "pdf-bundled")]
-        Some(crate::args::PdfBackendKind::Bundled) => {
+        PdfBackendKind::Bundled => {
             let backend = BundledChromeBackend;
             backend.render(&html)
         }
         #[cfg(not(feature = "pdf-bundled"))]
-        Some(crate::args::PdfBackendKind::Bundled) => Err(PdfError {
+        PdfBackendKind::Bundled => Err(PdfError {
             message: "bundled backend not available: rebuild with --features pdf-bundled"
                 .to_string(),
         }),
-        Some(crate::args::PdfBackendKind::Docker) => render_pdf_docker(&html),
+        PdfBackendKind::Docker => render_pdf_docker(&html),
     };
     match pdf_bytes {
         Ok(bytes) => match cli.output.as_deref() {
