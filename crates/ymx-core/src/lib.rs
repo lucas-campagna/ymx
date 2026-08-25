@@ -36,8 +36,13 @@ pub mod ir;
 pub mod math;
 pub mod render;
 pub use render::{DefaultHtmlRenderer, HtmlRenderer, pretty_print_html};
-pub use render::{PdfBackend, PdfError, SystemChromeBackend, BundledChromeBackend};
 pub mod namespace;
 pub mod parse;
 pub mod project;
 pub mod resolve;
+
+// PDF backends (feature-gated)
+#[cfg(feature = "pdf-system")]
+pub use render::{PdfBackend, Html2PdfRenderer, PdfError, SystemChromeBackend};
+#[cfg(feature = "pdf-bundled")]
+pub use render::BundledChromeBackend;

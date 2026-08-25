@@ -1,4 +1,3 @@
-use headless_chrome::{Browser, LaunchOptions};
 use indexmap::IndexMap;
 use serde_json;
 
@@ -504,58 +503,83 @@ fn html_escape(s: &str) -> String {
     out
 }
 
-/// PDF rendering error.
-#[derive(Debug)]
+// ─────────────────────────────────────────────────────────────────────────────
+// PDF rendering
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Error returned when PDF rendering fails.
+#[derive(Debug, Clone)]
 pub struct PdfError {
     pub message: String,
 }
-
-impl std::fmt::Display for PdfError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PdfError: {}", self.message)
-    }
-}
-
-impl std::error::Error for PdfError {}
 
 /// Trait for rendering HTML to PDF.
 pub trait PdfBackend: Send + Sync {
     fn render(&self, html: &str) -> Result<Vec<u8>, PdfError>;
 }
 
-/// PDF backend using the system Chrome/Chromium via headless_chrome.
+/// PDF backend that uses the system-installed Chrome browser via headless_chrome.
+/// Requires `feature = "pdf-system"` (the default).
 pub struct SystemChromeBackend;
 
 impl PdfBackend for SystemChromeBackend {
     fn render(&self, html: &str) -> Result<Vec<u8>, PdfError> {
+        use headless_chrome::types::PrintToPdfOptions;
+        use headless_chrome::{Browser, LaunchOptions};
+
         let browser = Browser::new(LaunchOptions::default())
-            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
-        let tab = browser.new_tab()
-            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
+            .map_err(|e| PdfError { message: e.to_string() })?;
+        let tab = browser
+            .new_tab()
+            .map_err(|e| PdfError { message: e.to_string() })?;
+
         let data_url = format!("data:text/html;charset=utf-8,{}", urlencoding::encode(html));
         tab.navigate_to(&data_url)
-            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
-        let pdf = tab.print_to_pdf(None)
-            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
-        Ok(pdf)
+            .map_err(|e| PdfError { message: e.to_string() })?
+            .wait_until_navigated()
+            .map_err(|e| PdfError { message: e.to_string() })?;
+
+        tab.print_to_pdf(Some(PrintToPdfOptions::default()))
+            .map_err(|e| PdfError { message: e.to_string() })
     }
 }
 
-/// PDF backend using the bundled Chrome binary via headless_chrome.
+/// Wrapper providing the `Html2PdfRenderer` API shape over `SystemChromeBackend`.
+/// Exists for backward-compatible API surface; `SystemChromeBackend` is the
+/// canonical struct name going forward.
+pub struct Html2PdfRenderer(pub SystemChromeBackend);
+
+impl PdfBackend for Html2PdfRenderer {
+    fn render(&self, html: &str) -> Result<Vec<u8>, PdfError> {
+        self.0.render(html)
+    }
+}
+
+/// PDF backend that auto-downloads a bundled Chromium binary via headless_chrome.
+/// Only available when `feature = "pdf-bundled"` is enabled.
+#[cfg(feature = "pdf-bundled")]
 pub struct BundledChromeBackend;
 
+#[cfg(feature = "pdf-bundled")]
 impl PdfBackend for BundledChromeBackend {
     fn render(&self, html: &str) -> Result<Vec<u8>, PdfError> {
+        use headless_chrome::types::PrintToPdfOptions;
+        use headless_chrome::{Browser, LaunchOptions};
+
         let browser = Browser::new(LaunchOptions::default())
-            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
-        let tab = browser.new_tab()
-            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
+            .map_err(|e| PdfError { message: e.to_string() })?;
+        let tab = browser
+            .new_tab()
+            .map_err(|e| PdfError { message: e.to_string() })?;
+
         let data_url = format!("data:text/html;charset=utf-8,{}", urlencoding::encode(html));
         tab.navigate_to(&data_url)
-            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
-        let pdf = tab.print_to_pdf(None)
-            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
-        Ok(pdf)
+            .map_err(|e| PdfError { message: e.to_string() })?
+            .wait_until_navigated()
+            .map_err(|e| PdfError { message: e.to_string() })?;
+
+        tab.print_to_pdf(Some(PrintToPdfOptions::default()))
+            .map_err(|e| PdfError { message: e.to_string() })
     }
 }
 
