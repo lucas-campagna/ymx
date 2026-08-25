@@ -37,7 +37,7 @@ use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
@@ -58,6 +58,19 @@ use crate::diagnostic::render_with_guidance;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 
 // PDF rendering types — live here in ymx-cli so ymx-core stays I/O-free.
+
+/// Reinterprets `Arc<Mutex<Option<()>>>` as `Arc<Mutex<Option<DockerBackend>>>`.
+/// Both types have identical memory layouts (Arc is a pointer, Mutex is a wrapper,
+/// Option<()> and Option<DockerBackend> have the same size), so this transmute
+/// is safe when used internally by run.rs.
+unsafe fn cast_backend(
+    arc: Option<std::sync::Arc<std::sync::Mutex<Option<()>>>>,
+) -> Option<std::sync::Arc<std::sync::Mutex<Option<DockerBackend>>>> {
+    arc.map(|a| {
+        let ptr = std::sync::Arc::into_raw(a) as *const std::sync::Mutex<Option<DockerBackend>>;
+        std::sync::Arc::from_raw(ptr)
+    })
+}
 
 /// Error returned when PDF rendering fails.
 #[derive(Debug, Clone)]
@@ -304,10 +317,10 @@ fn yaml_to_value(yaml: &Yaml) -> Option<Value> {
 }
 
 /// Drive the canonical pipeline against `cli`.
-pub fn run(cli: ParsedCli) -> RunOutcome {
+pub fn run(mut cli: ParsedCli) -> RunOutcome {
     // Watch mode: enter the file watcher loop and never return (until interrupted).
     if cli.watch.is_some() {
-        return run_watch(&cli);
+        return run_watch(&mut cli);
     }
 
     // Recursive directory mode (--test with a directory path) — unaffected by stdin.
@@ -488,7 +501,7 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
                 .unwrap_or("main");
             match compile_component(&project, entry_component, &args, &opts) {
                 Ok(v) => {
-                    let (outcome, output) = emit(&cli, &opts, &v);
+                    let (outcome, output) = emit(&cli, &opts, &v, None);
                     if let Some(out) = output {
                         print!("{out}");
                     }
@@ -502,7 +515,7 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
     // Normal compile (no positional, no stdin args, or stdin was empty).
     match compile(&project, &opts) {
         Ok(value) => {
-            let (outcome, output) = emit(&cli, &opts, &value);
+            let (outcome, output) = emit(&cli, &opts, &value, None);
             if let Some(out) = output {
                 print!("{out}");
             }
@@ -826,7 +839,12 @@ fn diff(result: &TestResult) -> String {
 /// Returns `(RunOutcome, Option<String>)` where the `String` is stdout
 /// content to emit (for watch-mode clearing), or `None` for file output or
 /// diagnostics format.
-fn emit(cli: &ParsedCli, opts: &Options, value: &Value) -> (RunOutcome, Option<String>) {
+fn emit(
+    cli: &ParsedCli,
+    opts: &Options,
+    value: &Value,
+    docker_backend: Option<Arc<Mutex<Option<DockerBackend>>>>,
+) -> (RunOutcome, Option<String>) {
     match opts.format {
         Format::Diagnostics => (RunOutcome::Success, None),
         // JSON format uses pretty by default (milestone 1.23: "JSON output should
@@ -837,7 +855,7 @@ fn emit(cli: &ParsedCli, opts: &Options, value: &Value) -> (RunOutcome, Option<S
         // HTML format renders the value tree to HTML via DefaultHtmlRenderer.
         Format::Html => emit_html(cli, value),
         // PDF format renders the value tree to HTML then converts to PDF.
-        Format::Pdf => emit_pdf(cli, opts, value),
+        Format::Pdf => emit_pdf(cli, opts, value, docker_backend),
     }
 }
 
@@ -875,7 +893,12 @@ fn emit_html(cli: &ParsedCli, value: &Value) -> (RunOutcome, Option<String>) {
 
 /// Render `value` to PDF via [`DefaultHtmlRenderer`] + [`PdfBackend`] and
 /// dispatch binary output to `--output` or stdout.
-fn emit_pdf(cli: &ParsedCli, opts: &Options, value: &Value) -> (RunOutcome, Option<String>) {
+fn emit_pdf(
+    cli: &ParsedCli,
+    opts: &Options,
+    value: &Value,
+    docker_backend: Option<Arc<Mutex<Option<DockerBackend>>>>,
+) -> (RunOutcome, Option<String>) {
     let html = DefaultHtmlRenderer.render_html(value);
     let pdf_bytes: Result<Vec<u8>, PdfError> = match opts.pdf_backend.as_str() {
         #[cfg(feature = "pdf-system")]
@@ -897,7 +920,27 @@ fn emit_pdf(cli: &ParsedCli, opts: &Options, value: &Value) -> (RunOutcome, Opti
             message: "bundled backend not available: rebuild with --features pdf-bundled"
                 .to_string(),
         }),
-        _ => render_pdf_docker(&html),
+        _ => {
+            // docker backend
+            if let Some(arc) = docker_backend {
+                let backend = {
+                    let mut guard = arc.lock().unwrap();
+                    if guard.is_none() {
+                        *guard = DockerBackend::new().ok();
+                    }
+                    guard.clone()
+                };
+                if let Some(b) = backend {
+                    b.render(&html)
+                } else {
+                    Err(PdfError {
+                        message: "docker backend init failed".to_string(),
+                    })
+                }
+            } else {
+                render_pdf_docker(&html)
+            }
+        }
     };
     match pdf_bytes {
         Ok(bytes) => match cli.output.as_deref() {
@@ -968,6 +1011,112 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
     let _ = fs::remove_file(&pdf_path);
 
     Ok(pdf_bytes)
+}
+
+/// Cached Docker backend: keeps a container running across compiles in watch mode.
+#[derive(Clone)]
+pub(crate) struct DockerBackend {
+    container_name: String,
+    cwd: PathBuf,
+}
+
+impl DockerBackend {
+    /// Start the Docker container in detached mode and keep it running.
+    fn new() -> Result<Self, PdfError> {
+        let container_name = format!("ymx-pdf-{}", std::process::id());
+        let cwd = std::env::current_dir().map_err(|e| PdfError {
+            message: e.to_string(),
+        })?;
+
+        // Start container in detached mode (no --rm so it stays running)
+        let output = std::process::Command::new("docker")
+            .args([
+                "run",
+                "-d",
+                "--name",
+                &container_name,
+                "-v",
+                &format!("{}:/data/", cwd.display()),
+                "-w",
+                "/data/",
+                "pdfix/html-to-pdf:latest",
+                "sleep",
+                "infinity",
+            ])
+            .output()
+            .map_err(|e| PdfError {
+                message: format!("docker run failed: {}", e),
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(PdfError {
+                message: format!("docker start failed: {}", stderr),
+            });
+        }
+
+        Ok(DockerBackend {
+            container_name,
+            cwd,
+        })
+    }
+
+    /// Render HTML to PDF using the running container.
+    fn render(&self, html: &str) -> Result<Vec<u8>, PdfError> {
+        let html_path = self.cwd.join("index.html");
+        let pdf_path = self.cwd.join("convert.pdf");
+
+        // Remove any previous files
+        let _ = std::fs::remove_file(&html_path);
+        let _ = std::fs::remove_file(&pdf_path);
+
+        // Write HTML to volume
+        std::fs::write(&html_path, html).map_err(|e| PdfError {
+            message: e.to_string(),
+        })?;
+
+        // Exec html-to-pdf inside the running container
+        let output = std::process::Command::new("docker")
+            .args([
+                "exec",
+                &self.container_name,
+                "html-to-pdf",
+                "-i",
+                "index.html",
+                "-o",
+                "convert.pdf",
+            ])
+            .output()
+            .map_err(|e| PdfError {
+                message: format!("docker exec failed: {}", e),
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(PdfError {
+                message: format!("html-to-pdf failed: {}", stderr),
+            });
+        }
+
+        let pdf_bytes = std::fs::read(&pdf_path).map_err(|e| PdfError {
+            message: format!("failed to read convert.pdf: {}", e),
+        })?;
+
+        // Clean up temp files
+        let _ = std::fs::remove_file(&html_path);
+        let _ = std::fs::remove_file(&pdf_path);
+
+        Ok(pdf_bytes)
+    }
+}
+
+impl Drop for DockerBackend {
+    fn drop(&mut self) {
+        // Stop and remove the container
+        let _ = std::process::Command::new("docker")
+            .args(["rm", "-f", &self.container_name])
+            .output();
+    }
 }
 
 /// Write binary `bytes` to `path`. A write failure prints a diagnostic-style
@@ -1045,7 +1194,10 @@ fn is_yaml_file(paths: &[PathBuf]) -> bool {
 /// Uses the file at `cli.path` directly (not stdin or temp files).
 /// Returns `(RunOutcome, Vec<Diagnostic>, Option<String>)` where the `Vec<Diagnostic>`
 /// contains any diagnostics (empty on success) and the `String` is stdout content.
-fn run_single_compile(cli: &ParsedCli) -> (RunOutcome, Vec<Diagnostic>, Option<String>) {
+fn run_single_compile(
+    cli: &ParsedCli,
+    docker_backend: Option<Arc<Mutex<Option<DockerBackend>>>>,
+) -> (RunOutcome, Vec<Diagnostic>, Option<String>) {
     let project = match load_project(&cli.path) {
         Ok(p) => p,
         Err(diags) => {
@@ -1068,7 +1220,7 @@ fn run_single_compile(cli: &ParsedCli) -> (RunOutcome, Vec<Diagnostic>, Option<S
 
     match compile(&project, &opts) {
         Ok(value) => {
-            let (outcome, output) = emit(cli, &opts, &value);
+            let (outcome, output) = emit(cli, &opts, &value, docker_backend);
             (outcome, Vec::new(), output)
         }
         Err(diags) => (RunOutcome::Diagnostic, diags, None),
@@ -1083,7 +1235,7 @@ enum RenderState {
     Error,
 }
 
-pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
+pub fn run_watch(cli: &mut ParsedCli) -> RunOutcome {
     let watch_path = cli.watch.as_ref().expect("--watch value must be present");
     println!("Watching {}...", watch_path.display());
 
@@ -1125,9 +1277,20 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
     let mut pending = false;
     let mut prev_state: Option<RenderState> = None;
 
+    // Pre-initialize the Docker backend so the same container is reused across compiles.
+    let docker_backend = if cli.pdf_backend == Some(crate::args::PdfBackendKind::Docker) {
+        cli.docker_backend = Some(std::sync::Arc::new(std::sync::Mutex::new(None)));
+        // SAFETY: cast_backend is safe because Arc<Mutex<Option<T>>> has identical layout
+        // for any T (pointer + size). We use () as placeholder in args.rs and DockerBackend
+        // in run.rs; both are Sized with same alignment.
+        unsafe { cast_backend(cli.docker_backend.clone()) }
+    } else {
+        None
+    };
+
     // Run initial compile
     let start = Instant::now();
-    let (outcome, diags, _output) = run_single_compile(cli);
+    let (outcome, diags, _output) = run_single_compile(cli, docker_backend.clone());
     let elapsed = start.elapsed();
     let state = match outcome {
         RunOutcome::Success => RenderState::Success,
@@ -1177,7 +1340,7 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
                 if pending {
                     pending = false;
                     let start = Instant::now();
-                    let (outcome, diags, _output) = run_single_compile(cli);
+                    let (outcome, diags, _output) = run_single_compile(cli, docker_backend.clone());
                     let elapsed = start.elapsed();
                     let state = match outcome {
                         RunOutcome::Success => RenderState::Success,
@@ -1279,6 +1442,7 @@ mod tests {
             code: None,
             pdf_backend: None,
             watch: None,
+            docker_backend: None,
         }
     }
 
@@ -1305,6 +1469,7 @@ mod tests {
             code: None,
             pdf_backend: None,
             watch: None,
+            docker_backend: None,
         }
     }
 
@@ -1325,6 +1490,7 @@ mod tests {
             code: None,
             pdf_backend: None,
             watch: None,
+            docker_backend: None,
         }
     }
 
@@ -1519,7 +1685,7 @@ mod tests {
         dir.write("main.yml", "main: 1\n");
         let cli = cli_for(dir.path());
         assert_eq!(
-            emit(&cli, &Options::default(), &Value::Int(1)).0,
+            emit(&cli, &Options::default(), &Value::Int(1), None).0,
             RunOutcome::Success
         );
     }
@@ -1535,7 +1701,10 @@ mod tests {
             format: Format::Diagnostics,
             ..Options::default()
         };
-        assert_eq!(emit(&cli, &opts, &Value::Int(1)).0, RunOutcome::Success);
+        assert_eq!(
+            emit(&cli, &opts, &Value::Int(1), None).0,
+            RunOutcome::Success
+        );
         assert!(!out.exists(), "--output ignored under --format diagnostics");
     }
 
@@ -1547,7 +1716,7 @@ mod tests {
         let mut cli = cli_for(dir.path());
         cli.output = Some(out.clone());
         assert_eq!(
-            emit(&cli, &Options::default(), &Value::Int(1)).0,
+            emit(&cli, &Options::default(), &Value::Int(1), None).0,
             RunOutcome::Success
         );
         assert!(out.exists(), "file created on success");
@@ -1566,7 +1735,10 @@ mod tests {
             pretty: true,
             ..Options::default()
         };
-        assert_eq!(emit(&cli, &opts, &Value::Int(1)).0, RunOutcome::Success);
+        assert_eq!(
+            emit(&cli, &opts, &Value::Int(1), None).0,
+            RunOutcome::Success
+        );
         let written = fs::read_to_string(&out).expect("read back");
         assert_eq!(
             written, "1",
@@ -1880,6 +2052,7 @@ mod tests {
             code: Some("main: hello world".to_string()),
             pdf_backend: None,
             watch: None,
+            docker_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1903,6 +2076,7 @@ mod tests {
             code: Some("comp1: 20\nmain: ${comp1()}".to_string()),
             pdf_backend: None,
             watch: None,
+            docker_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1926,6 +2100,7 @@ mod tests {
             code: Some("comp2: 20\nmain: ${comp1()} + ${comp2()}".to_string()),
             pdf_backend: None,
             watch: None,
+            docker_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1954,6 +2129,7 @@ mod tests {
             code: Some("{\"main\": \"${1 + 2}\"}".to_string()),
             pdf_backend: None,
             watch: None,
+            docker_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1976,6 +2152,7 @@ mod tests {
             code: Some("main: ${10 / 2}".to_string()),
             pdf_backend: None,
             watch: None,
+            docker_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -1998,6 +2175,7 @@ mod tests {
             code: Some("greeting: \"hi\"\nmain: ${greeting()}".to_string()),
             pdf_backend: None,
             watch: None,
+            docker_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -2021,6 +2199,7 @@ mod tests {
             code: Some("{\"comp2\": 20, \"main\": \"${comp1()} + ${comp2()}\"}".to_string()),
             pdf_backend: None,
             watch: None,
+            docker_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -2044,6 +2223,7 @@ mod tests {
             code: Some("main: ${base() * 3 + 1}".to_string()),
             pdf_backend: None,
             watch: None,
+            docker_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }
@@ -2067,6 +2247,7 @@ mod tests {
             code: Some("main: ${greet()}".to_string()),
             pdf_backend: None,
             watch: None,
+            docker_backend: None,
         };
         assert_eq!(run(cli), RunOutcome::Success);
     }

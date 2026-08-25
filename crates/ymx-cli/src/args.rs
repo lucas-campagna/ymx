@@ -14,8 +14,10 @@
 //! orchestration-only concerns (`path`, `output`, `test`) stay on
 //! [`ParsedCli`] and never reach `ymx_config::CliOverrides`.
 
+use std::fmt::Debug;
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use ymx_config::CliOverrides;
 use ymx_lib::ymx_core::project::Format;
@@ -32,7 +34,6 @@ pub enum PdfBackendKind {
 /// (`None` when the flag was absent — i.e. defer to `_ymx` then engine
 /// default), plus the CLI-only orchestration concerns (`output`, `test`)
 /// that do not flow into `ymx_config::CliOverrides`.
-#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedCli {
     /// `ymx <file>` — the entry file. Always present (parse errors
     /// otherwise). The project root is derived as `path.parent()`.
@@ -83,6 +84,72 @@ pub struct ParsedCli {
     /// `--watch <path>` — watch a file or directory for changes and re-compile.
     /// Cannot be combined with --test (CLI usage error).
     pub watch: Option<PathBuf>,
+    /// Cached Docker backend handle for watch-mode PDF rendering.
+    /// The inner type is erased (using `()`) to avoid circular crate dependencies;
+    /// `run.rs` casts it to the actual `DockerBackend` type internally.
+    pub docker_backend: Option<Arc<Mutex<Option<()>>>>,
+}
+
+impl Debug for ParsedCli {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParsedCli")
+            .field("path", &self.path)
+            .field("entry", &self.entry)
+            .field("max_depth", &self.max_depth)
+            .field("pretty", &self.pretty)
+            .field("format", &self.format)
+            .field("output", &self.output)
+            .field("test", &self.test)
+            .field("test_dir", &self.test_dir)
+            .field("stdin_is_script", &self.stdin_is_script)
+            .field("allowed_backends", &self.allowed_backends)
+            .field("no_exec", &self.no_exec)
+            .field("code", &self.code)
+            .field("pdf_backend", &self.pdf_backend)
+            .field("watch", &self.watch)
+            .finish()
+    }
+}
+
+impl Clone for ParsedCli {
+    fn clone(&self) -> Self {
+        ParsedCli {
+            path: self.path.clone(),
+            entry: self.entry.clone(),
+            max_depth: self.max_depth,
+            pretty: self.pretty,
+            format: self.format.clone(),
+            output: self.output.clone(),
+            test: self.test,
+            test_dir: self.test_dir.clone(),
+            stdin_is_script: self.stdin_is_script,
+            allowed_backends: self.allowed_backends.clone(),
+            no_exec: self.no_exec,
+            code: self.code.clone(),
+            pdf_backend: self.pdf_backend,
+            watch: self.watch.clone(),
+            docker_backend: self.docker_backend.clone(),
+        }
+    }
+}
+
+impl PartialEq for ParsedCli {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.entry == other.entry
+            && self.max_depth == other.max_depth
+            && self.pretty == other.pretty
+            && self.format == other.format
+            && self.output == other.output
+            && self.test == other.test
+            && self.test_dir == other.test_dir
+            && self.stdin_is_script == other.stdin_is_script
+            && self.allowed_backends == other.allowed_backends
+            && self.no_exec == other.no_exec
+            && self.code == other.code
+            && self.pdf_backend == other.pdf_backend
+            && self.watch == other.watch
+    }
 }
 
 impl ParsedCli {
@@ -335,6 +402,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         code,
         pdf_backend,
         watch,
+        docker_backend: None,
     }))
 }
 
