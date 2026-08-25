@@ -1,0 +1,13 @@
+styled:
+  from: div
+  class: "btn primary large"
+  style: "color: blue; font-size: 14px; margin: 10px"
+  children: Styled content
+
+_test:
+  styled:
+    result:
+      from: div
+      class: "btn primary large"
+      style: "color: blue; font-size: 14px; margin: 10px"
+      children: Styled content

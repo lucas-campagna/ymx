@@ -1,0 +1,17 @@
+outer:
+  from: div
+  class: container
+  children:
+    from: div
+    class: inner
+    children: Nested content here
+
+_test:
+  outer:
+    result:
+      from: div
+      class: container
+      children:
+        from: div
+        class: inner
+        children: Nested content here

@@ -1,0 +1,97 @@
+name: Release binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # system Chrome backends
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            backend: system
+            pack: tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            backend: system
+            pack: tar.gz
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            backend: system
+            pack: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            backend: system
+            pack: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            backend: system
+            pack: zip
+          # bundled Chrome backends
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            backend: bundled
+            pack: tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            backend: bundled
+            pack: tar.gz
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            backend: bundled
+            pack: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            backend: bundled
+            pack: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            backend: bundled
+            pack: zip
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: |
+          cargo build --release -p ymx-cli --features pdf-${{ matrix.backend }} --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cd target/${{ matrix.target }}/release
+          if [ "${{ matrix.pack }}" = "tar.gz" ]; then
+            tar -czf ../../../dist/ymx-${{ matrix.backend }}-${{ matrix.target }}.tar.gz ymx
+          else
+            zip -q ../../../dist/ymx-${{ matrix.backend }}-${{ matrix.target }}.zip ymx
+          fi
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ymx-${{ matrix.backend }}-${{ matrix.target }}.${{ matrix.pack }}
+          tag_name: ${{ github.ref }}
+          body: |
+            Milestone 1.36: PDF renderer — `${{ matrix.backend }}` backend
+            - OS: ${{ matrix.os }}
+            - Arch: ${{ matrix.target }}
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,12 @@
+_ymx:
+  format: pdf
+
+doc:
+  from: p
+  children: This compiles with format pdf
+
+_test:
+  doc:
+    result:
+      from: p
+      children: This compiles with format pdf
