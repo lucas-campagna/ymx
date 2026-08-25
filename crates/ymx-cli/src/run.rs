@@ -322,6 +322,11 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
             format: cli.format.clone(),
             plain: None,
             allowed_backends: cli.allowed_backends.clone(),
+            pdf_backend: cli.pdf_backend.map(|k| match k {
+                crate::args::PdfBackendKind::System => "system".to_string(),
+                crate::args::PdfBackendKind::Bundled => "bundled".to_string(),
+                crate::args::PdfBackendKind::Docker => "docker".to_string(),
+            }),
         }
     } else {
         cli.overrides()

@@ -110,6 +110,11 @@ impl ParsedCli {
             format: self.format.clone(),
             plain: None,
             allowed_backends: self.allowed_backends.clone(),
+            pdf_backend: self.pdf_backend.map(|k| match k {
+                PdfBackendKind::System => "system".to_string(),
+                PdfBackendKind::Bundled => "bundled".to_string(),
+                PdfBackendKind::Docker => "docker".to_string(),
+            }),
         }
     }
 }
