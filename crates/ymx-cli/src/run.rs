@@ -1078,6 +1078,12 @@ fn run_single_compile(cli: &ParsedCli) -> (RunOutcome, Option<String>) {
 
 /// Watch mode: runs the compile pipeline on every .yml/.yaml file change.
 /// Exits cleanly on SIGINT/SIGTERM (exit 0).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RenderState {
+    Success,
+    Error,
+}
+
 pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
     let watch_path = cli.watch.as_ref().expect("--watch value must be present");
     println!("Watching {}...", watch_path.display());
@@ -1118,11 +1124,21 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
 
     let debounce_duration = Duration::from_millis(100);
     let mut pending = false;
+    let mut prev_state: Option<RenderState> = None;
 
     // Run initial compile
-    let (_outcome, output) = run_single_compile(cli);
-    if let Some(out) = output {
-        print!("\x1b[2J\x1b[H{out}");
+    let (outcome, _output) = run_single_compile(cli);
+    let state = match outcome {
+        RunOutcome::Success => RenderState::Success,
+        _ => RenderState::Error,
+    };
+    if Some(state) != prev_state {
+        prev_state = Some(state);
+        let label = match state {
+            RenderState::Success => "✓ SUCCESS",
+            RenderState::Error => "✗ ERROR",
+        };
+        print!("\x1b[2J\x1b[H{label}");
         std::io::stdout().flush().ok();
     }
     if shutdown.load(Ordering::SeqCst) {
@@ -1147,9 +1163,18 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if pending {
                     pending = false;
-                    let (_outcome, output) = run_single_compile(cli);
-                    if let Some(out) = output {
-                        print!("\x1b[2J\x1b[H{out}");
+                    let (outcome, _output) = run_single_compile(cli);
+                    let state = match outcome {
+                        RunOutcome::Success => RenderState::Success,
+                        _ => RenderState::Error,
+                    };
+                    if Some(state) != prev_state {
+                        prev_state = Some(state);
+                        let label = match state {
+                            RenderState::Success => "✓ SUCCESS",
+                            RenderState::Error => "✗ ERROR",
+                        };
+                        print!("\x1b[2J\x1b[H{label}");
                         std::io::stdout().flush().ok();
                     }
                     if shutdown.load(Ordering::SeqCst) {
