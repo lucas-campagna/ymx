@@ -271,41 +271,43 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         });
     }
 
-    if watch.is_some() && positionals.is_empty() && code.is_none() {
+    // Determine stdin_is_script early so we can use it in the watch check.
+    // When --watch is provided with no positional, the watch target IS the project
+    // (stdin can't be the script), so stdin_is_script must be false.
+    let stdin_is_script = if positionals.is_empty() && !watch.is_some() && code.is_none() && !test {
+        // No positional, no --watch, no -c, not --test: stdin is the script.
+        if std::io::stdin().is_terminal() {
+            return Err(ParseError {
+                message: "stdin is a terminal, cannot read script or args".to_string(),
+            });
+        }
+        true
+    } else {
+        false
+    };
+
+    // Error if --watch is set but stdin would be the script (mutual exclusivity:
+    // stdin-as-script has no project path, but --watch provides one).
+    if watch.is_some() && stdin_is_script {
         return Err(ParseError {
-            message: "--watch requires a project file or directory path".to_string(),
+            message: "--watch cannot be combined with stdin-as-script".to_string(),
         });
     }
 
-    let stdin_is_script: bool;
-    let path: PathBuf;
-
-    if positionals.is_empty() {
-        if test {
-            // --test with no positional: use "." as project dir; no stdin involved.
-            stdin_is_script = false;
-            path = PathBuf::from(".");
-        } else if code.is_some() {
-            // -c provided the script content; no stdin needed for the script.
-            // stdin may still provide call arguments (handled by run.rs).
-            stdin_is_script = false;
-            path = PathBuf::from("."); // sentinel; run.rs handles -c mode
+    let path: PathBuf = if positionals.is_empty() {
+        if let Some(ref watch_path) = watch {
+            // --watch with no positional: the watch target IS the project.
+            watch_path.clone()
+        } else if test {
+            // --test with no positional: use "." as project dir.
+            PathBuf::from(".")
         } else {
-            // Non-test with no positional: stdin is the script.
-            if std::io::stdin().is_terminal() {
-                return Err(ParseError {
-                    message: "stdin is a terminal, cannot read script or args".to_string(),
-                });
-            }
-            stdin_is_script = true;
-            path = PathBuf::from("."); // sentinel; run.rs replaces with temp file
+            // -c with no positional (stdin_is_script is false here).
+            PathBuf::from(".") // sentinel; run.rs handles -c mode
         }
     } else {
-        // One positional given: run.rs reads stdin as args only if non-tty.
-        // If stdin is a tty (no data piped), run.rs compiles without args.
-        stdin_is_script = false;
-        path = positionals.pop().unwrap();
-    }
+        positionals.pop().unwrap()
+    };
 
     // Determine test_dir: set ONLY when --test is given and the path is a
     // directory. Without the `test` guard, the sentinel "." used by -c-only
@@ -761,9 +763,18 @@ mod tests {
     }
 
     #[test]
-    fn watch_without_positional_errors() {
-        let err = err_of(&["--watch", "src/"]);
-        assert!(err.message.contains("--watch"));
-        assert!(err.message.contains("path"));
+    fn watch_without_positional_uses_watch_target_as_project() {
+        let c = cli_of(&["--watch", "src/"]);
+        assert_eq!(c.watch.as_deref(), Some(std::path::Path::new("src/")));
+        assert_eq!(c.path, PathBuf::from("src/"));
+        assert!(!c.stdin_is_script);
+    }
+
+    #[test]
+    fn watch_with_positional_uses_positional_as_project() {
+        let c = cli_of(&["--watch", "watch.yml", "proj/main.yml"]);
+        assert_eq!(c.watch.as_deref(), Some(std::path::Path::new("watch.yml")));
+        assert_eq!(c.path, PathBuf::from("proj/main.yml"));
+        assert!(!c.stdin_is_script);
     }
 }
