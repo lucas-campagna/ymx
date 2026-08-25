@@ -1122,7 +1122,7 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
     // Run initial compile
     let (_outcome, output) = run_single_compile(cli);
     if let Some(out) = output {
-        print!("\r\x1b[K{out}");
+        print!("\x1b[2J\x1b[H{out}");
         std::io::stdout().flush().ok();
     }
     if shutdown.load(Ordering::SeqCst) {
@@ -1149,7 +1149,7 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
                     pending = false;
                     let (_outcome, output) = run_single_compile(cli);
                     if let Some(out) = output {
-                        print!("\r\x1b[K{out}");
+                        print!("\x1b[2J\x1b[H{out}");
                         std::io::stdout().flush().ok();
                     }
                     if shutdown.load(Ordering::SeqCst) {
