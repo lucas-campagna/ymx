@@ -818,7 +818,7 @@ fn emit_pdf(cli: &ParsedCli, value: &Value) -> RunOutcome {
 
 /// Render HTML to PDF using Docker (pdfix/html-to-pdf image).
 #[cfg(feature = "pdf-docker")]
-fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
+pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
     use std::fs;
     use std::process::Command;
 
@@ -871,7 +871,7 @@ fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
 
 /// Stub for pdf-docker feature when not enabled.
 #[cfg(not(feature = "pdf-docker"))]
-fn render_pdf_docker(_html: &str) -> Result<Vec<u8>, PdfError> {
+pub(crate) fn render_pdf_docker(_html: &str) -> Result<Vec<u8>, PdfError> {
     Err(PdfError {
         message: "docker backend not available: rebuild with --features pdf-docker".to_string(),
     })
@@ -945,6 +945,8 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU32, Ordering};
 
+    #[cfg(feature = "pdf-system")]
+    use ymx_lib::ymx_core::render::Html2PdfRenderer;
     use ymx_config::CliOverrides;
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -1827,5 +1829,57 @@ mod tests {
         let content = fs::read_to_string(&out).unwrap();
         assert!(content.contains("<p>"));
         assert!(content.contains("hi"));
+    }
+
+    // ---- task 7: PDF integration tests ----
+
+    #[test]
+    #[ignore] // requires Chrome/Chromium installed on the system
+    #[cfg(feature = "pdf-system")]
+    fn test_pdf_system_backend_renders_valid_pdf() {
+        let dir = TempDir::new();
+        dir.write("main.yml", "main:\n  from: div\n  children: Hello PDF\n");
+
+        let project = load_project(dir.path()).expect("load_project should succeed");
+        let opts = extract_options(&project, &CliOverrides::default_for_tests())
+            .expect("extract_options should succeed");
+        let value = compile(&project, &opts).expect("compile should succeed");
+
+        // Render to HTML first
+        let html = DefaultHtmlRenderer.render_html(&value);
+        assert!(html.contains("<div>"), "HTML should contain div tag");
+
+        // Render to PDF using system backend
+        let renderer = Html2PdfRenderer(SystemChromeBackend);
+        let bytes = renderer.render(&html).expect("render_pdf should succeed");
+
+        // Verify PDF magic bytes
+        assert!(!bytes.is_empty(), "PDF bytes should not be empty");
+        assert!(bytes.starts_with(b"%PDF"), "PDF should start with %PDF magic");
+    }
+
+    #[test]
+    #[ignore] // requires Docker running with pdfix/html-to-pdf image
+    #[cfg(feature = "pdf-docker")]
+    fn test_pdf_docker_backend_renders_valid_pdf() {
+        use std::process::Command;
+
+        // Skip if docker is not available
+        if Command::new("docker").arg("info").output().is_err() {
+            return;
+        }
+
+        let dir = TempDir::new();
+        dir.write("main.yml", "main:\n  from: div\n  children: Hello Docker PDF\n");
+
+        let project = load_project(dir.path()).expect("load_project should succeed");
+        let opts = extract_options(&project, &CliOverrides::default_for_tests())
+            .expect("extract_options should succeed");
+        let value = compile(&project, &opts).expect("compile should succeed");
+        let html = DefaultHtmlRenderer.render_html(&value);
+
+        // render_pdf_docker is pub(crate), call it directly
+        let bytes = render_pdf_docker(&html).expect("docker render should succeed");
+        assert!(bytes.starts_with(b"%PDF"), "PDF should start with %PDF magic");
     }
 }
