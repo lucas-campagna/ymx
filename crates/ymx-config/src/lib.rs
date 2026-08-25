@@ -14,7 +14,7 @@ use std::path::Path;
 
 use ymx_core::diag::{Diagnostic, E004, E010};
 use ymx_core::ir::Value;
-use ymx_core::project::{Format, Options, PdfBackendKind, PlainMode, Project};
+use ymx_core::project::{Format, Options, PlainMode, Project};
 use ymx_core::resolve::resolve_entry;
 
 /// Per-flag CLI override (`None` = flag not provided on the command line).
@@ -110,7 +110,7 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
     let mut format: Option<Format> = None;
     let mut plain: Option<PlainMode> = None;
     let mut allowed_backends: Option<Vec<String>> = None;
-    let mut pdf_backend: Option<PdfBackendKind> = None;
+    let mut pdf_backend: Option<String> = None;
 
     if let Some((_, value)) = project.raw_meta_ymx.iter().find(|(fid, _)| *fid == file_id) {
         let entry_file = project.files[file_id.0 as usize].clone();
@@ -212,13 +212,13 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
                         },
                         "pdf_backend" => match field_value {
                             Value::String(s) if s == "system" => {
-                                pdf_backend = Some(PdfBackendKind::System)
+                                pdf_backend = Some("system".to_string())
                             }
                             Value::String(s) if s == "bundled" => {
-                                pdf_backend = Some(PdfBackendKind::Bundled)
+                                pdf_backend = Some("bundled".to_string())
                             }
                             Value::String(s) if s == "docker" => {
-                                pdf_backend = Some(PdfBackendKind::Docker)
+                                pdf_backend = Some("docker".to_string())
                             }
                             _ => diags.push(invalid_field(
                                 &entry_file,
@@ -261,9 +261,9 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
     // pdf_backend: CLI > entry-file _ymx > engine default
     let effective_pdf_backend = match &cli.pdf_backend {
         Some(s) => match s.as_str() {
-            "system" => Some(PdfBackendKind::System),
-            "bundled" => Some(PdfBackendKind::Bundled),
-            "docker" => Some(PdfBackendKind::Docker),
+            "system" => Some("system".to_string()),
+            "bundled" => Some("bundled".to_string()),
+            "docker" => Some("docker".to_string()),
             _ => {
                 diags.push(Diagnostic {
                     file: None,
@@ -278,7 +278,7 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
         },
         None => pdf_backend,
     };
-    opts.pdf_backend = effective_pdf_backend.unwrap_or(PdfBackendKind::Docker);
+    opts.pdf_backend = effective_pdf_backend.unwrap_or("docker".to_string());
 
     // Promotion clash check: under the effective `plain`, a sub-namespace name
     // that would be promoted must not collide with an existing global

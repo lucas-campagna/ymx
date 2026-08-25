@@ -45,18 +45,92 @@ use yaml_rust2::{Yaml, YamlLoader};
 
 use ymx_config::{extract_options, CliOverrides};
 use ymx_lib::ymx_core::ir::Args;
-use ymx_lib::ymx_core::project::{Format, Options, PdfBackendKind, Project};
-#[cfg(feature = "pdf-bundled")]
-use ymx_lib::ymx_core::render::BundledChromeBackend;
-use ymx_lib::ymx_core::render::{
-    pretty_print_html, DefaultHtmlRenderer, HtmlRenderer, PdfBackend, PdfError, SystemChromeBackend,
-};
+use ymx_lib::ymx_core::project::{Format, Options, Project};
+use ymx_lib::ymx_core::render::{pretty_print_html, DefaultHtmlRenderer, HtmlRenderer};
 use ymx_lib::ymx_core::resolve::{compile, compile_component};
 use ymx_lib::{load_project, load_project_with_override, Diagnostic, StdExecutor, Value};
 use ymx_test::{parse_tests, run_tests, Expected, TestResult};
 
 use crate::args::ParsedCli;
 use crate::diagnostic::render_with_guidance;
+
+// PDF rendering types — live here in ymx-cli so ymx-core stays I/O-free.
+
+/// Error returned when PDF rendering fails.
+#[derive(Debug, Clone)]
+pub struct PdfError {
+    pub message: String,
+}
+
+/// Trait for rendering HTML to PDF.
+pub trait PdfBackend: Send + Sync {
+    fn render(&self, html: &str) -> Result<Vec<u8>, PdfError>;
+}
+
+/// PDF backend that uses the system-installed Chrome browser via headless_chrome.
+pub struct SystemChromeBackend;
+
+impl PdfBackend for SystemChromeBackend {
+    fn render(&self, html: &str) -> Result<Vec<u8>, PdfError> {
+        use headless_chrome::types::PrintToPdfOptions;
+        use headless_chrome::{Browser, LaunchOptions};
+
+        let browser = Browser::new(LaunchOptions::default()).map_err(|e| PdfError {
+            message: e.to_string(),
+        })?;
+        let tab = browser.new_tab().map_err(|e| PdfError {
+            message: e.to_string(),
+        })?;
+
+        let data_url = format!("data:text/html;charset=utf-8,{}", urlencoding::encode(html));
+        tab.navigate_to(&data_url)
+            .map_err(|e| PdfError {
+                message: e.to_string(),
+            })?
+            .wait_until_navigated()
+            .map_err(|e| PdfError {
+                message: e.to_string(),
+            })?;
+        tab.print_to_pdf(Some(PrintToPdfOptions::default()))
+            .map_err(|e| PdfError {
+                message: e.to_string(),
+            })
+    }
+}
+
+/// PDF backend that auto-downloads a bundled Chromium binary via headless_chrome.
+/// Only available when `feature = "pdf-bundled"` is enabled.
+#[cfg(feature = "pdf-bundled")]
+pub struct BundledChromeBackend;
+
+#[cfg(feature = "pdf-bundled")]
+impl PdfBackend for BundledChromeBackend {
+    fn render(&self, html: &str) -> Result<Vec<u8>, PdfError> {
+        use headless_chrome::types::PrintToPdfOptions;
+        use headless_chrome::{Browser, LaunchOptions};
+
+        let browser = Browser::new(LaunchOptions::default()).map_err(|e| PdfError {
+            message: e.to_string(),
+        })?;
+        let tab = browser.new_tab().map_err(|e| PdfError {
+            message: e.to_string(),
+        })?;
+
+        let data_url = format!("data:text/html;charset=utf-8,{}", urlencoding::encode(html));
+        tab.navigate_to(&data_url)
+            .map_err(|e| PdfError {
+                message: e.to_string(),
+            })?
+            .wait_until_navigated()
+            .map_err(|e| PdfError {
+                message: e.to_string(),
+            })?;
+        tab.print_to_pdf(Some(PrintToPdfOptions::default()))
+            .map_err(|e| PdfError {
+                message: e.to_string(),
+            })
+    }
+}
 
 fn expand_escapes(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -322,7 +396,7 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
             format: cli.format.clone(),
             plain: None,
             allowed_backends: cli.allowed_backends.clone(),
-            pdf_backend: cli.pdf_backend.map(|k| match k {
+            pdf_backend: cli.pdf_backend.as_ref().map(|k| match k {
                 crate::args::PdfBackendKind::System => "system".to_string(),
                 crate::args::PdfBackendKind::Bundled => "bundled".to_string(),
                 crate::args::PdfBackendKind::Docker => "docker".to_string(),
@@ -781,22 +855,22 @@ fn emit_html(cli: &ParsedCli, value: &Value) -> RunOutcome {
 /// dispatch binary output to `--output` or stdout.
 fn emit_pdf(cli: &ParsedCli, opts: &Options, value: &Value) -> RunOutcome {
     let html = DefaultHtmlRenderer.render_html(value);
-    let pdf_bytes: Result<Vec<u8>, PdfError> = match opts.pdf_backend {
-        PdfBackendKind::System => {
+    let pdf_bytes: Result<Vec<u8>, PdfError> = match opts.pdf_backend.as_str() {
+        "system" => {
             let backend = SystemChromeBackend;
             backend.render(&html)
         }
         #[cfg(feature = "pdf-bundled")]
-        PdfBackendKind::Bundled => {
+        "bundled" => {
             let backend = BundledChromeBackend;
             backend.render(&html)
         }
         #[cfg(not(feature = "pdf-bundled"))]
-        PdfBackendKind::Bundled => Err(PdfError {
+        "bundled" => Err(PdfError {
             message: "bundled backend not available: rebuild with --features pdf-bundled"
                 .to_string(),
         }),
-        PdfBackendKind::Docker => render_pdf_docker(&html),
+        _ => render_pdf_docker(&html),
     };
     match pdf_bytes {
         Ok(bytes) => match cli.output.as_deref() {
@@ -937,8 +1011,6 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use ymx_config::CliOverrides;
-    #[cfg(feature = "pdf-system")]
-    use ymx_lib::ymx_core::render::Html2PdfRenderer;
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -1826,7 +1898,6 @@ mod tests {
 
     #[test]
     #[ignore] // requires Chrome/Chromium installed on the system
-    #[cfg(feature = "pdf-system")]
     fn test_pdf_system_backend_renders_valid_pdf() {
         let dir = TempDir::new();
         dir.write("main.yml", "main:\n  from: div\n  children: Hello PDF\n");
@@ -1841,8 +1912,8 @@ mod tests {
         assert!(html.contains("<div>"), "HTML should contain div tag");
 
         // Render to PDF using system backend
-        let renderer = Html2PdfRenderer(SystemChromeBackend);
-        let bytes = renderer.render(&html).expect("render_pdf should succeed");
+        let backend = SystemChromeBackend;
+        let bytes = backend.render(&html).expect("render_pdf should succeed");
 
         // Verify PDF magic bytes
         assert!(!bytes.is_empty(), "PDF bytes should not be empty");

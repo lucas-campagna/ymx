@@ -7,7 +7,3 @@ rust-version.workspace = true
 [dependencies]
 ymx-core.workspace = true
 
-[features]
-# Chrome backends are opt-in (forwarded to ymx-core):
-pdf-system  = ["ymx-core/pdf-system"]
-pdf-bundled = ["ymx-core/pdf-bundled"]

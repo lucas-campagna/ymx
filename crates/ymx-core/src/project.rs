@@ -21,14 +21,6 @@ pub enum Format {
     Pdf,
 }
 
-/// PDF rendering backend selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PdfBackendKind {
-    System,
-    Bundled,
-    Docker,
-}
-
 /// Namespace-promotion mode for `_ymx.plain` / CLI `--plain` /
 /// `--plain-template`.
 ///
@@ -73,7 +65,7 @@ pub struct Options {
     /// `None` means all backends are allowed.
     pub allowed_backends: Option<Vec<String>>,
     /// PDF rendering backend.
-    pub pdf_backend: PdfBackendKind,
+    pub pdf_backend: String,
     /// Pluggable command executor. `None` means shell execution is
     /// disabled (`$<backend>{...}` raises E016).
     pub executor: Option<Arc<dyn CommandExecutor>>,
@@ -105,7 +97,7 @@ impl Default for Options {
             format: Format::Json,
             plain: PlainMode::False,
             allowed_backends: None,
-            pdf_backend: PdfBackendKind::Docker,
+            pdf_backend: "docker".to_string(),
             executor: None,
         }
     }
@@ -343,7 +335,7 @@ mod tests {
         assert!(!o.pretty);
         assert_eq!(o.format, Format::Json);
         assert_eq!(o.plain, PlainMode::False);
-        assert_eq!(o.pdf_backend, PdfBackendKind::Docker);
+        assert_eq!(o.pdf_backend, "docker");
     }
 
     #[test]

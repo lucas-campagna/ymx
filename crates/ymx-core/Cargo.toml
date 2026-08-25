@@ -10,16 +10,3 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 indexmap = { workspace = true, features = ["serde"] }
 ryu.workspace = true
-
-# Chrome is always available — pdf-system and pdf-bundled are additive:
-# - pdf-system: system Chrome (no fetch)
-# - pdf-bundled: auto-download Chromium (headless_chrome/fetch)
-headless_chrome = "1.0"
-urlencoding = "2.1"
-
-[features]
-default = []
-# pdf-system: use system Chrome (no fetch) — user must have Chrome installed
-pdf-system = []
-# pdf-bundled: auto-download Chromium (~150MB binary cost)
-pdf-bundled = ["headless_chrome/fetch"]

@@ -1688,8 +1688,10 @@ dependencies = [
 name = "ymx-cli"
 version = "0.1.0"
 dependencies = [
+ "headless_chrome",
  "indexmap",
  "serde_json",
+ "urlencoding",
  "yaml-rust2",
  "ymx-config",
  "ymx-lib",
@@ -1707,12 +1709,10 @@ dependencies = [
 name = "ymx-core"
 version = "0.1.0"
 dependencies = [
- "headless_chrome",
  "indexmap",
  "ryu",
  "serde",
  "serde_json",
- "urlencoding",
  "yaml-rust2",
 ]
 

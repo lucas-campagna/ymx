@@ -40,10 +40,3 @@ pub mod namespace;
 pub mod parse;
 pub mod project;
 pub mod resolve;
-
-// PDF backends
-// SystemChromeBackend + Html2PdfRenderer always available (headless_chrome always linked)
-pub use render::{Html2PdfRenderer, PdfBackend, PdfError, SystemChromeBackend};
-// BundledChromeBackend only when pdf-bundled feature is enabled
-#[cfg(feature = "pdf-bundled")]
-pub use render::BundledChromeBackend;

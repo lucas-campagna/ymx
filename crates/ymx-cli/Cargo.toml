@@ -9,6 +9,8 @@ name = "ymx"
 path = "src/main.rs"
 
 [dependencies]
+headless_chrome = "1.0"
+urlencoding = "2"
 indexmap.workspace = true
 ymx-lib.workspace = true
 ymx-config.workspace = true
@@ -17,10 +19,8 @@ serde_json.workspace = true
 yaml-rust2.workspace = true
 
 [features]
-# Docker backend is always compiled in (std::process::Command, no extra deps)
-# Chrome backends are opt-in:
-pdf-system  = ["ymx-lib/pdf-system"]
-pdf-bundled = ["ymx-lib/pdf-bundled"]
+pdf-bundled = ["headless_chrome/fetch"]
+default = []
 
 # Man page: view with `man ./man/ymx.1` or copy to your manpages directory.
 [package.metadata]
