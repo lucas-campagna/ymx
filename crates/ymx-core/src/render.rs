@@ -291,7 +291,7 @@ fn looks_like_attr(key: &str) -> bool {
 /// Keys that look like framework attributes (@, x-, :, hx-, v-) are excluded.
 /// If the object has a `children` key plus exactly one other non-attribute key,
 /// the other key is treated as the tag name.
-fn find_tag_shortcut<'a>(map: &'a IndexMap<String, Value>) -> Option<(&'a str, &'a Value)> {
+fn find_tag_shortcut(map: &IndexMap<String, Value>) -> Option<(&str, &Value)> {
     let non_attr: Vec<_> = map
         .iter()
         .filter(|(k, _)| !is_known_html_attr(k) && !k.eq_ignore_ascii_case("children"))

@@ -945,9 +945,9 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU32, Ordering};
 
+    use ymx_config::CliOverrides;
     #[cfg(feature = "pdf-system")]
     use ymx_lib::ymx_core::render::Html2PdfRenderer;
-    use ymx_config::CliOverrides;
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -1855,7 +1855,10 @@ mod tests {
 
         // Verify PDF magic bytes
         assert!(!bytes.is_empty(), "PDF bytes should not be empty");
-        assert!(bytes.starts_with(b"%PDF"), "PDF should start with %PDF magic");
+        assert!(
+            bytes.starts_with(b"%PDF"),
+            "PDF should start with %PDF magic"
+        );
     }
 
     #[test]
@@ -1870,7 +1873,10 @@ mod tests {
         }
 
         let dir = TempDir::new();
-        dir.write("main.yml", "main:\n  from: div\n  children: Hello Docker PDF\n");
+        dir.write(
+            "main.yml",
+            "main:\n  from: div\n  children: Hello Docker PDF\n",
+        );
 
         let project = load_project(dir.path()).expect("load_project should succeed");
         let opts = extract_options(&project, &CliOverrides::default_for_tests())
@@ -1880,6 +1886,9 @@ mod tests {
 
         // render_pdf_docker is pub(crate), call it directly
         let bytes = render_pdf_docker(&html).expect("docker render should succeed");
-        assert!(bytes.starts_with(b"%PDF"), "PDF should start with %PDF magic");
+        assert!(
+            bytes.starts_with(b"%PDF"),
+            "PDF should start with %PDF magic"
+        );
     }
 }
