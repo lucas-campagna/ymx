@@ -817,7 +817,6 @@ fn emit_pdf(cli: &ParsedCli, value: &Value) -> RunOutcome {
 }
 
 /// Render HTML to PDF using Docker (pdfix/html-to-pdf image).
-#[cfg(feature = "pdf-docker")]
 pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
     use std::fs;
     use std::process::Command;
@@ -867,14 +866,6 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
     let _ = fs::remove_file(&pdf_path);
 
     Ok(pdf_bytes)
-}
-
-/// Stub for pdf-docker feature when not enabled.
-#[cfg(not(feature = "pdf-docker"))]
-pub(crate) fn render_pdf_docker(_html: &str) -> Result<Vec<u8>, PdfError> {
-    Err(PdfError {
-        message: "docker backend not available: rebuild with --features pdf-docker".to_string(),
-    })
 }
 
 /// Write binary `bytes` to `path`. A write failure prints a diagnostic-style
@@ -1863,7 +1854,6 @@ mod tests {
 
     #[test]
     #[ignore] // requires Docker running with pdfix/html-to-pdf image
-    #[cfg(feature = "pdf-docker")]
     fn test_pdf_docker_backend_renders_valid_pdf() {
         use std::process::Command;
 

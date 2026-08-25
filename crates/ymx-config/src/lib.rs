@@ -278,7 +278,7 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
         },
         None => pdf_backend,
     };
-    opts.pdf_backend = effective_pdf_backend.unwrap_or(PdfBackendKind::System);
+    opts.pdf_backend = effective_pdf_backend.unwrap_or(PdfBackendKind::Docker);
 
     // Promotion clash check: under the effective `plain`, a sub-namespace name
     // that would be promoted must not collide with an existing global

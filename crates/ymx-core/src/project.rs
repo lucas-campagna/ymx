@@ -105,7 +105,7 @@ impl Default for Options {
             format: Format::Json,
             plain: PlainMode::False,
             allowed_backends: None,
-            pdf_backend: PdfBackendKind::System,
+            pdf_backend: PdfBackendKind::Docker,
             executor: None,
         }
     }
@@ -343,7 +343,7 @@ mod tests {
         assert!(!o.pretty);
         assert_eq!(o.format, Format::Json);
         assert_eq!(o.plain, PlainMode::False);
-        assert_eq!(o.pdf_backend, PdfBackendKind::System);
+        assert_eq!(o.pdf_backend, PdfBackendKind::Docker);
     }
 
     #[test]

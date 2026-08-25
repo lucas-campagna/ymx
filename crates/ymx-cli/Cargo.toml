@@ -17,12 +17,11 @@ serde_json.workspace = true
 yaml-rust2.workspace = true
 
 [features]
-default = ["pdf-system"]
+# Docker backend is always compiled in (std::process::Command, no extra deps)
+# Chrome backends are opt-in:
 pdf-system  = ["ymx-lib/pdf-system"]
 pdf-bundled = ["ymx-lib/pdf-bundled"]
-pdf-docker  = []
 
 # Man page: view with `man ./man/ymx.1` or copy to your manpages directory.
-# The man page source is at man/ymx.1 in this crate's source directory.
 [package.metadata]
 man = "man/ymx.1"
