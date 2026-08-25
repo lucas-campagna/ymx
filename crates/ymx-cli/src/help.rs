@@ -26,6 +26,7 @@ Options:
       --pretty             Force pretty JSON with -f compact
   -o, --output <file>      Write to file instead of stdout
   -t, --test               Run inline `_test` blocks instead of compiling
+      --watch <path>        Watch a file or directory for changes and re-compile on save
   -c, --code <yml>        Inline YAML/JSON component definitions (overrides file components)
       --errors             Print full diagnostic code reference and exit
   -h, --help               Show this help
@@ -39,6 +40,7 @@ Examples:
   echo '{\"a\":1}' | ymx main.yml    Stdin provides call arguments
   ymx -c 'main: hello'                        Inline script (no file)
   ymx main.yml -c 'main$: a + b'              Override file components
+  ymx main.yml --watch .                      Watch the project and recompile on every change
   echo '{\"a\":1}' | ymx -c 'main$: a + 1'     Inline script with stdin args
 ";
 
@@ -68,6 +70,7 @@ mod tests {
         "--output",
         "-t",
         "--test",
+        "--watch",
         "-c",
         "--code",
         "--errors",
