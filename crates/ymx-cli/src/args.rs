@@ -80,6 +80,9 @@ pub struct ParsedCli {
     /// `--pdf-backend <system|bundled|docker>` — which PDF backend to use
     /// when `-f pdf` is active. Defaults to `None` (system).
     pub pdf_backend: Option<PdfBackendKind>,
+    /// `--watch <path>` — watch a file or directory for changes and re-compile.
+    /// Cannot be combined with --test (CLI usage error).
+    pub watch: Option<PathBuf>,
 }
 
 impl ParsedCli {
@@ -156,6 +159,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     let mut no_exec = false;
     let mut code: Option<String> = None;
     let mut pdf_backend: Option<PdfBackendKind> = None;
+    let mut watch: Option<PathBuf> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -222,6 +226,10 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
                 });
             }
             "-c" | "--code" => code = Some(take_value(args, &mut i, "--code")?),
+            "--watch" => {
+                let raw = take_value(args, &mut i, "--watch")?;
+                watch = Some(PathBuf::from(raw));
+            }
             other => {
                 if other.starts_with("--") {
                     return Err(ParseError {
@@ -254,6 +262,18 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     if test && code.is_some() {
         return Err(ParseError {
             message: "-c/--code cannot be combined with --test".to_string(),
+        });
+    }
+
+    if watch.is_some() && test {
+        return Err(ParseError {
+            message: "--watch cannot be combined with --test".to_string(),
+        });
+    }
+
+    if watch.is_some() && positionals.is_empty() && code.is_none() {
+        return Err(ParseError {
+            message: "--watch requires a project file or directory path".to_string(),
         });
     }
 
@@ -312,6 +332,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         no_exec,
         code,
         pdf_backend,
+        watch,
     }))
 }
 
@@ -718,5 +739,31 @@ mod tests {
             parse(&args(&["--errors", "--help"])),
             Ok(ParseOutcome::Errors)
         );
+    }
+
+    #[test]
+    fn watch_flag_parses_path() {
+        let c = cli_of(&["--watch", "src/", "proj/main.yml"]);
+        assert_eq!(c.watch.as_deref(), Some(std::path::Path::new("src/")));
+    }
+
+    #[test]
+    fn watch_flag_is_none_when_absent() {
+        let c = cli_of(&["proj/main.yml"]);
+        assert_eq!(c.watch, None);
+    }
+
+    #[test]
+    fn watch_with_test_errors() {
+        let err = err_of(&["--watch", "src/", "--test", "proj/main.yml"]);
+        assert!(err.message.contains("--watch"));
+        assert!(err.message.contains("--test"));
+    }
+
+    #[test]
+    fn watch_without_positional_errors() {
+        let err = err_of(&["--watch", "src/"]);
+        assert!(err.message.contains("--watch"));
+        assert!(err.message.contains("path"));
     }
 }
