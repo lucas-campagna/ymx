@@ -9,7 +9,7 @@ name = "ymx"
 path = "src/main.rs"
 
 [dependencies]
-headless_chrome = "1.0"
+headless_chrome = { version = "1.0", optional = true }
 urlencoding = "2"
 indexmap.workspace = true
 ymx-lib.workspace = true
@@ -19,6 +19,7 @@ serde_json.workspace = true
 yaml-rust2.workspace = true
 
 [features]
+pdf-system  = ["headless_chrome"]
 pdf-bundled = ["headless_chrome/fetch"]
 default = []
 

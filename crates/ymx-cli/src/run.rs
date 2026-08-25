@@ -63,13 +63,17 @@ pub struct PdfError {
 }
 
 /// Trait for rendering HTML to PDF.
+#[allow(dead_code)]
 pub trait PdfBackend: Send + Sync {
     fn render(&self, html: &str) -> Result<Vec<u8>, PdfError>;
 }
 
 /// PDF backend that uses the system-installed Chrome browser via headless_chrome.
+/// Requires `feature = "pdf-system"`.
+#[cfg(feature = "pdf-system")]
 pub struct SystemChromeBackend;
 
+#[cfg(feature = "pdf-system")]
 impl PdfBackend for SystemChromeBackend {
     fn render(&self, html: &str) -> Result<Vec<u8>, PdfError> {
         use headless_chrome::types::PrintToPdfOptions;
@@ -856,10 +860,15 @@ fn emit_html(cli: &ParsedCli, value: &Value) -> RunOutcome {
 fn emit_pdf(cli: &ParsedCli, opts: &Options, value: &Value) -> RunOutcome {
     let html = DefaultHtmlRenderer.render_html(value);
     let pdf_bytes: Result<Vec<u8>, PdfError> = match opts.pdf_backend.as_str() {
+        #[cfg(feature = "pdf-system")]
         "system" => {
             let backend = SystemChromeBackend;
             backend.render(&html)
         }
+        #[cfg(not(feature = "pdf-system"))]
+        "system" => Err(PdfError {
+            message: "system backend not available: rebuild with --features pdf-system".to_string(),
+        }),
         #[cfg(feature = "pdf-bundled")]
         "bundled" => {
             let backend = BundledChromeBackend;
@@ -1898,6 +1907,7 @@ mod tests {
 
     #[test]
     #[ignore] // requires Chrome/Chromium installed on the system
+    #[cfg(feature = "pdf-system")]
     fn test_pdf_system_backend_renders_valid_pdf() {
         let dir = TempDir::new();
         dir.write("main.yml", "main:\n  from: div\n  children: Hello PDF\n");
