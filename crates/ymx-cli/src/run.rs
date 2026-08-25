@@ -305,6 +305,11 @@ fn yaml_to_value(yaml: &Yaml) -> Option<Value> {
 
 /// Drive the canonical pipeline against `cli`.
 pub fn run(cli: ParsedCli) -> RunOutcome {
+    // Watch mode: enter the file watcher loop and never return (until interrupted).
+    if cli.watch.is_some() {
+        return run_watch(&cli);
+    }
+
     // Recursive directory mode (--test with a directory path) — unaffected by stdin.
     if let Some(ref test_dir) = cli.test_dir {
         return run_recursive_tests(test_dir);
