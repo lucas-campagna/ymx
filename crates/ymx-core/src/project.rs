@@ -18,6 +18,7 @@ pub enum Format {
     Compact,
     Diagnostics,
     Html,
+    Pdf,
 }
 
 /// Namespace-promotion mode for `_ymx.plain` / CLI `--plain` /

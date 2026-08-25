@@ -10,3 +10,10 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 indexmap = { workspace = true, features = ["serde"] }
 ryu.workspace = true
+headless_chrome = "1.0"
+urlencoding = "2.1"
+
+[features]
+default = ["pdf-system"]
+pdf-system  = []
+pdf-bundled = []

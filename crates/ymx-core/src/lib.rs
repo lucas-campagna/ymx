@@ -36,6 +36,7 @@ pub mod ir;
 pub mod math;
 pub mod render;
 pub use render::{DefaultHtmlRenderer, HtmlRenderer, pretty_print_html};
+pub use render::{PdfBackend, PdfError, SystemChromeBackend, BundledChromeBackend};
 pub mod namespace;
 pub mod parse;
 pub mod project;

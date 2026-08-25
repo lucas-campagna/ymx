@@ -1,3 +1,4 @@
+use headless_chrome::{Browser, LaunchOptions};
 use indexmap::IndexMap;
 use serde_json;
 
@@ -501,6 +502,61 @@ fn html_escape(s: &str) -> String {
         }
     }
     out
+}
+
+/// PDF rendering error.
+#[derive(Debug)]
+pub struct PdfError {
+    pub message: String,
+}
+
+impl std::fmt::Display for PdfError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PdfError: {}", self.message)
+    }
+}
+
+impl std::error::Error for PdfError {}
+
+/// Trait for rendering HTML to PDF.
+pub trait PdfBackend: Send + Sync {
+    fn render(&self, html: &str) -> Result<Vec<u8>, PdfError>;
+}
+
+/// PDF backend using the system Chrome/Chromium via headless_chrome.
+pub struct SystemChromeBackend;
+
+impl PdfBackend for SystemChromeBackend {
+    fn render(&self, html: &str) -> Result<Vec<u8>, PdfError> {
+        let browser = Browser::new(LaunchOptions::default())
+            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
+        let tab = browser.new_tab()
+            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
+        let data_url = format!("data:text/html;charset=utf-8,{}", urlencoding::encode(html));
+        tab.navigate_to(&data_url)
+            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
+        let pdf = tab.print_to_pdf(None)
+            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
+        Ok(pdf)
+    }
+}
+
+/// PDF backend using the bundled Chrome binary via headless_chrome.
+pub struct BundledChromeBackend;
+
+impl PdfBackend for BundledChromeBackend {
+    fn render(&self, html: &str) -> Result<Vec<u8>, PdfError> {
+        let browser = Browser::new(LaunchOptions::default())
+            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
+        let tab = browser.new_tab()
+            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
+        let data_url = format!("data:text/html;charset=utf-8,{}", urlencoding::encode(html));
+        tab.navigate_to(&data_url)
+            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
+        let pdf = tab.print_to_pdf(None)
+            .map_err(|e| PdfError { message: format!("{:?}", e) })?;
+        Ok(pdf)
+    }
 }
 
 /// Pretty-print an HTML string with proper indentation.
