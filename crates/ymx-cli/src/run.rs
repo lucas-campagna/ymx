@@ -487,7 +487,13 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
                 .and_then(|e| e.split('.').next_back())
                 .unwrap_or("main");
             match compile_component(&project, entry_component, &args, &opts) {
-                Ok(v) => return emit(&cli, &opts, &v),
+                Ok(v) => {
+                    let (outcome, output) = emit(&cli, &opts, &v);
+                    if let Some(out) = output {
+                        print!("{out}");
+                    }
+                    return outcome;
+                }
                 Err(diags) => return render_diags(&diags),
             }
         }
@@ -495,7 +501,13 @@ pub fn run(cli: ParsedCli) -> RunOutcome {
 
     // Normal compile (no positional, no stdin args, or stdin was empty).
     match compile(&project, &opts) {
-        Ok(value) => emit(&cli, &opts, &value),
+        Ok(value) => {
+            let (outcome, output) = emit(&cli, &opts, &value);
+            if let Some(out) = output {
+                print!("{out}");
+            }
+            outcome
+        }
         Err(diags) => render_diags(&diags),
     }
 }
@@ -810,9 +822,13 @@ fn diff(result: &TestResult) -> String {
 ///   written file, and yields [`RunOutcome::Diagnostic`]. Otherwise the JSON is
 ///   written to stdout. `--output` is ignored under `--test` (handled
 ///   earlier in [`run`]).
-fn emit(cli: &ParsedCli, opts: &Options, value: &Value) -> RunOutcome {
+///
+/// Returns `(RunOutcome, Option<String>)` where the `String` is stdout
+/// content to emit (for watch-mode clearing), or `None` for file output or
+/// diagnostics format.
+fn emit(cli: &ParsedCli, opts: &Options, value: &Value) -> (RunOutcome, Option<String>) {
     match opts.format {
-        Format::Diagnostics => RunOutcome::Success,
+        Format::Diagnostics => (RunOutcome::Success, None),
         // JSON format uses pretty by default (milestone 1.23: "JSON output should
         // use `--pretty` by default"); the CLI --pretty flag overrides for compact
         Format::Json => emit_json(cli, true, value),
@@ -828,26 +844,23 @@ fn emit(cli: &ParsedCli, opts: &Options, value: &Value) -> RunOutcome {
 /// Serialize `value` to JSON (pretty iff `pretty`) and dispatch to
 /// `--output` or stdout. Serialization is materialized into a `String`
 /// before any I/O, so a serialize failure never creates a file.
-fn emit_json(cli: &ParsedCli, pretty: bool, value: &Value) -> RunOutcome {
+fn emit_json(cli: &ParsedCli, pretty: bool, value: &Value) -> (RunOutcome, Option<String>) {
     let json = match serialize(value, pretty) {
         Ok(json) => json,
         Err(message) => {
             eprintln!("ymx: {message}");
-            return RunOutcome::Diagnostic;
+            return (RunOutcome::Diagnostic, None);
         }
     };
     match cli.output.as_deref() {
-        Some(path) => write_file(path, &json),
-        None => {
-            print!("{json}");
-            RunOutcome::Success
-        }
+        Some(path) => (write_file(path, &json), None),
+        None => (RunOutcome::Success, Some(json)),
     }
 }
 
 /// Render `value` to HTML via [`DefaultHtmlRenderer`] and dispatch to
 /// `--output` or stdout.
-fn emit_html(cli: &ParsedCli, value: &Value) -> RunOutcome {
+fn emit_html(cli: &ParsedCli, value: &Value) -> (RunOutcome, Option<String>) {
     let html = DefaultHtmlRenderer.render_html(value);
     let output = if cli.pretty.unwrap_or(false) {
         pretty_print_html(&html)
@@ -855,17 +868,14 @@ fn emit_html(cli: &ParsedCli, value: &Value) -> RunOutcome {
         html
     };
     match cli.output.as_deref() {
-        Some(path) => write_file(path, &output),
-        None => {
-            print!("{output}");
-            RunOutcome::Success
-        }
+        Some(path) => (write_file(path, &output), None),
+        None => (RunOutcome::Success, Some(output)),
     }
 }
 
 /// Render `value` to PDF via [`DefaultHtmlRenderer`] + [`PdfBackend`] and
 /// dispatch binary output to `--output` or stdout.
-fn emit_pdf(cli: &ParsedCli, opts: &Options, value: &Value) -> RunOutcome {
+fn emit_pdf(cli: &ParsedCli, opts: &Options, value: &Value) -> (RunOutcome, Option<String>) {
     let html = DefaultHtmlRenderer.render_html(value);
     let pdf_bytes: Result<Vec<u8>, PdfError> = match opts.pdf_backend.as_str() {
         #[cfg(feature = "pdf-system")]
@@ -891,18 +901,19 @@ fn emit_pdf(cli: &ParsedCli, opts: &Options, value: &Value) -> RunOutcome {
     };
     match pdf_bytes {
         Ok(bytes) => match cli.output.as_deref() {
-            Some(path) => write_file_binary(path, &bytes),
+            Some(path) => (write_file_binary(path, &bytes), None),
             None => {
                 if let Err(e) = std::io::stdout().lock().write_all(&bytes) {
                     eprintln!("ymx: failed to write PDF to stdout: {e}");
-                    return RunOutcome::Diagnostic;
+                    return (RunOutcome::Diagnostic, None);
                 }
-                RunOutcome::Success
+                // Binary stdout cannot use the ANSI clear-line sequence.
+                (RunOutcome::Success, None)
             }
         },
         Err(e) => {
             eprintln!("ymx: PDF render error: {}", e.message);
-            RunOutcome::Diagnostic
+            (RunOutcome::Diagnostic, None)
         }
     }
 }
@@ -1032,12 +1043,13 @@ fn is_yaml_file(paths: &[PathBuf]) -> bool {
 
 /// Run a single compile cycle for watch mode: load -> extract -> compile -> emit.
 /// Uses the file at `cli.path` directly (not stdin or temp files).
-fn run_single_compile(cli: &ParsedCli) -> RunOutcome {
+/// Returns `(RunOutcome, Option<String>)` where the `String` is stdout content.
+fn run_single_compile(cli: &ParsedCli) -> (RunOutcome, Option<String>) {
     let project = match load_project(&cli.path) {
         Ok(p) => p,
         Err(diags) => {
             render_diags_load_error(&diags);
-            return RunOutcome::LoadError;
+            return (RunOutcome::LoadError, None);
         }
     };
 
@@ -1046,7 +1058,7 @@ fn run_single_compile(cli: &ParsedCli) -> RunOutcome {
         Ok(o) => o,
         Err(diags) => {
             render_diags(&diags);
-            return RunOutcome::Diagnostic;
+            return (RunOutcome::Diagnostic, None);
         }
     };
 
@@ -1059,7 +1071,7 @@ fn run_single_compile(cli: &ParsedCli) -> RunOutcome {
         Ok(value) => emit(cli, &opts, &value),
         Err(diags) => {
             render_diags(&diags);
-            RunOutcome::Diagnostic
+            (RunOutcome::Diagnostic, None)
         }
     }
 }
@@ -1108,7 +1120,10 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
     let mut pending = false;
 
     // Run initial compile
-    run_single_compile(cli);
+    let (_outcome, output) = run_single_compile(cli);
+    if let Some(out) = output {
+        print!("\r\x1b[K{out}");
+    }
     if shutdown.load(Ordering::SeqCst) {
         return RunOutcome::Success;
     }
@@ -1131,7 +1146,10 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if pending {
                     pending = false;
-                    run_single_compile(cli);
+                    let (_outcome, output) = run_single_compile(cli);
+                    if let Some(out) = output {
+                        print!("\r\x1b[K{out}");
+                    }
                     if shutdown.load(Ordering::SeqCst) {
                         return RunOutcome::Success;
                     }
@@ -1447,7 +1465,7 @@ mod tests {
         dir.write("main.yml", "main: 1\n");
         let cli = cli_for(dir.path());
         assert_eq!(
-            emit(&cli, &Options::default(), &Value::Int(1)),
+            emit(&cli, &Options::default(), &Value::Int(1)).0,
             RunOutcome::Success
         );
     }
@@ -1463,7 +1481,7 @@ mod tests {
             format: Format::Diagnostics,
             ..Options::default()
         };
-        assert_eq!(emit(&cli, &opts, &Value::Int(1)), RunOutcome::Success);
+        assert_eq!(emit(&cli, &opts, &Value::Int(1)).0, RunOutcome::Success);
         assert!(!out.exists(), "--output ignored under --format diagnostics");
     }
 
@@ -1475,7 +1493,7 @@ mod tests {
         let mut cli = cli_for(dir.path());
         cli.output = Some(out.clone());
         assert_eq!(
-            emit(&cli, &Options::default(), &Value::Int(1)),
+            emit(&cli, &Options::default(), &Value::Int(1)).0,
             RunOutcome::Success
         );
         assert!(out.exists(), "file created on success");
@@ -1494,7 +1512,7 @@ mod tests {
             pretty: true,
             ..Options::default()
         };
-        assert_eq!(emit(&cli, &opts, &Value::Int(1)), RunOutcome::Success);
+        assert_eq!(emit(&cli, &opts, &Value::Int(1)).0, RunOutcome::Success);
         let written = fs::read_to_string(&out).expect("read back");
         assert_eq!(
             written, "1",
