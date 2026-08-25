@@ -55,7 +55,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.33 | `done` | Shell execution stderr capture | ymx-core, ymx-lib | [1.33-stderr-capture.md](1.33-stderr-capture.md) | 1.27 |
 | 1.34 | `done` | Additional builtins: $split/$join/$filter/… | ymx-core | [1.34-additional-builtins.md](1.34-additional-builtins.md) | 1.8 |
 | 1.35 | `done` | HTML renderer | ymx-core, ymx-cli | [1.35-html-renderer.md](1.35-html-renderer.md) | 1.34 |
-| 1.36 | `planned` | PDF renderer (feature-gated) | ymx-core, ymx-cli | [1.36-pdf-renderer.md](1.36-pdf-renderer.md) | 1.35 |
+| 1.36 | `done` | PDF renderer (feature-gated) | ymx-cli | [1.36-pdf-renderer.md](1.36-pdf-renderer.md) | 1.35 |
 
 ## Cross-cutting notes
 
