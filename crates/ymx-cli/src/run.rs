@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
 
@@ -1043,13 +1043,13 @@ fn is_yaml_file(paths: &[PathBuf]) -> bool {
 
 /// Run a single compile cycle for watch mode: load -> extract -> compile -> emit.
 /// Uses the file at `cli.path` directly (not stdin or temp files).
-/// Returns `(RunOutcome, Option<String>)` where the `String` is stdout content.
-fn run_single_compile(cli: &ParsedCli) -> (RunOutcome, Option<String>) {
+/// Returns `(RunOutcome, Vec<Diagnostic>, Option<String>)` where the `Vec<Diagnostic>`
+/// contains any diagnostics (empty on success) and the `String` is stdout content.
+fn run_single_compile(cli: &ParsedCli) -> (RunOutcome, Vec<Diagnostic>, Option<String>) {
     let project = match load_project(&cli.path) {
         Ok(p) => p,
         Err(diags) => {
-            render_diags_load_error(&diags);
-            return (RunOutcome::LoadError, None);
+            return (RunOutcome::LoadError, diags, None);
         }
     };
 
@@ -1057,8 +1057,7 @@ fn run_single_compile(cli: &ParsedCli) -> (RunOutcome, Option<String>) {
     let mut opts = match extract_options(&project, &overrides) {
         Ok(o) => o,
         Err(diags) => {
-            render_diags(&diags);
-            return (RunOutcome::Diagnostic, None);
+            return (RunOutcome::Diagnostic, diags, None);
         }
     };
 
@@ -1068,11 +1067,11 @@ fn run_single_compile(cli: &ParsedCli) -> (RunOutcome, Option<String>) {
     }
 
     match compile(&project, &opts) {
-        Ok(value) => emit(cli, &opts, &value),
-        Err(diags) => {
-            render_diags(&diags);
-            (RunOutcome::Diagnostic, None)
+        Ok(value) => {
+            let (outcome, output) = emit(cli, &opts, &value);
+            (outcome, Vec::new(), output)
         }
+        Err(diags) => (RunOutcome::Diagnostic, diags, None),
     }
 }
 
@@ -1127,19 +1126,33 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
     let mut prev_state: Option<RenderState> = None;
 
     // Run initial compile
-    let (outcome, _output) = run_single_compile(cli);
+    let start = Instant::now();
+    let (outcome, diags, _output) = run_single_compile(cli);
+    let elapsed = start.elapsed();
     let state = match outcome {
         RunOutcome::Success => RenderState::Success,
         _ => RenderState::Error,
     };
     if Some(state) != prev_state {
         prev_state = Some(state);
-        let label = match state {
-            RenderState::Success => "✓ SUCCESS",
-            RenderState::Error => "✗ ERROR",
-        };
-        print!("\x1b[2J\x1b[H{label}");
-        std::io::stdout().flush().ok();
+        match state {
+            RenderState::Success => {
+                let label = format!(
+                    "{} successfully compiled at {:.3}s",
+                    watch_path.display(),
+                    elapsed.as_secs_f64()
+                );
+                print!("\x1b[2J\x1b[H{label}");
+                std::io::stdout().flush().ok();
+            }
+            RenderState::Error => {
+                print!("\x1b[2J\x1b[H✗ ERROR");
+                std::io::stdout().flush().ok();
+                for diag in &diags {
+                    eprintln!("[{}] {}", diag.code, diag.message);
+                }
+            }
+        }
     }
     if shutdown.load(Ordering::SeqCst) {
         return RunOutcome::Success;
@@ -1163,19 +1176,33 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if pending {
                     pending = false;
-                    let (outcome, _output) = run_single_compile(cli);
+                    let start = Instant::now();
+                    let (outcome, diags, _output) = run_single_compile(cli);
+                    let elapsed = start.elapsed();
                     let state = match outcome {
                         RunOutcome::Success => RenderState::Success,
                         _ => RenderState::Error,
                     };
                     if Some(state) != prev_state {
                         prev_state = Some(state);
-                        let label = match state {
-                            RenderState::Success => "✓ SUCCESS",
-                            RenderState::Error => "✗ ERROR",
-                        };
-                        print!("\x1b[2J\x1b[H{label}");
-                        std::io::stdout().flush().ok();
+                        match state {
+                            RenderState::Success => {
+                                let label = format!(
+                                    "{} successfully compiled at {:.3}s",
+                                    watch_path.display(),
+                                    elapsed.as_secs_f64()
+                                );
+                                print!("\x1b[2J\x1b[H{label}");
+                                std::io::stdout().flush().ok();
+                            }
+                            RenderState::Error => {
+                                print!("\x1b[2J\x1b[H✗ ERROR");
+                                std::io::stdout().flush().ok();
+                                for diag in &diags {
+                                    eprintln!("[{}] {}", diag.code, diag.message);
+                                }
+                            }
+                        }
                     }
                     if shutdown.load(Ordering::SeqCst) {
                         return RunOutcome::Success;
