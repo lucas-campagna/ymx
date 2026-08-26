@@ -2,7 +2,23 @@ _test:
   data_attrs:
     format: html
     args: {}
-    result: "<div data-id=\"123\" data-values=\"1 2 3\">content</div>"
+    result: "<div data-id=\"123\" data-values=\"[1,2,3]\">content</div>"
+  data_attrs_string:
+    format: html
+    args: {}
+    result: "<div data-name=\"hello world\">content</div>"
+  data_attrs_int:
+    format: html
+    args: {}
+    result: "<div data-count=\"42\">content</div>"
+  data_attrs_float:
+    format: html
+    args: {}
+    result: "<div data-price=\"3.14\">content</div>"
+  data_attrs_bool_true:
+    format: html
+    args: {}
+    result: "<div data-active>content</div>"
 
 data_attrs:
   div: content
@@ -11,3 +27,19 @@ data_attrs:
     - 1
     - 2
     - 3
+
+data_attrs_string:
+  div: content
+  data-name: "hello world"
+
+data_attrs_int:
+  div: content
+  data-count: 42
+
+data_attrs_float:
+  div: content
+  data-price: 3.14
+
+data_attrs_bool_true:
+  div: content
+  data-active: true
