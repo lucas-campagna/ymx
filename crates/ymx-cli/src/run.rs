@@ -58,8 +58,7 @@ use ymx_test::{parse_tests, run_tests, Expected, TestResult};
 use crate::args::ParsedCli;
 use crate::diagnostic::render_with_guidance;
 
-#[cfg(feature = "watch")]
-use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+
 
 // PDF rendering types — live here in ymx-cli so ymx-core stays I/O-free.
 
@@ -863,6 +862,29 @@ fn emit_pdf(
     docker_backend: Option<&Arc<DockerBackend>>,
 ) -> (RunOutcome, Option<String>) {
     let html = DefaultHtmlRenderer.render_html(value);
+
+    // If a pre-created DockerBackend is available (watch mode), use it directly.
+    // It was explicitly created for watch mode and takes precedence over opts.pdf_backend.
+    if let Some(arc) = docker_backend {
+        let pdf_bytes = arc.render(&html);
+        return match pdf_bytes {
+            Ok(bytes) => match cli.output.as_deref() {
+                Some(path) => (write_file_binary(path, &bytes), None),
+                None => {
+                    if let Err(e) = std::io::stdout().lock().write_all(&bytes) {
+                        eprintln!("ymx: failed to write PDF to stdout: {e}");
+                        return (RunOutcome::Diagnostic, None);
+                    }
+                    (RunOutcome::Success, None)
+                }
+            },
+            Err(e) => {
+                eprintln!("ymx: PDF render error: {}", e.message);
+                (RunOutcome::Diagnostic, None)
+            }
+        };
+    }
+
     let pdf_bytes: Result<Vec<u8>, PdfError> = match opts.pdf_backend.as_str() {
         #[cfg(feature = "pdf-system")]
         "system" => {
@@ -883,14 +905,7 @@ fn emit_pdf(
             message: "bundled backend not available: rebuild with --features pdf-bundled"
                 .to_string(),
         }),
-        _ => {
-            // docker backend
-            if let Some(arc) = docker_backend {
-                arc.render(&html)
-            } else {
-                render_pdf_docker(&html)
-            }
-        }
+        _ => render_pdf_docker(&html),
     };
     match pdf_bytes {
         Ok(bytes) => match cli.output.as_deref() {
@@ -922,8 +937,15 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
     let html_path = cwd.join("index.html");
     let pdf_path = cwd.join("convert.pdf");
 
-    fs::write(&html_path, html).map_err(|e| PdfError {
+    let mut file = fs::File::create(&html_path).map_err(|e| PdfError {
         message: e.to_string(),
+    })?;
+    use std::io::Write;
+    file.write_all(html.as_bytes()).map_err(|e| PdfError {
+        message: e.to_string(),
+    })?;
+    file.sync_all().map_err(|e| PdfError {
+        message: format!("failed to sync HTML file: {}", e),
     })?;
 
     let output = Command::new("docker")
@@ -1022,9 +1044,16 @@ impl DockerBackend {
         let _ = std::fs::remove_file(&html_path);
         let _ = std::fs::remove_file(&pdf_path);
 
-        // Write HTML to volume
-        std::fs::write(&html_path, html).map_err(|e| PdfError {
+        // Write HTML to volume and flush to disk before docker reads it
+        let mut file = std::fs::File::create(&html_path).map_err(|e| PdfError {
             message: e.to_string(),
+        })?;
+        use std::io::Write;
+        file.write_all(html.as_bytes()).map_err(|e| PdfError {
+            message: e.to_string(),
+        })?;
+        file.sync_all().map_err(|e| PdfError {
+            message: format!("failed to sync HTML file: {}", e),
         })?;
 
         // Exec html-to-pdf inside the running container
@@ -1052,6 +1081,22 @@ impl DockerBackend {
             });
         }
 
+        // Sync the directory to ensure container writes are flushed to the host volume
+        let pdf_dir = pdf_path.parent().unwrap_or(std::path::Path::new("."));
+        let dir_file = std::fs::OpenOptions::new().read(true).open(pdf_dir).map_err(|e| PdfError {
+            message: format!("failed to open PDF directory for sync: {}", e),
+        })?;
+        dir_file.sync_all().map_err(|e| PdfError {
+            message: format!("failed to sync PDF directory: {}", e),
+        })?;
+
+        // Re-open the PDF file fresh to avoid cached/empty content
+        let pdf_file = std::fs::File::open(&pdf_path).map_err(|e| PdfError {
+            message: format!("failed to open convert.pdf: {}", e),
+        })?;
+        pdf_file.sync_all().map_err(|e| PdfError {
+            message: format!("failed to sync PDF file: {}", e),
+        })?;
         let pdf_bytes = std::fs::read(&pdf_path).map_err(|e| PdfError {
             message: format!("failed to read convert.pdf: {}", e),
         })?;
@@ -1134,16 +1179,7 @@ fn render_diags_load_error(diags: &[Diagnostic]) -> RunOutcome {
     RunOutcome::LoadError
 }
 
-/// Returns true if any path in the event has a `.yml` or `.yaml` extension.
-#[cfg(feature = "watch")]
-fn is_yaml_file(paths: &[PathBuf]) -> bool {
-    paths.iter().any(|p| {
-        p.extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e == "yml" || e == "yaml")
-            .unwrap_or(false)
-    })
-}
+
 
 /// Run a single compile cycle for watch mode: load -> extract -> compile -> emit.
 /// Uses the file at `cli.path` directly (not stdin or temp files).
@@ -1154,6 +1190,7 @@ fn run_single_compile(
     cli: &ParsedCli,
     docker_backend: Option<&Arc<DockerBackend>>,
 ) -> (RunOutcome, Vec<Diagnostic>, Option<String>) {
+    eprintln!("DEBUG run_single_compile: path={}", cli.path.display());
     let project = match load_project(&cli.path) {
         Ok(p) => p,
         Err(diags) => {
@@ -1200,36 +1237,10 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();
 
-    #[cfg(feature = "watch")]
     if let Err(e) = ctrlc::set_handler(move || {
         shutdown_clone.store(true, Ordering::SeqCst);
     }) {
         eprintln!("ymx: warning: could not set Ctrl-C handler: {e}");
-    }
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut watcher = match RecommendedWatcher::new(
-        move |res| {
-            let _ = tx.send(res);
-        },
-        Config::default().with_poll_interval(Duration::from_millis(100)),
-    ) {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("ymx: failed to create watcher: {e}");
-            return RunOutcome::Diagnostic;
-        }
-    };
-
-    let mode = if watch_path.is_dir() {
-        RecursiveMode::Recursive
-    } else {
-        RecursiveMode::NonRecursive
-    };
-
-    if let Err(e) = watcher.watch(watch_path, mode) {
-        eprintln!("ymx: failed to watch {}: {e}", watch_path.display());
-        return RunOutcome::Diagnostic;
     }
 
     let debounce_duration = Duration::from_millis(100);
@@ -1249,6 +1260,56 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
     } else {
         None
     };
+
+    // Collect current mtimes for watched path (file or directory)
+    fn get_current_mtimes(path: &Path) -> Vec<(PathBuf, Option<u64>)> {
+        if path.is_file() {
+            vec![get_file_mtime(path)]
+        } else if path.is_dir() {
+            let mut mtimes = Vec::new();
+            let walker = ignore::WalkBuilder::new(path)
+                .max_depth(Some(10))
+                .hidden(true)
+                .build();
+            for entry in walker.flatten() {
+                let file_path = entry.path();
+                if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
+                    if ext == "yml" || ext == "yaml" {
+                        mtimes.push(get_file_mtime(file_path));
+                    }
+                }
+            }
+            mtimes
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn get_file_mtime(path: &Path) -> (PathBuf, Option<u64>) {
+        let mtime = path
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|t| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+            })
+            .ok();
+        (path.to_path_buf(), mtime)
+    }
+
+    // Compare two mtime collections for equality
+    fn mtimes_equal(a: &[(PathBuf, Option<u64>)], b: &[(PathBuf, Option<u64>)]) -> bool {
+        if a.len() != b.len() {
+            return false;
+        }
+        // Sort both by path for comparison
+        let mut a_sorted: Vec<_> = a.iter().collect();
+        let mut b_sorted: Vec<_> = b.iter().collect();
+        a_sorted.sort_by_key(|k| &k.0);
+        b_sorted.sort_by_key(|k| &k.0);
+        a_sorted.into_iter().zip(b_sorted.into_iter()).all(|(a, b)| a.0 == b.0 && a.1 == b.1)
+    }
 
     // Run initial compile
     let start = Instant::now();
@@ -1284,64 +1345,61 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
     }
     // Don't exit on first compile error — keep watching
 
+    // Initialize last mtimes after initial compile
+    let mut last_mtimes = get_current_mtimes(watch_path);
+
     loop {
         if shutdown.load(Ordering::SeqCst) {
             return RunOutcome::Success;
         }
 
-        match rx.recv_timeout(debounce_duration) {
-            Ok(Ok(event)) => {
-                if is_yaml_file(&event.paths) {
-                    pending = true;
-                }
-            }
-            Ok(Err(e)) => {
-                eprintln!("ymx: watch error: {e}");
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                if pending {
-                    pending = false;
-                    let start = Instant::now();
-                    let (outcome, diags, _output) =
-                        run_single_compile(cli, docker_backend.as_ref());
-                    let elapsed = start.elapsed();
-                    let state = match outcome {
-                        RunOutcome::Success => RenderState::Success,
-                        _ => RenderState::Error,
-                    };
-                    if Some(state) != prev_state {
-                        prev_state = Some(state);
-                        match state {
-                            RenderState::Success => {
-                                let label = format!(
-                                    "{} successfully compiled at {:.3}s",
-                                    watch_path.display(),
-                                    elapsed.as_secs_f64()
-                                );
-                                print!("\x1b[2J\x1b[H{label}");
-                                std::io::stdout().flush().ok();
-                            }
-                            RenderState::Error => {
-                                print!("\x1b[2J\x1b[H✗ ERROR");
-                                std::io::stdout().flush().ok();
-                                for diag in &diags {
-                                    eprintln!("[{}] {}", diag.code, diag.message);
-                                }
-                            }
+        std::thread::sleep(debounce_duration);
+
+        let current_mtimes = get_current_mtimes(watch_path);
+
+        // Check if anything changed
+        if !mtimes_equal(&current_mtimes, &last_mtimes) {
+            pending = true;
+        }
+
+        if pending {
+            pending = false;
+            last_mtimes = current_mtimes;
+
+            let start = Instant::now();
+            let (outcome, diags, _output) =
+                run_single_compile(cli, docker_backend.as_ref());
+            let elapsed = start.elapsed();
+            let state = match outcome {
+                RunOutcome::Success => RenderState::Success,
+                _ => RenderState::Error,
+            };
+            if Some(state) != prev_state {
+                prev_state = Some(state);
+                match state {
+                    RenderState::Success => {
+                        let label = format!(
+                            "{} successfully compiled at {:.3}s",
+                            watch_path.display(),
+                            elapsed.as_secs_f64()
+                        );
+                        print!("\x1b[2J\x1b[H{label}");
+                        std::io::stdout().flush().ok();
+                    }
+                    RenderState::Error => {
+                        print!("\x1b[2J\x1b[H✗ ERROR");
+                        std::io::stdout().flush().ok();
+                        for diag in &diags {
+                            eprintln!("[{}] {}", diag.code, diag.message);
                         }
                     }
-                    if shutdown.load(Ordering::SeqCst) {
-                        return RunOutcome::Success;
-                    }
                 }
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                break;
+            if shutdown.load(Ordering::SeqCst) {
+                return RunOutcome::Success;
             }
         }
     }
-
-    RunOutcome::Success
 }
 
 #[cfg(test)]
