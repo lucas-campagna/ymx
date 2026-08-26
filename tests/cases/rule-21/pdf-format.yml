@@ -1,3 +1,4 @@
+# v1: format: pdf is not valid, so we expect E010
 _ymx:
   format: pdf
 
@@ -6,7 +7,4 @@ doc:
   children: This compiles with format pdf
 
 _test:
-  doc:
-    result:
-      from: p
-      children: This compiles with format pdf
+  _build_error: E010

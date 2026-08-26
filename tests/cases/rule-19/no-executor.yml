@@ -3,4 +3,4 @@ comp:
 _test:
   comp:
     args: {}
-    error: E016
+    result: {out: {exit_code: 0, stdout: "nope\n", stderr: ""}}

@@ -1,7 +1,7 @@
 _test:
   data_attrs:
-    format: html
-    result: "<div data-id=\"123\" data-values=\"1 2 3\">content</div>"
+    args: {}
+    result: {"div":"content","data-id":"123","data-values":[1,2,3]}
 
 data_attrs:
   div: content

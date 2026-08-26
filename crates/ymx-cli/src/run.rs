@@ -659,7 +659,7 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
             ..CliOverrides::default_for_tests()
         };
 
-        let opts = match extract_options(&project, &overrides) {
+        let mut opts = match extract_options(&project, &overrides) {
             Ok(o) => o,
             Err(diags) => {
                 // If main.main failed with E009, try file_stem.main as fallback
@@ -697,6 +697,9 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
                 }
             }
         };
+
+        // Enable shell execution for tests
+        opts.executor = Some(Arc::new(StdExecutor));
 
         if let Err(diags) = parse_tests(&project, Some(&opts.entry)) {
             eprintln!(

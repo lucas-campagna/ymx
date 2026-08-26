@@ -13,11 +13,14 @@
 
 use std::path::{Path, PathBuf};
 
+use std::sync::Arc;
+
 use yaml_rust2::{Yaml, YamlLoader};
 
 use ymx_config::CliOverrides;
 use ymx_lib::Diagnostic;
 use ymx_lib::Value;
+use ymx_lib::StdExecutor;
 use ymx_test::Expected;
 
 /// Run every scenario under `<workspace root>/tests/cases/<category>/<scenario>.yml`.
@@ -146,7 +149,7 @@ fn run_scenario(file: &Path, failures: &mut Vec<String>) {
         ..CliOverrides::default_for_tests()
     };
 
-    let opts = match ymx_config::extract_options(&project, &overrides) {
+    let mut opts = match ymx_config::extract_options(&project, &overrides) {
         Ok(opts) => opts,
         Err(diags) => {
             if let Some(ref expected_code) = build_error {
@@ -166,6 +169,9 @@ fn run_scenario(file: &Path, failures: &mut Vec<String>) {
             return;
         }
     };
+
+    // Enable shell execution for tests
+    opts.executor = Some(Arc::new(StdExecutor));
 
     // If `_build_error` was set but we reached `parse_tests`, the scenario was
     // supposed to fail at load/extract but didn't — that's a failure.
