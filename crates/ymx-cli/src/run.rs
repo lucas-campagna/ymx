@@ -1254,9 +1254,10 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
     let mut pending = false;
     let mut prev_state: Option<RenderState> = None;
 
-    // Pre-initialize the Docker backend so the same container is reused across compiles.
+    // Pre-initialize Docker backend when using PDF format.
+    // Docker is the default PDF backend — no --pdf-backend flag needed.
     let docker_backend: Option<Arc<DockerBackend>> =
-        if cli.pdf_backend == Some(crate::args::PdfBackendKind::Docker) {
+        if cli.format == Some(Format::Pdf) {
             match DockerBackend::new() {
                 Ok(b) => Some(Arc::new(b)),
                 Err(e) => {
