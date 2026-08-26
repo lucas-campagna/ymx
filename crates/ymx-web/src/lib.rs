@@ -272,7 +272,7 @@ impl Ymx {
             .lock()
             .unwrap()
             .as_ref()
-            .map(|v| Self::value_to_json(v))
+            .map(Self::value_to_json)
     }
 
     // --- Private helper methods ---
