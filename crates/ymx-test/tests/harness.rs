@@ -19,8 +19,8 @@ use yaml_rust2::{Yaml, YamlLoader};
 
 use ymx_config::CliOverrides;
 use ymx_lib::Diagnostic;
-use ymx_lib::Value;
 use ymx_lib::StdExecutor;
+use ymx_lib::Value;
 use ymx_test::Expected;
 
 /// Run every scenario under `<workspace root>/tests/cases/<category>/<scenario>.yml`.

@@ -58,8 +58,6 @@ use ymx_test::{parse_tests, run_tests, Expected, TestResult};
 use crate::args::ParsedCli;
 use crate::diagnostic::render_with_guidance;
 
-
-
 // PDF rendering types — live here in ymx-cli so ymx-core stays I/O-free.
 
 /// Error returned when PDF rendering fails.
@@ -1083,9 +1081,12 @@ impl DockerBackend {
 
         // Sync the directory to ensure container writes are flushed to the host volume
         let pdf_dir = pdf_path.parent().unwrap_or(std::path::Path::new("."));
-        let dir_file = std::fs::OpenOptions::new().read(true).open(pdf_dir).map_err(|e| PdfError {
-            message: format!("failed to open PDF directory for sync: {}", e),
-        })?;
+        let dir_file = std::fs::OpenOptions::new()
+            .read(true)
+            .open(pdf_dir)
+            .map_err(|e| PdfError {
+                message: format!("failed to open PDF directory for sync: {}", e),
+            })?;
         dir_file.sync_all().map_err(|e| PdfError {
             message: format!("failed to sync PDF directory: {}", e),
         })?;
@@ -1178,8 +1179,6 @@ fn render_diags_load_error(diags: &[Diagnostic]) -> RunOutcome {
     }
     RunOutcome::LoadError
 }
-
-
 
 /// Run a single compile cycle for watch mode: load -> extract -> compile -> emit.
 /// Uses the file at `cli.path` directly (not stdin or temp files).
@@ -1306,7 +1305,10 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
         let mut b_sorted: Vec<_> = b.iter().collect();
         a_sorted.sort_by_key(|k| &k.0);
         b_sorted.sort_by_key(|k| &k.0);
-        a_sorted.into_iter().zip(b_sorted.into_iter()).all(|(a, b)| a.0 == b.0 && a.1 == b.1)
+        a_sorted
+            .into_iter()
+            .zip(b_sorted.into_iter())
+            .all(|(a, b)| a.0 == b.0 && a.1 == b.1)
     }
 
     // Run initial compile
@@ -1362,8 +1364,7 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
             last_mtimes = current_mtimes;
 
             let start = Instant::now();
-            let (outcome, diags, _output) =
-                run_single_compile(cli, docker_backend.as_ref());
+            let (outcome, diags, _output) = run_single_compile(cli, docker_backend.as_ref());
             let elapsed = start.elapsed();
             let state = match outcome {
                 RunOutcome::Success => RenderState::Success,

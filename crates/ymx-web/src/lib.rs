@@ -7,8 +7,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use wasm_bindgen::prelude::*;
 use js_sys::JSON;
+use wasm_bindgen::prelude::*;
 
 use ymx_core::diag::{Diagnostic, FileId};
 use ymx_core::exec::{CommandExecutor, ExecError, ExecOutput};
@@ -68,7 +68,8 @@ impl JsMathExecutor {
             Value::Object(map) => {
                 let js_obj = js_sys::Object::new();
                 for (k, v) in map {
-                    let _ = js_sys::Reflect::set(&js_obj, &JsValue::from_str(k), &Self::value_to_js(v));
+                    let _ =
+                        js_sys::Reflect::set(&js_obj, &JsValue::from_str(k), &Self::value_to_js(v));
                 }
                 js_obj.into()
             }
@@ -79,21 +80,21 @@ impl JsMathExecutor {
     fn eval_js(&self, expr: &str) -> Result<String, ExecError> {
         let args = self.args.lock().unwrap();
         let kwargs = self.kwargs.lock().unwrap();
-        
+
         // Bind positional args: $0, $1, etc.
         for (i, arg) in args.iter().enumerate() {
             let var_name = format!("${}", i);
             let js_val = Self::value_to_js(arg);
             let _ = js_sys::Reflect::set(&js_sys::global(), &JsValue::from_str(&var_name), &js_val);
         }
-        
+
         // Bind named args as variables
         for (name, value) in kwargs.iter() {
             let var_name = format!("${}", name);
             let js_val = Self::value_to_js(value);
             let _ = js_sys::Reflect::set(&js_sys::global(), &JsValue::from_str(&var_name), &js_val);
         }
-        
+
         // Evaluate the expression
         match js_sys::eval(expr) {
             Ok(result) => {
@@ -101,7 +102,9 @@ impl JsMathExecutor {
                 Ok(js_str.as_string().unwrap_or_default())
             }
             Err(e) => {
-                let msg = e.as_string().unwrap_or_else(|| "unknown JS error".to_string());
+                let msg = e
+                    .as_string()
+                    .unwrap_or_else(|| "unknown JS error".to_string());
                 Err(ExecError::SpawnFailed(msg))
             }
         }
@@ -152,7 +155,7 @@ impl Ymx {
             pdf_backend: "docker".to_string(),
             executor: Some(executor.clone()),
         };
-        
+
         Ymx {
             project: Project::new(),
             options,
@@ -169,7 +172,7 @@ impl Ymx {
     pub fn parse(&mut self, code: &str) -> Result<(), JsValue> {
         let file_id = FileId(self.project.files.len() as u32);
         let path = std::path::PathBuf::from("<inline>");
-        
+
         // Parse the YAML document
         let node = match ymx_core::parse::parse_document(code) {
             Ok(n) => n,
@@ -178,10 +181,10 @@ impl Ymx {
                 return Err(self.diagnostic_to_js(diag));
             }
         };
-        
+
         // Register components into the project
         self.project.files.push(path.clone());
-        
+
         // Walk the parsed document and register top-level definitions
         if let Node::Object(entries, _span) = node {
             for entry in entries {
@@ -189,12 +192,12 @@ impl Ymx {
                 if name.is_empty() {
                     continue;
                 }
-                
+
                 // Skip meta keys
                 if name == "_ymx" || name == "_test" || name == "_use" {
                     continue;
                 }
-                
+
                 let def = Definition {
                     file: file_id,
                     full_name: name,
@@ -204,12 +207,12 @@ impl Ymx {
                     trailing_question: false,
                     exec_backend: None,
                 };
-                
+
                 // Use register_override to allow overwriting
                 self.project.namespaces.register_override("", def);
             }
         }
-        
+
         Ok(())
     }
 
@@ -229,10 +232,10 @@ impl Ymx {
     pub fn call_with_args(&mut self, name: &str, args: &JsValue) -> Result<String, JsValue> {
         // Parse arguments
         let (args_vec, kwargs_vec) = Self::parse_js_args(args);
-        
+
         // Set up executor with arguments
         self.executor.set_args(args_vec.clone(), kwargs_vec.clone());
-        
+
         // Determine Args type
         let args = if kwargs_vec.is_empty() && !args_vec.is_empty() {
             Args::Positional(args_vec)
@@ -246,7 +249,7 @@ impl Ymx {
         } else {
             Args::None
         };
-        
+
         // Compile and execute
         match compile_component(&self.project, name, &args, &self.options) {
             Ok(value) => {
@@ -265,7 +268,11 @@ impl Ymx {
 
     /// Get the last result value as a JSON string
     pub fn last_result(&self) -> Option<String> {
-        self.last_result.lock().unwrap().as_ref().map(|v| Self::value_to_json(v))
+        self.last_result
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|v| Self::value_to_json(v))
     }
 
     // --- Private helper methods ---
@@ -282,7 +289,7 @@ impl Ymx {
         if args.is_null() || args.is_undefined() {
             return (Vec::new(), Vec::new());
         }
-        
+
         if args.is_object() {
             if js_sys::Array::is_array(args) {
                 let arr = js_sys::Array::from(args);
@@ -294,7 +301,7 @@ impl Ymx {
                 }
                 return (values, Vec::new());
             }
-            
+
             let obj = js_sys::Object::from(args.clone());
             let mut kwargs = Vec::new();
             let keys = js_sys::Object::keys(&obj);
@@ -307,7 +314,7 @@ impl Ymx {
             }
             return (Vec::new(), kwargs);
         }
-        
+
         (Vec::new(), Vec::new())
     }
 
@@ -358,7 +365,9 @@ impl Ymx {
         let msg = format!(
             "[{}] {}:{}:{} ({}): {}",
             diag.code,
-            diag.file.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+            diag.file
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
             diag.line,
             diag.col,
             diag.component.unwrap_or_default(),
