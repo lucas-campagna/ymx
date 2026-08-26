@@ -247,7 +247,11 @@ fn render_object_text(map: &IndexMap<String, Value>) -> String {
     for (key, val) in map {
         if is_known_html_attr(key) && is_scalar_val(val) {
             attr_parts.push(format!("{}=\"{}\"", key, stringify_attr_value(val)));
-        } else if !is_known_html_attr(key) {
+        } else if is_known_html_attr(key) {
+            // Non-scalar value for a known HTML attr (e.g. data-config with object value)
+            // stringify_attr_value handles arrays/objects
+            attr_parts.push(format!("{}=\"{}\"", key, stringify_attr_value(val)));
+        } else {
             match val {
                 Value::Bool(true) => {
                     // Boolean attribute with true value - render as bare attribute
@@ -261,7 +265,6 @@ fn render_object_text(map: &IndexMap<String, Value>) -> String {
                 }
             }
         }
-        // If key IS a known HTML attr but value is non-scalar, skip (non-scalar can't be an attr value)
     }
 
     let mut out = attr_parts.join(" ");
@@ -452,14 +455,12 @@ pub fn stringify_attr_value(v: &Value) -> String {
         Value::Int(i) => i.to_string(),
         Value::Float(f) => render_f64(*f),
         Value::String(s) => s.clone(),
-        Value::Array(arr) => {
-            serde_json::to_string(arr)
-                .map(|s| s.replace('"', "'"))
-                .unwrap_or_else(|_| {
-                    let items: Vec<String> = arr.iter().map(stringify_attr_value).collect();
-                    items.join(" ")
-                })
-        }
+        Value::Array(arr) => serde_json::to_string(arr)
+            .map(|s| s.replace('"', "'"))
+            .unwrap_or_else(|_| {
+                let items: Vec<String> = arr.iter().map(stringify_attr_value).collect();
+                items.join(" ")
+            }),
         Value::Object(obj) => serde_json::to_string(obj)
             .map(|s| s.replace('"', "'"))
             .unwrap_or_else(|_| "{...}".to_string()),
