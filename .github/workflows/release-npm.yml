@@ -48,6 +48,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -63,8 +65,8 @@ jobs:
           cp -r ./pkg/pkg-web/* pkg/final/ 2>/dev/null || true
           
           # Copy package files from source
-          cp package.json pkg/final/
-          cp README.md pkg/final/
+          cp crates/ymx-web/package.json pkg/final/
+          cp crates/ymx-web/README.md pkg/final/
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
