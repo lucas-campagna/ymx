@@ -1,0 +1,86 @@
+name: Release npm package
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+env:
+  CARGO_HOME: /tmp/cargo
+  RUSTUP_TOOLCHAIN: stable
+  VERSION: ${{ github.ref_name }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - web
+          - nodejs
+          - bundler
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          target: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: |
+          curl https://rustwasm.github.io/wasm-pack/install.sh -sSf | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Build WASM package (${{ matrix.target }})
+        run: |
+          wasm-pack build crates/ymx-web \
+            --target ${{ matrix.target }} \
+            --out-dir ./pkg/${{ matrix.target }}
+
+      - name: Upload pkg artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.target }}
+          path: ./pkg/${{ matrix.target }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./pkg
+
+      - name: Setup pkg directory
+        run: |
+          mkdir -p pkg/final
+          # Copy web as default
+          cp -r pkg-web/* pkg/final/
+          
+          # Copy package files from source
+          cp crates/ymx-web/package.json pkg/final/
+          cp crates/ymx-web/README.md pkg/final/
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          scope: '@ymx'
+
+      - name: Publish to npm
+        run: |
+          echo "Publishing @ymx/web@${VERSION} to npmjs.com"
+          npm publish ./pkg/final --access public --tag latest
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Log published version
+        run: |
+          echo "Successfully published @ymx/web@${VERSION}"

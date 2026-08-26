@@ -1,0 +1,49 @@
+{
+  "name": "@ymx/web",
+  "version": "0.1.0",
+  "description": "YMX TypeScript/WASM library - compile YAML to JSON with JavaScript integration",
+  "type": "module",
+  "main": "./nodejs/ymx_web.js",
+  "module": "./web/ymx_web.js",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./web/ymx_web.d.ts",
+        "default": "./web/ymx_web.js"
+      },
+      "require": {
+        "types": "./nodejs/ymx_web.d.ts",
+        "default": "./nodejs/ymx_web.js"
+      },
+      "browser": {
+        "types": "./web/ymx_web.d.ts",
+        "default": "./web/ymx_web.js"
+      }
+    },
+    "./nodejs": {
+      "types": "./nodejs/ymx_web.d.ts",
+      "default": "./nodejs/ymx_web.js"
+    },
+    "./web": {
+      "types": "./web/ymx_web.d.ts",
+      "default": "./web/ymx_web.js"
+    },
+    "./bundler": {
+      "types": "./bundler/ymx_web.d.ts",
+      "default": "./bundler/ymx_web.js"
+    }
+  },
+  "types": "./web/ymx_web.d.ts",
+  "files": [
+    "web/",
+    "nodejs/",
+    "bundler/",
+    "ymx_web.d.ts"
+  ],
+  "keywords": ["yaml", "compiler", "wasm", "javascript", "typescript"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ymx-dev/ymx"
+  }
+}

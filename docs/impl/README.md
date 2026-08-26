@@ -1,19 +1,20 @@
 ---
-version: "1.x"
-title: "YMX v1 implementation plan"
-short: "Index of versioned implementation milestones (1.1 – 1.37)"
+version: "2.x"
+title: "YMX v2 implementation plan"
+short: "Index of versioned implementation milestones (1.1 – 1.37, 2.1)"
 description: |
-  Tracks the build of YMX v1 per docs/PRD.md: the rules-1–18 resolver, JSON
+  Tracks the build of YMX v2 per docs/PRD.md: the rules-1–18 resolver, JSON
   output, CLI + library, inline `_test`, file-path entry addressing, and
-  namespace promotion via `_ymx.plain`. Each milestone is a separate file with
-  frontmatter (version, title, short description, dependencies, status) and
-  task/subtask checkboxes. Update status as work lands.
-status: in-progress
+  namespace promotion via `_ymx.plain`. v2 adds the TypeScript/WASM library
+  (ymx-web). Each milestone is a separate file with frontmatter (version, title,
+  short description, dependencies, status) and task/subtask checkboxes. Update
+  status as work lands.
+status: planned
 depends_on: []
 tags: [plan, index]
 ---
 
-# YMX v1 implementation milestones
+# YMX v2 implementation milestones
 
 Milestones are ordered by dependency; later ones build on earlier outputs.
 Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
@@ -57,6 +58,12 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.35 | `done` | HTML renderer | ymx-core, ymx-cli | [1.35-html-renderer.md](1.35-html-renderer.md) | 1.34 |
 | 1.36 | `done` | PDF renderer (feature-gated) | ymx-cli | [1.36-pdf-renderer.md](1.36-pdf-renderer.md) | 1.35 |
 | 1.37 | `done` | CLI `--watch` mode (feature-gated) | ymx-cli | [1.37-watch-mode.md](1.37-watch-mode.md) | 1.36 |
+
+## v2 milestones
+
+| Version | Status | Title | Crate(s) | File | Depends on |
+|---------|--------|-------|----------|------|------------|
+| 2.1 | `planned` | TypeScript/WASM Library (ymx-web) | ymx-web | [2.1-wasm-typescript-lib.md](2.1-wasm-typescript-lib.md) | — |
 
 ## Cross-cutting notes
 
