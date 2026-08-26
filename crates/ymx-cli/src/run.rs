@@ -1244,7 +1244,6 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
 
     let debounce_duration = Duration::from_millis(100);
     let mut pending = false;
-    let mut prev_state: Option<RenderState> = None;
 
     // Pre-initialize Docker backend when using PDF format.
     // Docker is the default PDF backend — no --pdf-backend flag needed.
@@ -1318,24 +1317,21 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
         RunOutcome::Success => RenderState::Success,
         _ => RenderState::Error,
     };
-    if Some(state) != prev_state {
-        prev_state = Some(state);
-        match state {
-            RenderState::Success => {
-                let label = format!(
-                    "{} successfully compiled at {:.3}s",
-                    watch_path.display(),
-                    elapsed.as_secs_f64()
-                );
-                print!("\x1b[2J\x1b[H{label}");
-                std::io::stdout().flush().ok();
-            }
-            RenderState::Error => {
-                print!("\x1b[2J\x1b[H✗ ERROR");
-                std::io::stdout().flush().ok();
-                for diag in &diags {
-                    eprintln!("[{}] {}", diag.code, diag.message);
-                }
+    match state {
+        RenderState::Success => {
+            let label = format!(
+                "{} successfully compiled at {:.3}s",
+                watch_path.display(),
+                elapsed.as_secs_f64()
+            );
+            print!("\x1b[2J\x1b[H{label}");
+            std::io::stdout().flush().ok();
+        }
+        RenderState::Error => {
+            print!("\x1b[2J\x1b[H✗ ERROR");
+            std::io::stdout().flush().ok();
+            for diag in &diags {
+                eprintln!("[{}] {}", diag.code, diag.message);
             }
         }
     }
@@ -1373,24 +1369,21 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
                 RunOutcome::Success => RenderState::Success,
                 _ => RenderState::Error,
             };
-            if Some(state) != prev_state {
-                prev_state = Some(state);
-                match state {
-                    RenderState::Success => {
-                        let label = format!(
-                            "{} successfully compiled at {:.3}s",
-                            watch_path.display(),
-                            elapsed.as_secs_f64()
-                        );
-                        print!("\x1b[2J\x1b[H{label}");
-                        std::io::stdout().flush().ok();
-                    }
-                    RenderState::Error => {
-                        print!("\x1b[2J\x1b[H✗ ERROR");
-                        std::io::stdout().flush().ok();
-                        for diag in &diags {
-                            eprintln!("[{}] {}", diag.code, diag.message);
-                        }
+            match state {
+                RenderState::Success => {
+                    let label = format!(
+                        "{} successfully compiled at {:.3}s",
+                        watch_path.display(),
+                        elapsed.as_secs_f64()
+                    );
+                    print!("\x1b[2J\x1b[H{label}");
+                    std::io::stdout().flush().ok();
+                }
+                RenderState::Error => {
+                    print!("\x1b[2J\x1b[H✗ ERROR");
+                    std::io::stdout().flush().ok();
+                    for diag in &diags {
+                        eprintln!("[{}] {}", diag.code, diag.message);
                     }
                 }
             }
