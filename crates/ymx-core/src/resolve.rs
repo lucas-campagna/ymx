@@ -814,16 +814,26 @@ impl<'a> Resolver<'a> {
         file: FileId,
         component: Option<&str>,
     ) -> Result<Option<Value>, Diagnostic> {
-        let mut matches: Vec<(&str, &'a Definition, &Value)> = named
-            .iter()
-            .filter(|(k, _)| *k != &self.opts.from_keyword)
-            .filter_map(|(k, v)| {
-                match resolve_ref(self.project, k, file, self.opts.plain.clone()) {
-                    Ok(def) if !def.full_name.starts_with('$') => Some((k.as_str(), def, v)),
-                    _ => None,
+        let mut matches: Vec<(&str, &'a Definition, &Value)> = Vec::new();
+        for (k, v) in named.iter().filter(|(k, _)| *k != &self.opts.from_keyword) {
+            match resolve_ref(self.project, k, file, self.opts.plain.clone()) {
+                Ok(def) if def.full_name.starts_with('$') => {
+                    return Err(Diagnostic {
+                        file: Some(self.project.files[file.0 as usize].clone()),
+                        line: 1,
+                        col: 1,
+                        component: component.map(str::to_string),
+                        code: E010,
+                        message: format!(
+                            "template `{}` cannot be called directly; use `from: {}` in a template chain",
+                            def.full_name, def.full_name,
+                        ),
+                    });
                 }
-            })
-            .collect();
+                Ok(def) => matches.push((k.as_str(), def, v)),
+                _ => {}
+            }
+        }
         match matches.len() {
             0 => Ok(None),
             1 => {
@@ -4039,14 +4049,11 @@ mod tests {
     #[test]
     fn template_names_do_not_match_shortcut() {
         let p = project_with(&[("main.yml", "$box: 5\na:\n  \"$box\": 1\n  x: 2\n")]);
-        assert_eq!(
-            compile_ok(&p, "a", &Args::None),
-            Value::object(IndexMap::from([
-                ("$box".to_string(), Value::int(1)),
-                ("x".to_string(), Value::int(2)),
-            ])),
-            "a template name never matches the shortcut"
-        );
+        let err = compile_err(&p, "a", &Args::None);
+        assert_eq!(err.code, E010);
+        assert!(err
+            .message
+            .contains("template `$box` cannot be called directly"));
     }
 
     #[test]
