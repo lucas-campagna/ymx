@@ -1190,7 +1190,6 @@ fn run_single_compile(
     cli: &ParsedCli,
     docker_backend: Option<&Arc<DockerBackend>>,
 ) -> (RunOutcome, Vec<Diagnostic>, Option<String>) {
-    eprintln!("DEBUG run_single_compile: path={}", cli.path.display());
     let project = match load_project(&cli.path) {
         Ok(p) => p,
         Err(diags) => {
