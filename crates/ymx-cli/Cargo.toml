@@ -27,6 +27,3 @@ pdf-bundled = ["headless_chrome/fetch"]
 watch = ["notify", "ctrlc"]
 default = ["watch"]
 
-# Man page: view with `man ./man/ymx.1` or copy to your manpages directory.
-[package.metadata]
-man = "man/ymx.1"
