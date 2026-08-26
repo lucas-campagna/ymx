@@ -1,7 +1,7 @@
 _ymx:
   max_depth: 1
 add: ${$0 + $1}
-named_sum: ${$a * 100 + $b}
+named_sum: ${a * 100 + b}
 noop: ready
 obj:
   a: 1

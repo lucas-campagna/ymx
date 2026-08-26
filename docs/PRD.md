@@ -54,7 +54,7 @@ ymx/
 │   └── ymx-web/     # stub crate (v3+)
 └── tests/
     └── cases/
-        └── rule-NN/<scenario>/   # one directory per scenario (see Testing)
+        └── rule-NN/<scenario>.yml   # one file per scenario (see Testing)
 ```
 
 - **Crate boundaries**: `ymx-core` is the pure compiler — parsing, the rule-1–16 resolver, the math engine, and builtins, with no filesystem or network I/O. `ymx-config` owns the `_ymx` front-matter logic (parsing the meta key, applying the *CLI > entry-file* precedence, producing `Options`). `ymx-test` owns the `_test` meta-key logic (parsing tests, running them, `TestResult`). `ymx-lib` is intentionally small: it re-exports `ymx-core`'s public surface and adds only a thin `load_project` I/O helper that walks a directory and builds a `Project` (collecting raw `_ymx`/`_test` meta values without interpreting them). The `_ymx`/`_test` *logic* lives in `ymx-config`/`ymx-test`, never in `ymx-lib`. `ymx-cli` depends on `ymx-lib` (for `load_project` + core types), `ymx-config`, and `ymx-test`, and orchestrates `load_project` → `extract_options` → `compile` → emit (and `run_tests` under a `--test` flag).
@@ -215,7 +215,7 @@ ymx a.yml -c 'main: $comp2(x=2,y=3)\ncomp1$: a * b'  # → 6 (\n expanded to new
 - `--plain`: promote sub-namespace components **and** templates into the global namespace (equivalent to `_ymx.plain: true`).
 - `--plain-template`: promote sub-namespace **templates only** into the global namespace (equivalent to `_ymx.plain: template`). `--plain` and `--plain-template` are mutually exclusive (CLI arg error). Each overrides the entry-file `_ymx.plain` value per the precedence rule.
 - `--format <json|diagnostics>`: output style (v1: `json`; `diagnostics` lists errors only).
-- `--test`: run inline `_test` cases (via `ymx-test`) instead of compiling the entry. When `path` is omitted it defaults to `.` (the current directory). When `path` is a **directory**, recursively walk it and run all `_test` blocks in every subdirectory containing `.yml`/`.yaml` files (each is an independent project); aggregate results across all projects and exit non-zero if any test fails. When `path` is a **file**, run tests for that single project (the existing behaviour). `--test` does not read stdin.
+- `--test`: run inline `_test` cases (via `ymx-test`) instead of compiling the entry. When `path` is omitted it defaults to `.` (the current directory). When `path` is a **directory** (or `.`), recursively search for `.yml`/`.yaml` files up to depth 10; each file is its own independent project (its parent directory is the project root). If the max search depth is reached while walking, emit `warning: max search depth (10) exceeded in <path>; skipping <folder>` and continue. Files and directories matching `.gitignore` patterns are skipped. Aggregate results across all projects; exit non-zero if any test fails. When `path` is a **file**, run tests for that single project (the existing behaviour). `--test` does not read stdin.
 - `-c, --code <yml>`: inline YAML or JSON component definitions. Accepts both YAML and JSON formats (auto-detected, same as stdin args). Four usage modes:
   - **No file, `-c` only**: the inline content is the script; entry is `main.main` (or `--entry` override). Equivalent to `cat script.yml | ymx` but without a file on disk.
   - **File + `-c`**: load the file normally (entry derived from file stem), then overlay the `-c` components onto the global namespace. Components from `-c` **completely replace** any file component with the same name (last-registered-wins). New names from `-c` are added. The file's `_ymx` / `_test` metadata is unaffected.
@@ -225,7 +225,7 @@ ymx a.yml -c 'main: $comp2(x=2,y=3)\ncomp1$: a * b'  # → 6 (\n expanded to new
 
 **Exit codes.** `0` on success; `2` for CLI usage errors (missing required argument, `--stdin` with a terminal, etc.); `1` for any diagnostic produced by the pipeline (parse/namespace errors, E001/E004/…, a missing entry file, a missing entry component, max-depth, or a failing `_test` under `--test`). With `--format diagnostics` on a successful compile, stdout is empty and the exit code is `0`.
 
-**Orchestration.** The CLI is the canonical full pipeline: `ymx_lib::load_project(path.parent())` → `ymx_config::extract_options(&project, &cli)` → `ymx_core::compile(&project, &opts)` (or `ymx_test::run_tests(&project, &opts)` under `--test`) → serialize/emit. When stdin provides call arguments (no `path` or `path` given but stdin provides args), `compile` is replaced by `ymx_core::compile_component(project, "<entry>", &args, &opts)`. The project root is derived from the file's parent directory; `--entry` is resolved before `extract_options` because it selects the front-matter source file (see *`_ymx` — front matter*). When `--test` is given with a directory path (or `.` by default), the CLI walks that directory recursively, treating each subdirectory containing `.yml`/`.yaml` files as an independent project, and runs `load_project` → `extract_options` → `parse_tests` + `run_tests` per project, aggregating results and exiting non-zero if any test fails across all projects.
+**Orchestration.** The CLI is the canonical full pipeline: `ymx_lib::load_project(path.parent())` → `ymx_config::extract_options(&project, &cli)` → `ymx_core::compile(&project, &opts)` (or `ymx_test::run_tests(&project, &opts)` under `--test`) → serialize/emit. When stdin provides call arguments (no `path` or `path` given but stdin provides args), `compile` is replaced by `ymx_core::compile_component(project, "<entry>", &args, &opts)`. The project root is derived from the file's parent directory; `--entry` is resolved before `extract_options` because it selects the front-matter source file (see *`_ymx` — front matter*). When `--test` is given with a directory path (or `.` by default), the CLI searches that directory recursively (up to depth 10, skipping `.gitignore` patterns), treating each `.yml`/`.yaml` file as an independent project root, and runs `load_project` → `extract_options` → `parse_tests` + `run_tests` per project, aggregating results and exiting non-zero if any test fails across all projects.
 
 ## Library API
 
@@ -433,17 +433,14 @@ Tests are **first-class**: every scenario lives in `tests/cases/rule-NN/<scenari
 **Scenario layout.**
 
 ```
-tests/cases/rule-NN/<scenario>/
-├── main.yml        # the entry document (defines the `_test` block; may define `_ymx`; may define `_test._build_error`; defines main only if a test targets it)
-├── <other>.yml     # additional documents in the same project (multi-file scenarios)
-└── subdir/         # sub-namespace documents
+tests/cases/rule-NN/<scenario>.yml   # one file = one scenario = one project root
 ```
 
 - Every scenario must define at least one `_test` entry. A scenario asserts either a value (`Expected::Value`) or a diagnostic (`Expected::Error`); the `error` variant may assert codes that arise **after** a successful `load_project` — option-resolution (`E009`, the unknown/invalid-`_ymx`-field part of `E010`) and target-compilation (`E002`, `E003`, `E005`, `E006`, `E008`, the call-site / string-escape / math-identifier / mixed-shape-chain parts of `E010`, `E011`, `E012`, `E013`). Load-time codes (`E001`, `E004`, `E007`, `E015`) are not `_test`-driveable because `load_project` is all-or-nothing (see *Reach of the error variant*).
 - The `_test._build_error: <code>` key asserts that `load_project` **or** `extract_options` fails with the given diagnostic code — a matching diagnostic is a PASS, a mismatch or unexpected success is a FAIL. This makes `E009` (entry not found), the invalid-`_ymx`-field part of `E010`, and all other load/option-time codes `_test`-driveable without silently skipping them. The shape mirrors `Expected::Error` from regular `_test` assertions; when `_build_error` is set, no `result`/`error` assertions may appear in the same `_test` block.
 - The only diagnostics that are **not** `_test`-driveable by construction are produced by parsing the `_test` block itself (the malformed-`_test`-block part of `E010`) and YAML-parse failures (`E001`) of the document that hosts the `_test` block — both yield an unreadable `_test`. Together with the other load-time codes (`E004`, `E007`, `E015`) they are exercised by ordinary crate `#[test]` unit tests with inline YAML snippets. The test crate `ymx-test` exposes enough of `parse_tests`/`run_tests` to drive these where convenient.
 - `_ymx` in a scenario's entry document sets non-default flags the rule needs (e.g. `max_depth` for an `E008` case, a custom `from_keyword` for rule 6 keyword-override scenarios, or `plain: template` / `plain: true` for namespace-promotion scenarios).
-- Multi-file / namespace / file-scope scenarios add documents and subdirectories; `_test` targets must be components in the same document as the `_test` block.
+- Multi-file / namespace / file-scope scenarios are no longer supported in the flat layout; scenarios that require multiple documents use `_use` within the single file or are tested via crate `#[test]` unit tests with inline YAML.
 
 ## Compiling Rules
 
