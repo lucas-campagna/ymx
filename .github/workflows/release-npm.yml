@@ -35,7 +35,7 @@ jobs:
 
       - name: Build WASM package (${{ matrix.target }})
         run: |
-          ~/.cargo/bin/wasm-pack build crates/ymx-web \
+          $CARGO_HOME/bin/wasm-pack build crates/ymx-web \
             --target ${{ matrix.target }} \
             --out-dir ./pkg/${{ matrix.target }}
 
