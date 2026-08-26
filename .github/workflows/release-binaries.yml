@@ -14,48 +14,110 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # system Chrome backends
+          # system Chrome backends — with watch
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             backend: system
             pack: tar.gz
+            watch: true
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             backend: system
             pack: tar.gz
+            watch: true
           - os: macos-latest
             target: x86_64-apple-darwin
             backend: system
             pack: tar.gz
+            watch: true
           - os: macos-latest
             target: aarch64-apple-darwin
             backend: system
             pack: tar.gz
+            watch: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             backend: system
             pack: zip
-          # bundled Chrome backends
+            watch: true
+          # bundled Chrome backends — with watch
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             backend: bundled
             pack: tar.gz
+            watch: true
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             backend: bundled
             pack: tar.gz
+            watch: true
           - os: macos-latest
             target: x86_64-apple-darwin
             backend: bundled
             pack: tar.gz
+            watch: true
           - os: macos-latest
             target: aarch64-apple-darwin
             backend: bundled
             pack: tar.gz
+            watch: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             backend: bundled
             pack: zip
+            watch: true
+          # system Chrome backends — without watch
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            backend: system
+            pack: tar.gz
+            watch: false
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            backend: system
+            pack: tar.gz
+            watch: false
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            backend: system
+            pack: tar.gz
+            watch: false
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            backend: system
+            pack: tar.gz
+            watch: false
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            backend: system
+            pack: zip
+            watch: false
+          # bundled Chrome backends — without watch
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            backend: bundled
+            pack: tar.gz
+            watch: false
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            backend: bundled
+            pack: tar.gz
+            watch: false
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            backend: bundled
+            pack: tar.gz
+            watch: false
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            backend: bundled
+            pack: tar.gz
+            watch: false
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            backend: bundled
+            pack: zip
+            watch: false
 
     runs-on: ${{ matrix.os }}
 
@@ -68,30 +130,43 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build
+        shell: bash
         run: |
-          cargo build --release -p ymx-cli --features pdf-${{ matrix.backend }} --target ${{ matrix.target }}
+          if ${{ matrix.watch }}; then
+            cargo build --release -p ymx-cli --features pdf-${{ matrix.backend }} --target ${{ matrix.target }}
+          else
+            cargo build --release -p ymx-cli --features pdf-${{ matrix.backend }} --no-default-features --target ${{ matrix.target }}
+          fi
 
       - name: Package
         shell: bash
         run: |
           mkdir -p dist
           cd target/${{ matrix.target }}/release
-          if [ "${{ matrix.pack }}" = "tar.gz" ]; then
-            tar -czf ../../../dist/ymx-${{ matrix.backend }}-${{ matrix.target }}.tar.gz ymx
+          NAME="ymx"
+          if ${{ matrix.watch }}; then
+            NAME="ymx"
           else
-            zip -q ../../../dist/ymx-${{ matrix.backend }}-${{ matrix.target }}.zip ymx
+            NAME="ymx-no-watch"
+          fi
+          if [ "${{ matrix.pack }}" = "tar.gz" ]; then
+            tar -czf ../../../dist/${NAME}-${{ matrix.backend }}-${{ matrix.target }}.tar.gz ymx
+          else
+            zip -q ../../../dist/${NAME}-${{ matrix.backend }}-${{ matrix.target }}.zip ymx
           fi
 
       - name: Upload to Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/ymx-${{ matrix.backend }}-${{ matrix.target }}.${{ matrix.pack }}
+          files: |
+            dist/ymx${{ matrix.watch && '' || '-no-watch' }}-${{ matrix.backend }}-${{ matrix.target }}.${{ matrix.pack }}
           tag_name: ${{ github.ref }}
           body: |
             Milestone 1.36: PDF renderer — `${{ matrix.backend }}` backend
             - OS: ${{ matrix.os }}
             - Arch: ${{ matrix.target }}
+            - Watch: ${{ matrix.watch }}
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

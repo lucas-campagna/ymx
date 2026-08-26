@@ -17,13 +17,15 @@ ymx-config.workspace = true
 ymx-test.workspace = true
 serde_json.workspace = true
 yaml-rust2.workspace = true
-notify = "6"
-ctrlc = "3"
+notify = { version = "6", optional = true }
+ctrlc = { version = "3", optional = true }
+cfg-if = "1"
 
 [features]
 pdf-system  = ["headless_chrome"]
 pdf-bundled = ["headless_chrome/fetch"]
-default = []
+watch = ["notify", "ctrlc"]
+default = ["watch"]
 
 # Man page: view with `man ./man/ymx.1` or copy to your manpages directory.
 [package.metadata]

@@ -36,8 +36,11 @@
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
+#[cfg(feature = "watch")]
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+#[cfg(feature = "watch")]
 use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
@@ -55,6 +58,7 @@ use ymx_test::{parse_tests, run_tests, Expected, TestResult};
 use crate::args::ParsedCli;
 use crate::diagnostic::render_with_guidance;
 
+#[cfg(feature = "watch")]
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 
 // PDF rendering types — live here in ymx-cli so ymx-core stays I/O-free.
@@ -306,6 +310,7 @@ fn yaml_to_value(yaml: &Yaml) -> Option<Value> {
 /// Drive the canonical pipeline against `cli`.
 pub fn run(cli: &ParsedCli) -> RunOutcome {
     // Watch mode: enter the file watcher loop and never return (until interrupted).
+    #[cfg(feature = "watch")]
     if cli.watch.is_some() {
         return run_watch(cli);
     }
@@ -996,6 +1001,7 @@ pub(crate) struct DockerBackend {
 
 impl DockerBackend {
     /// Start the Docker container in detached mode and keep it running.
+    #[cfg(feature = "watch")]
     fn new() -> Result<Self, PdfError> {
         let container_name = format!("ymx-pdf-{}", std::process::id());
         let cwd = std::env::current_dir().map_err(|e| PdfError {
@@ -1158,6 +1164,7 @@ fn render_diags_load_error(diags: &[Diagnostic]) -> RunOutcome {
 }
 
 /// Returns true if any path in the event has a `.yml` or `.yaml` extension.
+#[cfg(feature = "watch")]
 fn is_yaml_file(paths: &[PathBuf]) -> bool {
     paths.iter().any(|p| {
         p.extension()
@@ -1171,6 +1178,7 @@ fn is_yaml_file(paths: &[PathBuf]) -> bool {
 /// Uses the file at `cli.path` directly (not stdin or temp files).
 /// Returns `(RunOutcome, Vec<Diagnostic>, Option<String>)` where the `Vec<Diagnostic>`
 /// contains any diagnostics (empty on success) and the `String` is stdout content.
+#[cfg(feature = "watch")]
 fn run_single_compile(
     cli: &ParsedCli,
     docker_backend: Option<&Arc<DockerBackend>>,
@@ -1206,12 +1214,14 @@ fn run_single_compile(
 
 /// Watch mode: runs the compile pipeline on every .yml/.yaml file change.
 /// Exits cleanly on SIGINT/SIGTERM (exit 0).
+#[cfg(feature = "watch")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RenderState {
     Success,
     Error,
 }
 
+#[cfg(feature = "watch")]
 pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
     let watch_path = cli.watch.as_ref().expect("--watch value must be present");
     println!("Watching {}...", watch_path.display());
@@ -1219,6 +1229,7 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();
 
+    #[cfg(feature = "watch")]
     if let Err(e) = ctrlc::set_handler(move || {
         shutdown_clone.store(true, Ordering::SeqCst);
     }) {

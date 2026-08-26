@@ -18,6 +18,7 @@ use std::fmt::Debug;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
+
 use ymx_config::CliOverrides;
 use ymx_lib::ymx_core::project::Format;
 
@@ -29,120 +30,159 @@ pub enum PdfBackendKind {
     Docker,
 }
 
-/// The parsed command line: the file positional and per-flag inputs
-/// (`None` when the flag was absent — i.e. defer to `_ymx` then engine
-/// default), plus the CLI-only orchestration concerns (`output`, `test`)
-/// that do not flow into `ymx_config::CliOverrides`.
-pub struct ParsedCli {
-    /// `ymx <file>` — the entry file. Always present (parse errors
-    /// otherwise). The project root is derived as `path.parent()`.
-    pub path: PathBuf,
-    /// `--entry <component>` (default `main`). The bare component name within
-    /// the entry file; the entry path internally is `<file_stem>.<component>`
-    /// (always exactly 2 segments).
-    pub entry: Option<String>,
-    /// `--max-depth <n>` (default `256`). Parsed as `u32`; non-integers
-    /// error.
-    pub max_depth: Option<u32>,
-    /// `--pretty` (default `false`). The flag is a switch, so this is
-    /// `Some(true)` when present and `None` when absent.
-    pub pretty: Option<bool>,
-    /// `--format <json|diagnostics>` (default `json`).
-    pub format: Option<Format>,
-    /// `--output <file>` orchestration concern — never consumed by
-    /// `extract_options`.
-    pub output: Option<PathBuf>,
-    /// `--test` orchestration concern — runs `_test` blocks instead of
-    /// compiling the entry.
-    pub test: bool,
-    /// Set when `--test` is given and the path resolved to a directory at
-    /// parse time (via [`Path::is_dir`](std::path::Path::is_dir)). `None`
-    /// when `--test` is absent or when the path was a file (or does not exist).
-    /// Used by `run.rs` to decide between single-project and recursive modes.
-    pub test_dir: Option<PathBuf>,
-    /// True when no positional was given and stdin is the script (non-test
-    /// mode only). In this mode `run.rs` reads stdin as a YAML document,
-    /// writes it to a temp file, and compiles it. False when a positional
-    /// file path was provided (stdin is args, if non-tty, in non-test mode).
-    pub stdin_is_script: bool,
-    /// `--allowed-backends <list>` — comma-separated list of backends that
-    /// `$<backend>{...}` may use. Overrides `_ymx.allowed_backends`.
-    pub allowed_backends: Option<Vec<String>>,
-    /// `--no-exec` — disables shell execution entirely (`$<backend>{...}`
-    /// raises E016). Sets `opts.executor = None`.
-    pub no_exec: bool,
-    /// `-c, --code <yml>` — inline YAML or JSON component definitions.
-    /// `None` when the flag was absent. When present, the value is parsed
-    /// as YAML (auto-detect JSON) and its top-level components are merged
-    /// into the global namespace, overriding any file-loaded definitions
-    /// with the same name.
-    pub code: Option<String>,
-    /// `--pdf-backend <system|bundled|docker>` — which PDF backend to use
-    /// when `-f pdf` is active. Defaults to `None` (system).
-    pub pdf_backend: Option<PdfBackendKind>,
-    /// `--watch <path>` — watch a file or directory for changes and re-compile.
-    /// Cannot be combined with --test (CLI usage error).
-    pub watch: Option<PathBuf>,
-}
-
-impl Debug for ParsedCli {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ParsedCli")
-            .field("path", &self.path)
-            .field("entry", &self.entry)
-            .field("max_depth", &self.max_depth)
-            .field("pretty", &self.pretty)
-            .field("format", &self.format)
-            .field("output", &self.output)
-            .field("test", &self.test)
-            .field("test_dir", &self.test_dir)
-            .field("stdin_is_script", &self.stdin_is_script)
-            .field("allowed_backends", &self.allowed_backends)
-            .field("no_exec", &self.no_exec)
-            .field("code", &self.code)
-            .field("pdf_backend", &self.pdf_backend)
-            .field("watch", &self.watch)
-            .finish()
-    }
-}
-
-impl Clone for ParsedCli {
-    fn clone(&self) -> Self {
-        ParsedCli {
-            path: self.path.clone(),
-            entry: self.entry.clone(),
-            max_depth: self.max_depth,
-            pretty: self.pretty,
-            format: self.format.clone(),
-            output: self.output.clone(),
-            test: self.test,
-            test_dir: self.test_dir.clone(),
-            stdin_is_script: self.stdin_is_script,
-            allowed_backends: self.allowed_backends.clone(),
-            no_exec: self.no_exec,
-            code: self.code.clone(),
-            pdf_backend: self.pdf_backend,
-            watch: self.watch.clone(),
+cfg_if::cfg_if! {
+    if #[cfg(feature = "watch")] {
+        pub struct ParsedCli {
+            pub path: PathBuf,
+            pub entry: Option<String>,
+            pub max_depth: Option<u32>,
+            pub pretty: Option<bool>,
+            pub format: Option<Format>,
+            pub output: Option<PathBuf>,
+            pub test: bool,
+            pub test_dir: Option<PathBuf>,
+            pub stdin_is_script: bool,
+            pub allowed_backends: Option<Vec<String>>,
+            pub no_exec: bool,
+            pub code: Option<String>,
+            pub pdf_backend: Option<PdfBackendKind>,
+            pub watch: Option<PathBuf>,
         }
-    }
-}
 
-impl PartialEq for ParsedCli {
-    fn eq(&self, other: &Self) -> bool {
-        self.path == other.path
-            && self.entry == other.entry
-            && self.max_depth == other.max_depth
-            && self.pretty == other.pretty
-            && self.format == other.format
-            && self.output == other.output
-            && self.test == other.test
-            && self.test_dir == other.test_dir
-            && self.stdin_is_script == other.stdin_is_script
-            && self.allowed_backends == other.allowed_backends
-            && self.no_exec == other.no_exec
-            && self.code == other.code
-            && self.pdf_backend == other.pdf_backend
-            && self.watch == other.watch
+        impl Debug for ParsedCli {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("ParsedCli")
+                    .field("path", &self.path)
+                    .field("entry", &self.entry)
+                    .field("max_depth", &self.max_depth)
+                    .field("pretty", &self.pretty)
+                    .field("format", &self.format)
+                    .field("output", &self.output)
+                    .field("test", &self.test)
+                    .field("test_dir", &self.test_dir)
+                    .field("stdin_is_script", &self.stdin_is_script)
+                    .field("allowed_backends", &self.allowed_backends)
+                    .field("no_exec", &self.no_exec)
+                    .field("code", &self.code)
+                    .field("pdf_backend", &self.pdf_backend)
+                    .field("watch", &self.watch)
+                    .finish()
+            }
+        }
+
+        impl Clone for ParsedCli {
+            fn clone(&self) -> Self {
+                ParsedCli {
+                    path: self.path.clone(),
+                    entry: self.entry.clone(),
+                    max_depth: self.max_depth,
+                    pretty: self.pretty,
+                    format: self.format.clone(),
+                    output: self.output.clone(),
+                    test: self.test,
+                    test_dir: self.test_dir.clone(),
+                    stdin_is_script: self.stdin_is_script,
+                    allowed_backends: self.allowed_backends.clone(),
+                    no_exec: self.no_exec,
+                    code: self.code.clone(),
+                    pdf_backend: self.pdf_backend,
+                    watch: self.watch.clone(),
+                }
+            }
+        }
+
+        impl PartialEq for ParsedCli {
+            fn eq(&self, other: &Self) -> bool {
+                self.path == other.path
+                    && self.entry == other.entry
+                    && self.max_depth == other.max_depth
+                    && self.pretty == other.pretty
+                    && self.format == other.format
+                    && self.output == other.output
+                    && self.test == other.test
+                    && self.test_dir == other.test_dir
+                    && self.stdin_is_script == other.stdin_is_script
+                    && self.allowed_backends == other.allowed_backends
+                    && self.no_exec == other.no_exec
+                    && self.code == other.code
+                    && self.pdf_backend == other.pdf_backend
+                    && self.watch == other.watch
+            }
+        }
+    } else {
+        pub struct ParsedCli {
+            pub path: PathBuf,
+            pub entry: Option<String>,
+            pub max_depth: Option<u32>,
+            pub pretty: Option<bool>,
+            pub format: Option<Format>,
+            pub output: Option<PathBuf>,
+            pub test: bool,
+            pub test_dir: Option<PathBuf>,
+            pub stdin_is_script: bool,
+            pub allowed_backends: Option<Vec<String>>,
+            pub no_exec: bool,
+            pub code: Option<String>,
+            pub pdf_backend: Option<PdfBackendKind>,
+        }
+
+        impl Debug for ParsedCli {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("ParsedCli")
+                    .field("path", &self.path)
+                    .field("entry", &self.entry)
+                    .field("max_depth", &self.max_depth)
+                    .field("pretty", &self.pretty)
+                    .field("format", &self.format)
+                    .field("output", &self.output)
+                    .field("test", &self.test)
+                    .field("test_dir", &self.test_dir)
+                    .field("stdin_is_script", &self.stdin_is_script)
+                    .field("allowed_backends", &self.allowed_backends)
+                    .field("no_exec", &self.no_exec)
+                    .field("code", &self.code)
+                    .field("pdf_backend", &self.pdf_backend)
+                    .finish()
+            }
+        }
+
+        impl Clone for ParsedCli {
+            fn clone(&self) -> Self {
+                ParsedCli {
+                    path: self.path.clone(),
+                    entry: self.entry.clone(),
+                    max_depth: self.max_depth,
+                    pretty: self.pretty,
+                    format: self.format.clone(),
+                    output: self.output.clone(),
+                    test: self.test,
+                    test_dir: self.test_dir.clone(),
+                    stdin_is_script: self.stdin_is_script,
+                    allowed_backends: self.allowed_backends.clone(),
+                    no_exec: self.no_exec,
+                    code: self.code.clone(),
+                    pdf_backend: self.pdf_backend,
+                }
+            }
+        }
+
+        impl PartialEq for ParsedCli {
+            fn eq(&self, other: &Self) -> bool {
+                self.path == other.path
+                    && self.entry == other.entry
+                    && self.max_depth == other.max_depth
+                    && self.pretty == other.pretty
+                    && self.format == other.format
+                    && self.output == other.output
+                    && self.test == other.test
+                    && self.test_dir == other.test_dir
+                    && self.stdin_is_script == other.stdin_is_script
+                    && self.allowed_backends == other.allowed_backends
+                    && self.no_exec == other.no_exec
+                    && self.code == other.code
+                    && self.pdf_backend == other.pdf_backend
+            }
+        }
     }
 }
 
@@ -220,6 +260,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     let mut no_exec = false;
     let mut code: Option<String> = None;
     let mut pdf_backend: Option<PdfBackendKind> = None;
+    #[cfg(feature = "watch")]
     let mut watch: Option<PathBuf> = None;
 
     let mut i = 0;
@@ -287,6 +328,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
                 });
             }
             "-c" | "--code" => code = Some(take_value(args, &mut i, "--code")?),
+            #[cfg(feature = "watch")]
             "--watch" => {
                 let raw = take_value(args, &mut i, "--watch")?;
                 watch = Some(PathBuf::from(raw));
@@ -326,17 +368,18 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         });
     }
 
+    #[cfg(feature = "watch")]
     if watch.is_some() && test {
         return Err(ParseError {
             message: "--watch cannot be combined with --test".to_string(),
         });
     }
 
-    // Determine stdin_is_script early so we can use it in the watch check.
-    // When --watch is provided with no positional, the watch target IS the project
-    // (stdin can't be the script), so stdin_is_script must be false.
+    // stdin_is_script: true when no positional AND (no -c OR no stdin arg) AND not --test,
+    // AND (when watch feature is on) no --watch flag. When --watch is given, stdin
+    // is not the script (watch provides the project path).
+    #[cfg(feature = "watch")]
     let stdin_is_script = if positionals.is_empty() && !watch.is_some() && code.is_none() && !test {
-        // No positional, no --watch, no -c, not --test: stdin is the script.
         if std::io::stdin().is_terminal() {
             return Err(ParseError {
                 message: "stdin is a terminal, cannot read script or args".to_string(),
@@ -347,8 +390,20 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         false
     };
 
-    // Error if --watch is set but stdin would be the script (mutual exclusivity:
-    // stdin-as-script has no project path, but --watch provides one).
+    #[cfg(not(feature = "watch"))]
+    let stdin_is_script = if positionals.is_empty() && code.is_none() && !test {
+        if std::io::stdin().is_terminal() {
+            return Err(ParseError {
+                message: "stdin is a terminal, cannot read script or args".to_string(),
+            });
+        }
+        true
+    } else {
+        false
+    };
+
+    // Error if --watch is set but stdin would be the script (mutual exclusivity).
+    #[cfg(feature = "watch")]
     if watch.is_some() && stdin_is_script {
         return Err(ParseError {
             message: "--watch cannot be combined with stdin-as-script".to_string(),
@@ -356,15 +411,24 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     }
 
     let path: PathBuf = if positionals.is_empty() {
-        if let Some(ref watch_path) = watch {
-            // --watch with no positional: the watch target IS the project.
-            watch_path.clone()
-        } else if test {
-            // --test with no positional: use "." as project dir.
-            PathBuf::from(".")
-        } else {
-            // -c with no positional (stdin_is_script is false here).
-            PathBuf::from(".") // sentinel; run.rs handles -c mode
+        #[cfg(feature = "watch")]
+        {
+            if let Some(ref watch_path) = watch {
+                // --watch with no positional: the watch target IS the project.
+                watch_path.clone()
+            } else if test {
+                PathBuf::from(".")
+            } else {
+                PathBuf::from(".")
+            }
+        }
+        #[cfg(not(feature = "watch"))]
+        {
+            if test {
+                PathBuf::from(".")
+            } else {
+                PathBuf::from(".")
+            }
         }
     } else {
         positionals.pop().unwrap()
@@ -381,7 +445,8 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     } else {
         None
     };
-    Ok(ParseOutcome::Cli(ParsedCli {
+    #[cfg(feature = "watch")]
+    let cli = ParsedCli {
         path,
         entry,
         max_depth,
@@ -396,7 +461,24 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         code,
         pdf_backend,
         watch,
-    }))
+    };
+    #[cfg(not(feature = "watch"))]
+    let cli = ParsedCli {
+        path,
+        entry,
+        max_depth,
+        pretty,
+        format,
+        output,
+        test,
+        test_dir,
+        stdin_is_script,
+        allowed_backends,
+        no_exec,
+        code,
+        pdf_backend,
+    };
+    Ok(ParseOutcome::Cli(cli))
 }
 
 /// Advance `i` past the flag's name and return the next argument (the
