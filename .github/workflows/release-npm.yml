@@ -36,14 +36,15 @@ jobs:
       - name: Build WASM package (${{ matrix.target }})
         run: |
           $CARGO_HOME/bin/wasm-pack build crates/ymx-web \
-            --target ${{ matrix.target }} \
-            --out-dir ./pkg/${{ matrix.target }}
+            --target ${{ matrix.target }}
 
       - name: Upload pkg artifacts
         uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.target }}
-          path: ./pkg/${{ matrix.target }}
+          path: |
+            crates/ymx-web/pkg/
+            !crates/ymx-web/pkg/.gitkeep
 
   publish:
     needs: build
@@ -57,8 +58,9 @@ jobs:
       - name: Setup pkg directory
         run: |
           mkdir -p pkg/final
-          # Copy web as default
-          cp -r pkg-web/* pkg/final/
+          # Copy web as default (wasm-pack outputs to crates/ymx-web/pkg/)
+          cp -r crates/ymx-web/pkg/web/* pkg/final/ 2>/dev/null || true
+          cp -r pkg-web/* pkg/final/ 2>/dev/null || true
           
           # Copy package files from source
           cp crates/ymx-web/package.json pkg/final/
