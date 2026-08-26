@@ -9,7 +9,6 @@ on:
 env:
   CARGO_HOME: /tmp/cargo
   RUSTUP_TOOLCHAIN: stable
-  WASMTMP: /tmp/wasm-pack
 
 jobs:
   build:
@@ -29,16 +28,14 @@ jobs:
           target: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        run: |
-          curl https://rustwasm.github.io/wasm-pack/install.sh -sSf -p $WASMTMP
-          echo "$WASMTMP/bin" >> $GITHUB_PATH
+        run: cargo install wasm-pack
 
       - name: Add wasm32 target
         run: rustup target add wasm32-unknown-unknown
 
       - name: Build WASM package (${{ matrix.target }})
         run: |
-          $WASMTMP/bin/wasm-pack build crates/ymx-web \
+          ~/.cargo/bin/wasm-pack build crates/ymx-web \
             --target ${{ matrix.target }} \
             --out-dir ./pkg/${{ matrix.target }}
 
