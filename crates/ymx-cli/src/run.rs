@@ -1307,7 +1307,7 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
         b_sorted.sort_by_key(|k| &k.0);
         a_sorted
             .into_iter()
-            .zip(b_sorted.into_iter())
+            .zip(b_sorted)
             .all(|(a, b)| a.0 == b.0 && a.1 == b.1)
     }
 

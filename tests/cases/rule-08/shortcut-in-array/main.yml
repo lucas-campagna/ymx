@@ -1,0 +1,10 @@
+comp: 2
+direct:
+  comp: 1
+in_array:
+  - comp: 1
+_test:
+  direct:
+    result: 2
+  in_array:
+    result: [{"comp": 1}]

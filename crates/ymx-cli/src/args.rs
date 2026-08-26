@@ -415,8 +415,6 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
             if let Some(ref watch_path) = watch {
                 // --watch with no positional: the watch target IS the project.
                 watch_path.clone()
-            } else if test {
-                PathBuf::from(".")
             } else {
                 PathBuf::from(".")
             }
