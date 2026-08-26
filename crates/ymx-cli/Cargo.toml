@@ -20,6 +20,7 @@ yaml-rust2.workspace = true
 notify = { version = "6", optional = true }
 ctrlc = { version = "3", optional = true }
 cfg-if = "1"
+ignore.workspace = true
 
 [package.metadata]
 man = ["man/ymx.1"]

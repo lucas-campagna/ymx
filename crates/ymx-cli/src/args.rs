@@ -18,7 +18,6 @@ use std::fmt::Debug;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-
 use ymx_config::CliOverrides;
 use ymx_lib::ymx_core::project::Format;
 

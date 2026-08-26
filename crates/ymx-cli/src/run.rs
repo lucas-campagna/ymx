@@ -36,9 +36,9 @@
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicU32, Ordering};
 #[cfg(feature = "watch")]
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 #[cfg(feature = "watch")]
 use std::time::{Duration, Instant};
@@ -517,107 +517,30 @@ pub fn run(cli: &ParsedCli) -> RunOutcome {
     }
 }
 
-/// Recursively discover entry files under `dir`. A directory is a project
-/// root if it contains `.yml`/`.yaml` files directly. The entry file is
-/// chosen by priority: `<dirname>.yml`/`.yaml` > `main.yml`/`main.yaml` >
-/// first `.yml` file. Subdirectories containing their own entry file
-/// (`<subdir-name>.yml`) are recursed into as separate projects. Skips
-/// `.git` and hidden directories.
+/// Recursively discover `.yml`/`.yaml` files under `dir` (max depth 10).
+/// Each file is its own project (its parent dir is the project root).
+/// Skips files/directories matching `.gitignore`.
 fn find_project_roots(dir: &Path) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
+    let mut results = Vec::new();
+    let walker = ignore::WalkBuilder::new(dir)
+        .max_depth(Some(10))
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .build();
 
-    while let Some(current) = stack.pop() {
-        // Collect .yml/.yaml files and subdirs directly in this directory
-        let mut yml_files: Vec<PathBuf> = Vec::new();
-        let mut subdirs: Vec<PathBuf> = Vec::new();
-
-        if let Ok(entries) = std::fs::read_dir(&current) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                        if ext == "yml" || ext == "yaml" {
-                            yml_files.push(path);
-                        }
-                    }
-                } else if path.is_dir() {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if name == ".git" || name.starts_with('.') {
-                            continue;
-                        }
-                    }
-                    subdirs.push(path);
-                }
-            }
-        }
-
-        if !yml_files.is_empty() {
-            // This directory has YAML files — determine if single project or category.
-            let dir_name = current.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            let has_entry_match = yml_files.iter().any(|f| {
-                let stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                stem == dir_name || stem == "main"
-            });
-
-            if has_entry_match {
-                // Single project: pick the entry file by priority
-                let entry = yml_files
-                    .iter()
-                    .find(|f| {
-                        f.file_stem()
-                            .and_then(|s| s.to_str())
-                            .map(|s| s == dir_name)
-                            .unwrap_or(false)
-                    })
-                    .or_else(|| {
-                        yml_files.iter().find(|f| {
-                            f.file_stem()
-                                .and_then(|s| s.to_str())
-                                .map(|s| s == "main")
-                                .unwrap_or(false)
-                        })
-                    })
-                    .cloned();
-                if let Some(entry) = entry {
-                    roots.push(entry);
-                }
-                // Recurse into subdirs with their own entry file (nested projects)
-                for subdir in &subdirs {
-                    if let Some(sub_name) = subdir.file_name().and_then(|n| n.to_str()) {
-                        for ext in ["yml", "yaml"] {
-                            if subdir.join(format!("{sub_name}.{ext}")).is_file() {
-                                stack.push(subdir.clone());
-                                break;
-                            }
-                        }
-                    }
-                }
-            } else {
-                // Category directory: each YAML file is a separate project.
-                // Also recurse into subdirs with their own entry file.
-                roots.extend(yml_files);
-                for subdir in &subdirs {
-                    if let Some(sub_name) = subdir.file_name().and_then(|n| n.to_str()) {
-                        for ext in ["yml", "yaml"] {
-                            if subdir.join(format!("{sub_name}.{ext}")).is_file() {
-                                stack.push(subdir.clone());
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            // No YAML files here — recurse into all subdirectories
-            for subdir in &subdirs {
-                stack.push(subdir.clone());
+    for entry in walker.flatten() {
+        let path = entry.path();
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if ext == "yml" || ext == "yaml" {
+                results.push(path.to_path_buf());
             }
         }
     }
 
-    roots.sort();
-    roots
+    results.sort();
+    results
 }
 
 /// Returns the expected build-error code from an entry file's top-level
@@ -639,6 +562,37 @@ fn build_error_code(entry_file: &Path) -> Option<String> {
         return None;
     };
     Some(code.clone())
+}
+
+/// Handle extraction error for recursive tests, updating counters and printing results.
+fn handle_extract_error(
+    relpath: &str,
+    diags: &[Diagnostic],
+    expected_code: Option<&str>,
+    total_tests: &mut usize,
+    total_passed: &mut usize,
+    overall_success: &mut bool,
+) {
+    if let Some(code) = expected_code {
+        if diags.iter().any(|d| d.code == code) {
+            println!("PASS {}: _build_error", relpath);
+            *total_tests += 1;
+            *total_passed += 1;
+        } else {
+            let actual_code = diags
+                .first()
+                .map(|d| d.code.to_string())
+                .unwrap_or_default();
+            println!(
+                "FAIL {}: _build_error mismatch (expected {}, got {})",
+                relpath, code, actual_code
+            );
+            *total_tests += 1;
+            *overall_success = false;
+        }
+    } else {
+        eprintln!("ymx: warning: {}: {}", relpath, diags[0].message);
+    }
 }
 
 /// Recursive directory test mode: discover all entry files under `dir` and
@@ -692,41 +646,55 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
             }
         };
 
-        // Derive entry path from file stem (same logic as CLI overrides).
+        // For flat `<scenario>.yml` files the file IS the project root, so
+        // try `main.main` first. If that fails with E009 (entry file not found),
+        // fall back to `file_stem.main`.
         let file_stem = entry_file
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("main");
-        let entry = format!("{}.{}", file_stem, "main");
+        let entry = "main.main".to_string();
         let overrides = CliOverrides {
-            entry: Some(entry),
+            entry: Some(entry.clone()),
             ..CliOverrides::default_for_tests()
         };
 
         let opts = match extract_options(&project, &overrides) {
             Ok(o) => o,
             Err(diags) => {
-                if let Some(ref expected_code) = build_error {
-                    if diags.iter().any(|d| d.code == *expected_code) {
-                        println!("PASS {}: _build_error", relpath);
-                        total_tests += 1;
-                        total_passed += 1;
-                    } else {
-                        let actual_code = diags
-                            .first()
-                            .map(|d| d.code.to_string())
-                            .unwrap_or_default();
-                        println!(
-                            "FAIL {}: _build_error mismatch (expected {}, got {})",
-                            relpath, expected_code, actual_code
-                        );
-                        total_tests += 1;
-                        overall_success = false;
+                // If main.main failed with E009, try file_stem.main as fallback
+                let is_e009 = diags.iter().any(|d| d.code == "E009");
+                if is_e009 && entry == "main.main" {
+                    let fallback_entry = format!("{}.main", file_stem);
+                    let fallback_overrides = CliOverrides {
+                        entry: Some(fallback_entry.clone()),
+                        ..CliOverrides::default_for_tests()
+                    };
+                    match extract_options(&project, &fallback_overrides) {
+                        Ok(o) => o,
+                        Err(diags) => {
+                            handle_extract_error(
+                                &relpath,
+                                &diags,
+                                build_error.as_deref(),
+                                &mut total_tests,
+                                &mut total_passed,
+                                &mut overall_success,
+                            );
+                            continue;
+                        }
                     }
                 } else {
-                    eprintln!("ymx: warning: {}: {}", relpath, diags[0].message);
+                    handle_extract_error(
+                        &relpath,
+                        &diags,
+                        build_error.as_deref(),
+                        &mut total_tests,
+                        &mut total_passed,
+                        &mut overall_success,
+                    );
+                    continue;
                 }
-                continue;
             }
         };
 
@@ -1267,18 +1235,17 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
 
     // Pre-initialize Docker backend when using PDF format.
     // Docker is the default PDF backend — no --pdf-backend flag needed.
-    let docker_backend: Option<Arc<DockerBackend>> =
-        if cli.format == Some(Format::Pdf) {
-            match DockerBackend::new() {
-                Ok(b) => Some(Arc::new(b)),
-                Err(e) => {
-                    eprintln!("ymx: failed to start Docker backend: {}", e.message);
-                    return RunOutcome::Diagnostic;
-                }
+    let docker_backend: Option<Arc<DockerBackend>> = if cli.format == Some(Format::Pdf) {
+        match DockerBackend::new() {
+            Ok(b) => Some(Arc::new(b)),
+            Err(e) => {
+                eprintln!("ymx: failed to start Docker backend: {}", e.message);
+                return RunOutcome::Diagnostic;
             }
-        } else {
-            None
-        };
+        }
+    } else {
+        None
+    };
 
     // Run initial compile
     let start = Instant::now();
@@ -1854,17 +1821,16 @@ mod tests {
         dir.write("proj2/sub/main.yml", "main: 2\n");
         dir.write("proj2/sub/nested/deep/main.yml", "main: 3\n");
         let roots = find_project_roots(dir.path());
-        // proj1 and proj2/sub are project roots (contain .yml files)
-        // proj2/sub/nested is NOT a project root (its parent already has .yml files)
-        assert_eq!(roots.len(), 2);
+        // New behavior: each .yml file is its own project
+        assert_eq!(roots.len(), 3);
     }
 
     #[test]
-    fn find_project_roots_skips_hidden_and_git_dirs() {
+    fn find_project_roots_respects_gitignore() {
         let dir = TempDir::new();
         dir.write("proj/main.yml", "main: 1\n");
+        dir.write(".gitignore", ".*\n"); // ignore all hidden files/dirs
         dir.write(".hidden/proj/main.yml", "main: 2\n");
-        dir.write(".git/proj/main.yml", "main: 3\n");
         let roots = find_project_roots(dir.path());
         // Only the non-hidden proj is found
         assert_eq!(roots.len(), 1);
