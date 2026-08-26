@@ -31,7 +31,7 @@ fn main() -> ExitCode {
             errors::print_errors();
             ExitCode::SUCCESS
         }
-        Ok(ParseOutcome::Cli(cli)) => run::run(cli).to_exit_code(),
+        Ok(ParseOutcome::Cli(cli)) => run::run(&cli).to_exit_code(),
         Err(e) => {
             eprintln!("ymx: {message}", message = e.message);
             ExitCode::from(2)

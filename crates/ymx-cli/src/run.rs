@@ -37,7 +37,7 @@ use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
@@ -58,19 +58,6 @@ use crate::diagnostic::render_with_guidance;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 
 // PDF rendering types — live here in ymx-cli so ymx-core stays I/O-free.
-
-/// Reinterprets `Arc<Mutex<Option<()>>>` as `Arc<Mutex<Option<DockerBackend>>>`.
-/// Both types have identical memory layouts (Arc is a pointer, Mutex is a wrapper,
-/// Option<()> and Option<DockerBackend> have the same size), so this transmute
-/// is safe when used internally by run.rs.
-unsafe fn cast_backend(
-    arc: Option<std::sync::Arc<std::sync::Mutex<Option<()>>>>,
-) -> Option<std::sync::Arc<std::sync::Mutex<Option<DockerBackend>>>> {
-    arc.map(|a| {
-        let ptr = std::sync::Arc::into_raw(a) as *const std::sync::Mutex<Option<DockerBackend>>;
-        std::sync::Arc::from_raw(ptr)
-    })
-}
 
 /// Error returned when PDF rendering fails.
 #[derive(Debug, Clone)]
@@ -317,10 +304,10 @@ fn yaml_to_value(yaml: &Yaml) -> Option<Value> {
 }
 
 /// Drive the canonical pipeline against `cli`.
-pub fn run(mut cli: ParsedCli) -> RunOutcome {
+pub fn run(cli: &ParsedCli) -> RunOutcome {
     // Watch mode: enter the file watcher loop and never return (until interrupted).
     if cli.watch.is_some() {
-        return run_watch(&mut cli);
+        return run_watch(cli);
     }
 
     // Recursive directory mode (--test with a directory path) — unaffected by stdin.
@@ -501,7 +488,7 @@ pub fn run(mut cli: ParsedCli) -> RunOutcome {
                 .unwrap_or("main");
             match compile_component(&project, entry_component, &args, &opts) {
                 Ok(v) => {
-                    let (outcome, output) = emit(&cli, &opts, &v, None);
+                    let (outcome, output) = emit(cli, &opts, &v, None);
                     if let Some(out) = output {
                         print!("{out}");
                     }
@@ -515,7 +502,7 @@ pub fn run(mut cli: ParsedCli) -> RunOutcome {
     // Normal compile (no positional, no stdin args, or stdin was empty).
     match compile(&project, &opts) {
         Ok(value) => {
-            let (outcome, output) = emit(&cli, &opts, &value, None);
+            let (outcome, output) = emit(cli, &opts, &value, None);
             if let Some(out) = output {
                 print!("{out}");
             }
@@ -843,7 +830,7 @@ fn emit(
     cli: &ParsedCli,
     opts: &Options,
     value: &Value,
-    docker_backend: Option<Arc<Mutex<Option<DockerBackend>>>>,
+    docker_backend: Option<&Arc<DockerBackend>>,
 ) -> (RunOutcome, Option<String>) {
     match opts.format {
         Format::Diagnostics => (RunOutcome::Success, None),
@@ -897,7 +884,7 @@ fn emit_pdf(
     cli: &ParsedCli,
     opts: &Options,
     value: &Value,
-    docker_backend: Option<Arc<Mutex<Option<DockerBackend>>>>,
+    docker_backend: Option<&Arc<DockerBackend>>,
 ) -> (RunOutcome, Option<String>) {
     let html = DefaultHtmlRenderer.render_html(value);
     let pdf_bytes: Result<Vec<u8>, PdfError> = match opts.pdf_backend.as_str() {
@@ -923,20 +910,7 @@ fn emit_pdf(
         _ => {
             // docker backend
             if let Some(arc) = docker_backend {
-                let backend = {
-                    let mut guard = arc.lock().unwrap();
-                    if guard.is_none() {
-                        *guard = DockerBackend::new().ok();
-                    }
-                    guard.clone()
-                };
-                if let Some(b) = backend {
-                    b.render(&html)
-                } else {
-                    Err(PdfError {
-                        message: "docker backend init failed".to_string(),
-                    })
-                }
+                arc.render(&html)
             } else {
                 render_pdf_docker(&html)
             }
@@ -1039,8 +1013,9 @@ impl DockerBackend {
                 &format!("{}:/data/", cwd.display()),
                 "-w",
                 "/data/",
-                "pdfix/html-to-pdf:latest",
+                "--entrypoint",
                 "sleep",
+                "pdfix/html-to-pdf:latest",
                 "infinity",
             ])
             .output()
@@ -1080,6 +1055,8 @@ impl DockerBackend {
             .args([
                 "exec",
                 &self.container_name,
+                "/usr/html-to-pdf/venv/bin/python3",
+                "/usr/html-to-pdf/src/main.py",
                 "html-to-pdf",
                 "-i",
                 "index.html",
@@ -1196,7 +1173,7 @@ fn is_yaml_file(paths: &[PathBuf]) -> bool {
 /// contains any diagnostics (empty on success) and the `String` is stdout content.
 fn run_single_compile(
     cli: &ParsedCli,
-    docker_backend: Option<Arc<Mutex<Option<DockerBackend>>>>,
+    docker_backend: Option<&Arc<DockerBackend>>,
 ) -> (RunOutcome, Vec<Diagnostic>, Option<String>) {
     let project = match load_project(&cli.path) {
         Ok(p) => p,
@@ -1235,7 +1212,7 @@ enum RenderState {
     Error,
 }
 
-pub fn run_watch(cli: &mut ParsedCli) -> RunOutcome {
+pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
     let watch_path = cli.watch.as_ref().expect("--watch value must be present");
     println!("Watching {}...", watch_path.display());
 
@@ -1278,19 +1255,22 @@ pub fn run_watch(cli: &mut ParsedCli) -> RunOutcome {
     let mut prev_state: Option<RenderState> = None;
 
     // Pre-initialize the Docker backend so the same container is reused across compiles.
-    let docker_backend = if cli.pdf_backend == Some(crate::args::PdfBackendKind::Docker) {
-        cli.docker_backend = Some(std::sync::Arc::new(std::sync::Mutex::new(None)));
-        // SAFETY: cast_backend is safe because Arc<Mutex<Option<T>>> has identical layout
-        // for any T (pointer + size). We use () as placeholder in args.rs and DockerBackend
-        // in run.rs; both are Sized with same alignment.
-        unsafe { cast_backend(cli.docker_backend.clone()) }
-    } else {
-        None
-    };
+    let docker_backend: Option<Arc<DockerBackend>> =
+        if cli.pdf_backend == Some(crate::args::PdfBackendKind::Docker) {
+            match DockerBackend::new() {
+                Ok(b) => Some(Arc::new(b)),
+                Err(e) => {
+                    eprintln!("ymx: failed to start Docker backend: {}", e.message);
+                    return RunOutcome::Diagnostic;
+                }
+            }
+        } else {
+            None
+        };
 
     // Run initial compile
     let start = Instant::now();
-    let (outcome, diags, _output) = run_single_compile(cli, docker_backend.clone());
+    let (outcome, diags, _output) = run_single_compile(cli, docker_backend.as_ref());
     let elapsed = start.elapsed();
     let state = match outcome {
         RunOutcome::Success => RenderState::Success,
@@ -1340,7 +1320,8 @@ pub fn run_watch(cli: &mut ParsedCli) -> RunOutcome {
                 if pending {
                     pending = false;
                     let start = Instant::now();
-                    let (outcome, diags, _output) = run_single_compile(cli, docker_backend.clone());
+                    let (outcome, diags, _output) =
+                        run_single_compile(cli, docker_backend.as_ref());
                     let elapsed = start.elapsed();
                     let state = match outcome {
                         RunOutcome::Success => RenderState::Success,
@@ -1442,7 +1423,6 @@ mod tests {
             code: None,
             pdf_backend: None,
             watch: None,
-            docker_backend: None,
         }
     }
 
@@ -1469,7 +1449,6 @@ mod tests {
             code: None,
             pdf_backend: None,
             watch: None,
-            docker_backend: None,
         }
     }
 
@@ -1490,7 +1469,6 @@ mod tests {
             code: None,
             pdf_backend: None,
             watch: None,
-            docker_backend: None,
         }
     }
 
@@ -1499,7 +1477,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "main: 1\n");
         let cli = cli_for(dir.path());
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -1507,7 +1485,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("bad.yml", "a: 1\n---\nb: 2\n");
         let cli = cli_for(dir.path());
-        assert_eq!(run(cli), RunOutcome::LoadError);
+        assert_eq!(run(&cli), RunOutcome::LoadError);
     }
 
     #[test]
@@ -1515,7 +1493,7 @@ mod tests {
         let dir = TempDir::new();
         let missing = dir.path().join("nope");
         let cli = cli_for(&missing);
-        assert_eq!(run(cli), RunOutcome::LoadError);
+        assert_eq!(run(&cli), RunOutcome::LoadError);
     }
     #[test]
     fn missing_entry_file_is_e001_load_error() {
@@ -1523,7 +1501,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("other.yml", "other: 1\n");
         let cli = cli_for(dir.path()); // path = dir/main.yml (does not exist)
-        assert_eq!(run(cli), RunOutcome::LoadError);
+        assert_eq!(run(&cli), RunOutcome::LoadError);
     }
 
     #[test]
@@ -1531,7 +1509,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "_ymx:\n  foo: 1\nmain: 0\n");
         let cli = cli_for(dir.path());
-        assert_eq!(run(cli), RunOutcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -1539,7 +1517,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("a/b.yml", "x: 7\n");
         let cli = cli_with_entry(&dir.path().join("a/b.yml"), "x");
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -1547,7 +1525,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("a/b.yml", "x: 7\n");
         let cli = cli_with_entry(&dir.path().join("a/b.yml"), "y");
-        assert_eq!(run(cli), RunOutcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -1555,7 +1533,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "main: 1\n_test:\n  main: 1\n");
         let cli = cli_with_test(dir.path());
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -1563,7 +1541,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "main: 1\n_test:\n  main: 2\n");
         let cli = cli_with_test(dir.path());
-        assert_eq!(run(cli), RunOutcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -1575,7 +1553,7 @@ mod tests {
             "main: \"$nope(1)\"\n_test:\n  main:\n    error: \"E002\"\n",
         );
         let cli = cli_with_test(dir.path());
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -1587,7 +1565,7 @@ mod tests {
             "main: 1\n_test:\n  main:\n    result: 1\n    error: \"E002\"\n",
         );
         let cli = cli_with_test(dir.path());
-        assert_eq!(run(cli), RunOutcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -1595,7 +1573,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("main.yml", "main: 1\n");
         let cli = cli_with_test(dir.path());
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -1606,7 +1584,7 @@ mod tests {
         dir.write("main.yml", "main: \"$main()\"\n");
         let mut cli = cli_for(dir.path());
         cli.max_depth = Some(1);
-        assert_eq!(run(cli), RunOutcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -1753,7 +1731,7 @@ mod tests {
         let out = dir.path().join("out.json");
         let mut cli = cli_for(dir.path());
         cli.output = Some(out.clone());
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
         assert!(out.exists());
         assert_eq!(fs::read_to_string(&out).unwrap(), "1");
     }
@@ -1767,7 +1745,7 @@ mod tests {
         let out = dir.path().join("out.json");
         let mut cli = cli_for(dir.path()); // path = dir/main.yml (does not exist)
         cli.output = Some(out.clone());
-        assert_eq!(run(cli), RunOutcome::LoadError);
+        assert_eq!(run(&cli), RunOutcome::LoadError);
         assert!(!out.exists(), "no file on load error");
     }
 
@@ -1778,7 +1756,7 @@ mod tests {
         let out = dir.path().join("out.json");
         let mut cli = cli_with_entry(&dir.path().join("a/b.yml"), "y");
         cli.output = Some(out.clone());
-        assert_eq!(run(cli), RunOutcome::Diagnostic);
+        assert_eq!(run(&cli), RunOutcome::Diagnostic);
         assert!(!out.exists(), "no file on E009");
     }
 
@@ -1793,7 +1771,7 @@ mod tests {
         dir.write("main.yml", "main: 1\n");
         let mut cli = cli_for(dir.path());
         cli.format = Some(Format::Diagnostics);
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -1821,7 +1799,7 @@ mod tests {
     fn recursive_tests_single_passing_project() {
         let dir = TempDir::new();
         dir.write("proj/main.yml", "main: 1\n_test:\n  main: 1\n");
-        assert_eq!(run(cli_with_test_dir(dir.path())), RunOutcome::Success);
+        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
     }
 
     #[test]
@@ -1829,7 +1807,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("proj1/main.yml", "main: 1\n_test:\n  main: 1\n");
         dir.write("proj2/main.yml", "main: 2\n_test:\n  main: 2\n");
-        assert_eq!(run(cli_with_test_dir(dir.path())), RunOutcome::Success);
+        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
     }
 
     #[test]
@@ -1839,7 +1817,7 @@ mod tests {
         let dir = TempDir::new();
         dir.write("bad/bad.yml", "a: 1\n---\nb: 2\n"); // multi-doc is E001
                                                        // No valid projects found - warn and exit 0
-        assert_eq!(run(cli_with_test_dir(dir.path())), RunOutcome::Success);
+        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
     }
 
     #[test]
@@ -1847,14 +1825,14 @@ mod tests {
         let dir = TempDir::new();
         dir.write("just_text.txt", "not yaml\n");
         // No YMX projects found
-        assert_eq!(run(cli_with_test_dir(dir.path())), RunOutcome::Success);
+        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
     }
 
     #[test]
     fn recursive_tests_test_failure_returns_diagnostic() {
         let dir = TempDir::new();
         dir.write("proj/main.yml", "main: 1\n_test:\n  main: 2\n"); // expects 2, gets 1
-        assert_eq!(run(cli_with_test_dir(dir.path())), RunOutcome::Diagnostic);
+        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Diagnostic);
     }
 
     #[test]
@@ -2052,9 +2030,8 @@ mod tests {
             code: Some("main: hello world".to_string()),
             pdf_backend: None,
             watch: None,
-            docker_backend: None,
         };
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -2076,9 +2053,8 @@ mod tests {
             code: Some("comp1: 20\nmain: ${comp1()}".to_string()),
             pdf_backend: None,
             watch: None,
-            docker_backend: None,
         };
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -2100,9 +2076,8 @@ mod tests {
             code: Some("comp2: 20\nmain: ${comp1()} + ${comp2()}".to_string()),
             pdf_backend: None,
             watch: None,
-            docker_backend: None,
         };
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -2129,9 +2104,8 @@ mod tests {
             code: Some("{\"main\": \"${1 + 2}\"}".to_string()),
             pdf_backend: None,
             watch: None,
-            docker_backend: None,
         };
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -2152,9 +2126,8 @@ mod tests {
             code: Some("main: ${10 / 2}".to_string()),
             pdf_backend: None,
             watch: None,
-            docker_backend: None,
         };
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -2175,9 +2148,8 @@ mod tests {
             code: Some("greeting: \"hi\"\nmain: ${greeting()}".to_string()),
             pdf_backend: None,
             watch: None,
-            docker_backend: None,
         };
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -2199,9 +2171,8 @@ mod tests {
             code: Some("{\"comp2\": 20, \"main\": \"${comp1()} + ${comp2()}\"}".to_string()),
             pdf_backend: None,
             watch: None,
-            docker_backend: None,
         };
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -2223,9 +2194,8 @@ mod tests {
             code: Some("main: ${base() * 3 + 1}".to_string()),
             pdf_backend: None,
             watch: None,
-            docker_backend: None,
         };
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -2247,9 +2217,8 @@ mod tests {
             code: Some("main: ${greet()}".to_string()),
             pdf_backend: None,
             watch: None,
-            docker_backend: None,
         };
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     // ---- task 6: -f html integration tests ----
@@ -2260,7 +2229,7 @@ mod tests {
         dir.write("main.yml", "main:\n  from: div\n  children: Hello\n");
         let mut cli = cli_for(dir.path());
         cli.format = Some(Format::Html);
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -2272,7 +2241,7 @@ mod tests {
         );
         let mut cli = cli_for(dir.path());
         cli.format = Some(Format::Html);
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -2284,7 +2253,7 @@ mod tests {
         );
         let mut cli = cli_for(dir.path());
         cli.format = Some(Format::Html);
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
     }
 
     #[test]
@@ -2295,7 +2264,7 @@ mod tests {
         let mut cli = cli_for(dir.path());
         cli.format = Some(Format::Html);
         cli.output = Some(out.clone());
-        assert_eq!(run(cli), RunOutcome::Success);
+        assert_eq!(run(&cli), RunOutcome::Success);
         assert!(out.exists());
         let content = fs::read_to_string(&out).unwrap();
         assert!(content.contains("<p>"));

@@ -17,7 +17,6 @@
 use std::fmt::Debug;
 use std::io::IsTerminal;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 
 use ymx_config::CliOverrides;
 use ymx_lib::ymx_core::project::Format;
@@ -84,10 +83,6 @@ pub struct ParsedCli {
     /// `--watch <path>` — watch a file or directory for changes and re-compile.
     /// Cannot be combined with --test (CLI usage error).
     pub watch: Option<PathBuf>,
-    /// Cached Docker backend handle for watch-mode PDF rendering.
-    /// The inner type is erased (using `()`) to avoid circular crate dependencies;
-    /// `run.rs` casts it to the actual `DockerBackend` type internally.
-    pub docker_backend: Option<Arc<Mutex<Option<()>>>>,
 }
 
 impl Debug for ParsedCli {
@@ -128,7 +123,6 @@ impl Clone for ParsedCli {
             code: self.code.clone(),
             pdf_backend: self.pdf_backend,
             watch: self.watch.clone(),
-            docker_backend: self.docker_backend.clone(),
         }
     }
 }
@@ -402,7 +396,6 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         code,
         pdf_backend,
         watch,
-        docker_backend: None,
     }))
 }
 
