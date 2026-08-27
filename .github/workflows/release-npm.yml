@@ -73,15 +73,15 @@ jobs:
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
-          scope: '@ymx'
+          scope: '@lprett'
 
       - name: Publish to npm
         run: |
-          echo "Publishing @ymx/web@${VERSION} to npmjs.com"
+          echo "Publishing @lprett/web@${VERSION} to npmjs.com"
           npm publish ./pkg/final --access public --tag latest
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Log published version
         run: |
-          echo "Successfully published @ymx/web@${VERSION}"
+          echo "Successfully published @lprett/web@${VERSION}"

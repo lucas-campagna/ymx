@@ -1,5 +1,5 @@
 {
-  "name": "@ymx/web",
+  "name": "@lprett/ymx",
   "version": "0.1.0",
   "description": "YMX TypeScript/WASM library - compile YAML to JSON with JavaScript integration",
   "type": "module",
