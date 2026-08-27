@@ -1632,14 +1632,18 @@ impl<'a> Resolver<'a> {
                 if entries.iter().any(|e| self.is_from_key(&e.key)) {
                     return self.resolve_mini(entries, scope, file);
                 }
-                let mut m = IndexMap::with_capacity(entries.len());
-                for entry in entries {
-                    m.insert(
-                        key_to_string(&entry.key),
-                        self.resolve_node(&entry.value, scope, file)?,
-                    );
-                }
-                Ok(Value::Object(m))
+                // Objects (even without `from`) go through resolve_property_set and
+                // dispatch_from so that rule-8 shortcuts are applied consistently —
+                // arrays don't introduce a component namespace, so a property like
+                // `comp: 1` inside an array element must still be resolved via the
+                // shortcut (global component lookup first, not local value).
+                let props = match self.resolve_property_set(entries, scope, file)? {
+                    ResolvedBody::Object(props) => props,
+                    ResolvedBody::Value(_) => {
+                        unreachable!("an object body always resolves to a property set")
+                    }
+                };
+                self.dispatch_from(&props, file, scope.component.as_deref())
             }
         }
     }
