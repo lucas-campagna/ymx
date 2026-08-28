@@ -34,6 +34,7 @@
 //!    stderr and yields [`RunOutcome::Diagnostic`]; success hits [`emit`].
 
 use std::io::{IsTerminal, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 #[cfg(feature = "watch")]
@@ -924,6 +925,21 @@ fn emit_pdf(
     }
 }
 
+/// Find an available port on the host, starting from 3000 and incrementing upward.
+/// The WeasyPrint container always listens on 8080 inside the container, so we
+/// bind an available host port to container port 8080.
+fn find_available_port() -> Result<u16, PdfError> {
+    let mut port = 3000u16;
+    loop {
+        if TcpListener::bind(format!("127.0.0.1:{port}")).is_ok() {
+            return Ok(port);
+        }
+        port = port.checked_add(1).ok_or_else(|| PdfError {
+            message: "exhausted port range".to_string(),
+        })?;
+    }
+}
+
 /// Render HTML to PDF using Docker (4teamwork/weasyprint server).
 pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
     use std::fs;
@@ -946,29 +962,16 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
         message: format!("failed to sync HTML file: {}", e),
     })?;
 
-    // Clean up any stale container still holding port 3000
-    if let Ok(ids) = Command::new("docker")
-        .args(["ps", "--filter", "publish=3000", "-q"])
-        .output()
-    {
-        for id in String::from_utf8_lossy(&ids.stdout).lines() {
-            if !id.is_empty() {
-                let _ = Command::new("docker")
-                    .args(["rm", "-f", id])
-                    .output();
-            }
-        }
-    }
-
     // Start container in detached mode with a unique name so we can clean it up after.
     let container_name = format!("ymx-pdf-{}", std::process::id());
+    let port = find_available_port()?;
     let docker_start = Command::new("docker")
         .args([
             "run",
             "-d",
             "--name",
             &container_name,
-            "-p", "3000:8080",
+            "-p", &format!("{port}:8080"),
             "4teamwork/weasyprint",
         ])
         .output()
@@ -993,7 +996,7 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
 
     while start.elapsed() < max_wait {
         match Command::new("curl")
-            .args(["-F", "html=@index.html", "http://localhost:3000", "-o", "convert.pdf"])
+            .args(["-F", "html=@index.html", &format!("http://localhost:{port}"), "-o", "convert.pdf"])
             .current_dir(&cwd)
             .output()
         {
@@ -1044,6 +1047,7 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
 pub(crate) struct DockerBackend {
     container_name: String,
     cwd: PathBuf,
+    port: u16,
 }
 
 impl DockerBackend {
@@ -1054,20 +1058,7 @@ impl DockerBackend {
         let cwd = std::env::current_dir().map_err(|e| PdfError {
             message: e.to_string(),
         })?;
-
-        // Clean up any stale container still holding port 3000
-        if let Ok(ids) = std::process::Command::new("docker")
-            .args(["ps", "--filter", "publish=3000", "-q"])
-            .output()
-        {
-            for id in String::from_utf8_lossy(&ids.stdout).lines() {
-                if !id.is_empty() {
-                    let _ = std::process::Command::new("docker")
-                        .args(["rm", "-f", id])
-                        .output();
-                }
-            }
-        }
+        let port = find_available_port()?;
 
         // Start container in detached mode (no --rm so it stays running)
         let output = std::process::Command::new("docker")
@@ -1076,7 +1067,7 @@ impl DockerBackend {
                 "-d",
                 "--name",
                 &container_name,
-                "-p", "3000:8080",
+                "-p", &format!("{port}:8080"),
                 "4teamwork/weasyprint",
             ])
             .output()
@@ -1094,6 +1085,7 @@ impl DockerBackend {
         Ok(DockerBackend {
             container_name,
             cwd,
+            port,
         })
     }
 
@@ -1120,7 +1112,7 @@ impl DockerBackend {
 
         // Use curl to POST HTML to the WeasyPrint server
         let output = std::process::Command::new("curl")
-            .args(["-F", "html=@index.html", "http://localhost:3000", "-o", "convert.pdf"])
+            .args(["-F", "html=@index.html", &format!("http://localhost:{}", self.port), "-o", "convert.pdf"])
             .current_dir(&self.cwd)
             .output()
             .map_err(|e| PdfError {
