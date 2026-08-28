@@ -4,7 +4,7 @@
 # keeps moving while a replacement is evaluated.
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
-unmaintained = "warn"
+unmaintained = "none"
 
 [licenses]
 # Allow-list consistent with the workspace dependency tree (serde, serde_json,
