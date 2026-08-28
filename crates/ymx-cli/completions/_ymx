@@ -8,7 +8,6 @@ _ymx() {
     flags=(
         '--entry[Component name within file to compile]:component:'
         '--from-keyword[Override the from keyword]:keyword:'
-        '--default-keyword[Override the $default keyword name]:keyword:'
         '--max-depth[Limit on template/call recursion]:n:'
         '--format[Output format]:format:(json compact diagnostics)'
         '--output[Write output to file instead of stdout]:file:_files'

@@ -76,7 +76,7 @@ Every diagnostic renders to stderr as `[code] file:line:col (component): message
 | `E003` | compile | Missing required argument. A property `$x` is referenced but neither supplied by the caller nor declared with `x?:`. | `a: $x` called with no `x` argument → missing required `x`. |
 | `E004` | load | Duplicate component name in the same namespace. Two top-level definitions of `foo` in the same directory. | `a.yml` defines `x: 1` and `b.yml` also defines `x: 2` → both in the global namespace → `E004`. |
 | `E005` | compile | File-scope violation. A `_`-prefixed component is referenced from outside its document. | `_helper: 42` in `a.yml`; `b.yml` calls `$a(_helper=$_helper)` → cross-document reference to file-scoped `_helper` → `E005`. |
-| `E006` | compile | Ambiguous shortcut. Two properties in the same component body both match names of existing components. | `a:\n  b: 1\n  c: 2\nb: $default\nc: $default` — both `b` and `c` match components → shortcut is ambiguous → `E006`. |
+| `E006` | compile | Ambiguous shortcut. Two properties in the same component body both match names of existing components. | `a:\n  b: 1\n  c: 2\nb: $0\nc: $0` — both `b` and `c` match components → shortcut is ambiguous → `E006`. |
 | `E007` | load | Reserved name used as a component or template (`map`/`reduce`/`merge`). | `map: 1` → defining a component named `map` (or `$map`, `$$map`, …) is rejected. |
 | `E008` | compile | Max-depth exceeded. The recursion depth cap (`--max-depth`, default 256) was exhausted. | A chain of 300 nested `$a()` calls hits the 256-deep limit → `E008`. |
 | `E009` | options | Entry not found. Entry path has fewer than two segments, resolves to a missing file, has an ambiguous `.yml`/`.yaml` stem, or the entry name is not a valid component identifier. | `ymx .` with no `main.yml`; `ymx ./folder` where both `folder.yml` and `folder.yaml` exist; `ymx ./file.yml --entry NOT_A_VALID_NAME`. |
@@ -118,7 +118,7 @@ A document may carry three reserved **meta keys** at its top level — `_ymx` (f
 |-------------------|-------------|-------------|-------|
 | `max_depth`       | int         | `256`       | recursion cap (rule 11); exceeding it raises `E008` |
 | `from_keyword`    | string      | `from`      | rule 6 keyword |
-| `default_keyword` | string      | `default`   | rule 8 keyword; the engine prefixes `$` internally |
+
 | `format`          | string      | `json`      | `json` or `diagnostics` |
 | `pretty`          | bool        | `false`     | pretty-print JSON output |
 | `plain`           | string enum | `false`     | `false` \| `true` \| `template`; promotes sub-namespace names into the global namespace (`true` = components **and** templates; `template` = templates only). Invalid value → `E010`. See *Component visibility* |
@@ -261,7 +261,7 @@ pub enum PlainMode { False, All, TemplatesOnly }
 pub struct Options {            // consumed by `compile`
     pub entry: String,          // default "main.main" — a file-path entry path, not a bare name
     pub from_keyword: String,   // default "from"
-    pub default_keyword: String,// default "default" (engine prefixes with "$" internally)
+
     pub max_depth: u32,         // default 256
     pub pretty: bool,           // default false
     pub format: Format,         // default Json
@@ -335,7 +335,7 @@ pub fn load_project(root: &Path) -> Result<Project, Vec<Diagnostic>>;
 pub struct CliOverrides {
     pub entry: Option<String>,
     pub from_keyword: Option<String>,
-    pub default_keyword: Option<String>,
+
     pub max_depth: Option<u32>,
     pub pretty: Option<bool>,
     pub format: Option<Format>,
@@ -392,7 +392,7 @@ pub struct ParsedCli {
     pub test_dir: Option<PathBuf>, // set when `--test` is given and `path` resolves
                                    // to a directory at parse time (recursive mode);
                                    // None means single-project file mode
-    /* other fields: from_keyword, default_keyword, max_depth, output, pretty,
+    /* other fields: from_keyword, max_depth, output, pretty,
        plain, plain_template, format */
 }
 ```
@@ -705,7 +705,7 @@ Here `a` calls `b` which sums `12` with `34` yielding `46`, then calls `c` with 
 
 ### 8. Shortcut: a property name matching a component name calls that component
 
-If a component defines a property whose name matches another component, that property value is passed to the matched component as `$default`, and the remaining properties of the calling component are passed as arguments.
+If a component defines a property whose name matches another component, that property value is passed to the matched component as `$0`, and the remaining properties of the calling component are passed as arguments.
 
 Example:
 
@@ -714,10 +714,10 @@ a:
   b: 1
   y: 3
   z: 5
-b: [$default,$y,$z]
+b: [$0,$y,$z]
 ```
 
-Calling `a` returns `[1, 3, 5]`. The leading value passed through `$default` corresponds to the property named after the target component; its name is configurable.
+Calling `a` returns `[1, 3, 5]`. The leading value passed as `$0` corresponds to the property named after the target component.
 
 > If more than one property's name matches a component, it is a hard error (ambiguous shortcut).
 
@@ -763,7 +763,7 @@ Resolving a component runs in three steps, in this fixed order:
 
 1. **Property resolution (before template)** — every property value of the component is fully resolved. A property value is a *nested call-site* when it is an object containing the `from` key, or any value containing an inline `$comp(...)` call (rule 3) or a `${...}` interpolation (rule 7). Nested call-sites resolve **bottom-up**: the deepest nested call is evaluated first, its return value bubbles up to its parent, and so on, until every property of the component has a fully resolved value. Bare `$name` (no parens) resolves as: (a) a named argument `name` in scope → that argument's value; (b) else → hard error (rule 10, `E003`). Use `$name()` (with empty parens) to call a component without arguments. `$name(...)` unconditionally calls the component `name` (rule 3) and bypasses the argument lookup. Inside `${...}` (math context) there is **no fallback**: a bare identifier refers to an argument or the math result of the previous step (`last`); to call a component inside math, use the `name(...)` form (rule 7). *(v2 only for `$`; `?` is v1)* Property-key modifiers (`?`, `$`) are stripped first; a `$`-suffix value is wrapped in `${...}` and a `?:` default is recorded for later merge binding (rule 17).
 2. **Template chain (rule 5)** — applied to the post-step-1 property set. The innermost template runs first, its result feeds the next template, and so on. Each template link is itself a **normal component call** and follows this same three-step flow (its own property resolution, its own template chain, its own `from`/shortcut dispatch), **with one exception**: the *first* link of a chain whose `$template` is an array uses the rule 12/13/14 map/reduce semantics instead of a single call. Templates can only be reached through their **direct** child: `a` invokes `$a`; if `$a` is absent, `a` does **not** skip to `$$a` — the chain is broken at that point. Template names are not valid `from` targets.
-3. **`from` / shortcut dispatch (rules 6 and 8, after template)** — these are **mutually exclusive and sugar-equivalent**: the rule-8 shortcut is sugar for `from`, so exactly one of them fires. If the (post-template) value of `from` names a valid *regular* component, `from` dispatches: the target is called with the rest of the property set as arguments (the `from` key itself is **not** forwarded; the rule-8 shortcut is **suppressed**), and the return value replaces the component's output. If `from` does **not** name a valid regular component (templates excluded; non-String `from`; missing target), `from` is a **plain forwarded property** and the rule-8 shortcut fires normally against the post-template property set (a property whose name matches a component → that component is called with the remaining properties as arguments, the matched key's value passed as `$default`; the invalid `from` is forwarded alongside them as an ordinary argument). Either dispatch target is a normal component call following this same three-step flow.
+3. **`from` / shortcut dispatch (rules 6 and 8, after template)** — these are **mutually exclusive and sugar-equivalent**: the rule-8 shortcut is sugar for `from`, so exactly one of them fires. If the (post-template) value of `from` names a valid *regular* component, `from` dispatches: the target is called with the rest of the property set as arguments (the `from` key itself is **not** forwarded; the rule-8 shortcut is **suppressed**), and the return value replaces the component's output. If `from` does **not** name a valid regular component (templates excluded; non-String `from`; missing target), `from` is a **plain forwarded property** and the rule-8 shortcut fires normally against the post-template property set (a property whose name matches a component → that component is called with the remaining properties as arguments, the matched key's value passed as `$0`; the invalid `from` is forwarded alongside them as an ordinary argument). Either dispatch target is a normal component call following this same three-step flow.
 
 A nested mini-component (an object whose value uses `from`) receives **only the arguments explicitly written in its body**, resolved against the parent's current arguments. The parent's other arguments are not auto-forwarded; rules 9 and 10 apply within the nested call exactly as they do at the top level. A nested mini-component follows the same three-step evaluation as a top-level component, so it can itself contain nested call-sites.
 

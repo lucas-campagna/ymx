@@ -247,16 +247,15 @@ Use \fBname(...)\fR (no \fB$\fR) to call a component; dotted paths allowed
 
 .SS "Rule 8 — Shortcut: property name matching a component calls it"
 If a component defines a property whose name matches another component, that
-property value is passed as \fB$default\fR to the matched component, and the
+property value is passed as \fB$0\fR to the matched component, and the
 remaining properties are passed as named arguments.
-Override the keyword with \fB--default-keyword\fR or \fB_ymx.default_keyword\fR.
 .PP
 .nf
     a:
       b: 1
       y: 3
       z: 5
-    b: [$default, $y, $z]
+    b: [$0, $y, $z]
 .fi
 .PP
 Calling \fBa\fR returns \fB[1, 3, 5]\fR.

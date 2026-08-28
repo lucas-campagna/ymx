@@ -2,7 +2,7 @@ a:
   b: 1
   y: 3
   z: 5
-b: [$default, $y, $z]
+b: [$0, $y, $z]
 _test:
   a:
     result: [1, 3, 5]

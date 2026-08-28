@@ -74,12 +74,11 @@ impl CliOverrides {
 /// All such errors are collected before returning (no short-circuiting);
 /// invalid fields simply contribute nothing to the effective options. The
 /// recognized fields (`max_depth` int, `from_keyword` string,
-/// `default_keyword` string, `format` `"json"`|`"diagnostics"`, `pretty`
-/// bool, `plain` `"false"`|`"true"`|`"template"`) are per the PRD `_ymx`
-/// table. `plain` is a strict string enum: a YAML bare bool or number is
-/// invalid. `entry` is intentionally **not** a `_ymx` field (unknown -> `E010`).
-/// `from_keyword` and `default_keyword` are configurable only via `_ymx`
-/// front matter (not via CLI flags).
+/// `format` `"json"`|`"diagnostics"`, `pretty` bool, `plain`
+/// `"false"`|`"true"`|`"template"`) are per the PRD `_ymx` table. `plain`
+/// is a strict string enum: a YAML bare bool or number is invalid. `entry`
+/// is intentionally **not** a `_ymx` field (unknown -> `E010`).
+/// `from_keyword` is configurable only via `_ymx` front matter (not via CLI flags).
 ///
 /// Non-entry `_ymx` blocks are never touched: only the entry file's raw value
 /// is consulted, so a malformed block elsewhere is not an error.
@@ -104,7 +103,6 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
     let mut diags: Vec<Diagnostic> = Vec::new();
 
     let mut from_keyword: Option<String> = None;
-    let mut default_keyword: Option<String> = None;
     let mut max_depth: Option<u32> = None;
     let mut pretty: Option<bool> = None;
     let mut format: Option<Format> = None;
@@ -138,14 +136,6 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
                             _ => diags.push(invalid_field(
                                 &entry_file,
                                 "from_keyword",
-                                "expected a string",
-                            )),
-                        },
-                        "default_keyword" => match field_value {
-                            Value::String(s) => default_keyword = Some(s.clone()),
-                            _ => diags.push(invalid_field(
-                                &entry_file,
-                                "default_keyword",
                                 "expected a string",
                             )),
                         },
@@ -250,7 +240,6 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
     }
 
     opts.from_keyword = from_keyword.unwrap_or_else(|| "from".to_string());
-    opts.default_keyword = default_keyword.unwrap_or_else(|| "default".to_string());
     opts.max_depth = cli.max_depth.or(max_depth).unwrap_or(256);
     opts.pretty = cli.pretty.or(pretty).unwrap_or(false);
     opts.format = cli.format.clone().or(format).unwrap_or(Format::Json);
@@ -408,13 +397,12 @@ mod tests {
         let p = with_ymx(
             project(),
             0,
-            "max_depth: 10\nfrom_keyword: frm\ndefault_keyword: dflt\nformat: diagnostics\npretty: true\nplain: \"template\"\n",
+            "max_depth: 10\nfrom_keyword: frm\nformat: diagnostics\npretty: true\nplain: \"template\"\n",
         );
         let opts =
             extract_options(&p, &CliOverrides::default_for_tests()).expect("all fields valid");
         assert_eq!(opts.max_depth, 10);
         assert_eq!(opts.from_keyword, "frm");
-        assert_eq!(opts.default_keyword, "dflt");
         assert_eq!(opts.format, Format::Diagnostics);
         assert!(opts.pretty);
         assert_eq!(opts.plain, PlainMode::TemplatesOnly);
@@ -563,7 +551,7 @@ mod tests {
 
     #[test]
     fn keyword_fields_reject_non_string() {
-        for field in ["from_keyword", "default_keyword"] {
+        for field in ["from_keyword"] {
             for src in [format!("{field}: true\n"), format!("{field}: 5\n")] {
                 let p = with_ymx(project(), 0, &src);
                 let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();

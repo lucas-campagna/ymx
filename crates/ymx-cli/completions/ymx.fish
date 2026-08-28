@@ -3,7 +3,6 @@
 complete -c ymx -s h -l help -d 'Print help and exit'
 complete -c ymx -l entry -d 'Component name within file to compile' -r
 complete -c ymx -l from-keyword -d 'Override the from keyword' -r
-complete -c ymx -l default-keyword -d 'Override the $default keyword name' -r
 complete -c ymx -l max-depth -d 'Limit on template/call recursion' -r
 complete -c ymx -l format -d 'Output format' -r -f -a "json\ncompact\ndiagnostics"
 complete -c ymx -l output -d 'Write output to file instead of stdout' -r -f

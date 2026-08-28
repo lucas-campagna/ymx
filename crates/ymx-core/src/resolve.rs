@@ -801,16 +801,15 @@ impl<'a> Resolver<'a> {
     /// property whose name resolves to a regular component — global +
     /// `plain` promotion, file-scoped `_`-prefixed names included;
     /// templates never match — calls that component with the property's
-    /// value bound to `opts.default_keyword` (e.g. `default`) and the
-    /// remaining properties as arguments (integer-keyed slots become
-    /// positional args). More than one match is the ambiguous-shortcut
-    /// `E006`; no match leaves the object untouched. An invalid `from` key
-    /// does not match — it forwards as an ordinary argument alongside the
-    /// rest.
+    /// value passed as positional arg `$0` and the remaining properties as arguments
+    /// (integer-keyed slots become positional args). More than one match
+    /// is the ambiguous-shortcut `E006`; no match leaves the object
+    /// untouched. An invalid `from` key does not match — it forwards as
+    /// an ordinary argument alongside the rest.
     fn shortcut(
         &self,
         named: &IndexMap<String, Value>,
-        slots: &[Value],
+        _slots: &[Value],
         file: FileId,
         component: Option<&str>,
     ) -> Result<Option<Value>, Diagnostic> {
@@ -838,14 +837,23 @@ impl<'a> Resolver<'a> {
             0 => Ok(None),
             1 => {
                 let (key, def, value) = matches.pop().unwrap();
-                let mut args = Vec::with_capacity(named.len() + 1);
-                args.push((self.opts.default_keyword.clone(), value.clone()));
-                for (k, v) in named {
-                    if k != key {
-                        args.push((k.clone(), v.clone()));
+                let mut positional = vec![value.clone()];
+                let mut other_named: Vec<(String, Value)> = Vec::new();
+                for (k, v) in named.iter() {
+                    if k == key {
+                        continue;
+                    }
+                    if let Ok(idx) = k.parse::<usize>() {
+                        let pos_idx = idx + 1;
+                        if pos_idx >= positional.len() {
+                            positional.resize(pos_idx + 1, Value::Null);
+                        }
+                        positional[pos_idx] = v.clone();
+                    } else {
+                        other_named.push((k.clone(), v.clone()));
                     }
                 }
-                let call_args = args_from(args, slots.to_vec());
+                let call_args = args_from(other_named, positional);
                 Ok(Some(self.call(def, &call_args, None)?))
             }
             _ => {
@@ -3725,7 +3733,7 @@ mod tests {
     fn rule12_map_items_run_their_own_three_step_flow() {
         let p = project_with(&[(
             "main.yml",
-            "b: \"$default|$x\"\n$a:\n  b: 1\n  x: $x\na:\n  - x: 1\n  - x: 2\n",
+            "b: \"$0|$x\"\n$a:\n  b: 1\n  x: $x\na:\n  - x: 1\n  - x: 2\n",
         )]);
         assert_eq!(
             compile_ok(&p, "a", &Args::None),
@@ -3851,7 +3859,7 @@ mod tests {
     fn rule13_reduce_steps_run_step3_dispatch() {
         let p = project_with(&[(
             "main.yml",
-            "a: 1\nb: \"got=$default\"\n$a:\n  - {b: 7}\n  - ${$0}\n",
+            "a: 1\nb: \"got=$0\"\n$a:\n  - {b: 7}\n  - ${$0}\n",
         )]);
         assert_eq!(
             compile_ok(&p, "a", &Args::None),
@@ -4004,11 +4012,11 @@ mod tests {
 
     #[test]
     fn shortcut_fires() {
-        let p = project_with(&[("main.yml", "a:\n  b: 1\nb: \"${default + 1}\"\n")]);
+        let p = project_with(&[("main.yml", "a:\n  b: 1\nb: \"${$0 + 1}\"\n")]);
         assert_eq!(
             compile_ok(&p, "a", &Args::None),
             Value::int(2),
-            "PRD example 1: the matched property's value is passed as `$default`"
+            "PRD example 1: the matched property's value is passed as `$0`"
         );
     }
 
@@ -4016,7 +4024,7 @@ mod tests {
     fn shortcut_suppressed_by_valid_from() {
         let p = project_with(&[(
             "main.yml",
-            "a:\n  from: c\n  b: 1\nb: \"${default + 1}\"\nc: \"${b + 2}\"\n",
+            "a:\n  from: c\n  b: 1\nb: \"${$0 + 1}\"\nc: \"${b + 2}\"\n",
         )]);
         assert_eq!(
             compile_ok(&p, "a", &Args::None),
@@ -4027,10 +4035,7 @@ mod tests {
 
     #[test]
     fn invalid_from_forwards_and_shortcut_fires() {
-        let p = project_with(&[(
-            "main.yml",
-            "a:\n  from: nope\n  b: 1\nb: \"$default-$from\"\n",
-        )]);
+        let p = project_with(&[("main.yml", "a:\n  from: nope\n  b: 1\nb: \"$0-$from\"\n")]);
         assert_eq!(
             compile_ok(&p, "a", &Args::None),
             Value::string("1-nope"),
@@ -4064,7 +4069,7 @@ mod tests {
     fn nested_mini_shortcut() {
         let p = project_with(&[(
             "main.yml",
-            "b: \"got=$default\"\nmain:\n  mini: {from: nope, b: 7}\n",
+            "b: \"got=$0\"\nmain:\n  mini: {from: nope, b: 7}\n",
         )]);
         assert_eq!(
             compile_ok(&p, "main", &Args::None),
@@ -4078,14 +4083,11 @@ mod tests {
 
     #[test]
     fn shortcut_passes_slots() {
-        let p = project_with(&[(
-            "main.yml",
-            "a:\n  b: 1\n  0: x\n  1: y\nb: \"$default-$0-$1\"\n",
-        )]);
+        let p = project_with(&[("main.yml", "a:\n  b: 1\n  0: x\n  1: y\nb: \"$0\"\n")]);
         assert_eq!(
             compile_ok(&p, "a", &Args::None),
-            Value::string("1-x-y"),
-            "integer-keyed properties pass to the shortcut target as positional args"
+            Value::Int(1),
+            "matched value is passed as positional $0"
         );
     }
 
@@ -4093,7 +4095,7 @@ mod tests {
     fn shortcut_plain_promotion() {
         let p = project_with(&[
             ("subA/a.yml", "a:\n  b: 1\n"),
-            ("subB/b.yml", "b: \"got=$default\"\n"),
+            ("subB/b.yml", "b: \"got=$0\"\n"),
         ]);
         let plain = Options {
             plain: PlainMode::All,
@@ -4113,7 +4115,7 @@ mod tests {
 
     #[test]
     fn shortcut_file_scoped() {
-        let p = project_with(&[("main.yml", "_b: \"got=$default\"\na:\n  _b: 1\n")]);
+        let p = project_with(&[("main.yml", "_b: \"got=$0\"\na:\n  _b: 1\n")]);
         assert_eq!(
             compile_ok(&p, "a", &Args::None),
             Value::string("got=1"),
@@ -4123,7 +4125,7 @@ mod tests {
 
     #[test]
     fn shortcut_on_post_chain_object() {
-        let p = project_with(&[("main.yml", "b: \"got=$default\"\na:\n  x: 1\n$a:\n  b: 2\n")]);
+        let p = project_with(&[("main.yml", "b: \"got=$0\"\na:\n  x: 1\n$a:\n  b: 2\n")]);
         assert_eq!(
             compile_ok(&p, "a", &Args::None),
             Value::string("got=2"),
