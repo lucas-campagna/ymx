@@ -925,11 +925,11 @@ fn emit_pdf(
     }
 }
 
-/// Find an available port on the host, starting from 3000 and incrementing upward.
+/// Find an available port on the host, starting from 1024 and incrementing upward.
 /// The WeasyPrint container always listens on 8080 inside the container, so we
 /// bind an available host port to container port 8080.
 fn find_available_port() -> Result<u16, PdfError> {
-    let mut port = 3000u16;
+    let mut port = 1024u16;
     loop {
         if TcpListener::bind(format!("127.0.0.1:{port}")).is_ok() {
             return Ok(port);
