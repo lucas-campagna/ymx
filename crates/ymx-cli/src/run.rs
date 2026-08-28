@@ -946,10 +946,14 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
         message: format!("failed to sync HTML file: {}", e),
     })?;
 
-    let output = Command::new("docker")
+    // Start container in detached mode with a unique name so we can clean it up after.
+    let container_name = format!("ymx-pdf-{}", std::process::id());
+    let docker_start = Command::new("docker")
         .args([
             "run",
-            "--rm",
+            "-d",
+            "--name",
+            &container_name,
             "-p", "3000:3000",
             "4teamwork/weasyprint",
         ])
@@ -958,15 +962,17 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
             message: format!("docker run failed: {}", e),
         })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    if !docker_start.status.success() {
+        let stderr = String::from_utf8_lossy(&docker_start.stderr);
         return Err(PdfError {
-            message: format!("docker exited with {}: {}", output.status, stderr),
+            message: format!("docker start failed ({}): {}", docker_start.status, stderr),
         });
     }
 
-    // Wait for the WeasyPrint server to be ready (try curl once, sleep and retry if needed)
-    std::thread::sleep(std::time::Duration::from_secs(1));
+    // Wait for the WeasyPrint server to be ready.
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Try curl; retry once after 1s if it fails.
     let curl_result = Command::new("curl")
         .args(["-F", "html=@index.html", "http://localhost:3000", "-o", "convert.pdf"])
         .current_dir(&cwd)
@@ -975,7 +981,6 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
     let curl_output = match curl_result {
         Ok(output) => output,
         Err(_e) => {
-            // Retry once after another second
             std::thread::sleep(std::time::Duration::from_secs(1));
             Command::new("curl")
                 .args(["-F", "html=@index.html", "http://localhost:3000", "-o", "convert.pdf"])
@@ -986,6 +991,11 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
                 })?
         }
     };
+
+    // Stop and remove the container.
+    let _ = Command::new("docker")
+        .args(["rm", "-f", &container_name])
+        .output();
 
     if !curl_output.status.success() {
         let stderr = String::from_utf8_lossy(&curl_output.stderr);
