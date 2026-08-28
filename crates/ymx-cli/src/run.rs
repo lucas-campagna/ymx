@@ -954,7 +954,7 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
             "-d",
             "--name",
             &container_name,
-            "-p", "3000:3000",
+            "-p", "3000:8080",
             "4teamwork/weasyprint",
         ])
         .output()
@@ -1048,7 +1048,7 @@ impl DockerBackend {
                 "-d",
                 "--name",
                 &container_name,
-                "-p", "3000:3000",
+                "-p", "3000:8080",
                 "4teamwork/weasyprint",
             ])
             .output()
