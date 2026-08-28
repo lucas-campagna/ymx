@@ -924,9 +924,10 @@ fn emit_pdf(
     }
 }
 
-/// Render HTML to PDF using Docker (pdfix/html-to-pdf image).
+/// Render HTML to PDF using Docker (4teamwork/weasyprint server).
 pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
     use std::fs;
+    use std::io::Write;
     use std::process::Command;
 
     let cwd = std::env::current_dir().map_err(|e| PdfError {
@@ -938,7 +939,6 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
     let mut file = fs::File::create(&html_path).map_err(|e| PdfError {
         message: e.to_string(),
     })?;
-    use std::io::Write;
     file.write_all(html.as_bytes()).map_err(|e| PdfError {
         message: e.to_string(),
     })?;
@@ -950,16 +950,8 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
         .args([
             "run",
             "--rm",
-            "-v",
-            &format!("{}:/data/", cwd.display()),
-            "-w",
-            "/data/",
-            "pdfix/html-to-pdf:latest",
-            "html-to-pdf",
-            "-i",
-            "index.html",
-            "-o",
-            "convert.pdf",
+            "-p", "3000:3000",
+            "4teamwork/weasyprint",
         ])
         .output()
         .map_err(|e| PdfError {
@@ -970,6 +962,35 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(PdfError {
             message: format!("docker exited with {}: {}", output.status, stderr),
+        });
+    }
+
+    // Wait for the WeasyPrint server to be ready (try curl once, sleep and retry if needed)
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    let curl_result = Command::new("curl")
+        .args(["-F", "html=@index.html", "http://localhost:3000", "-o", "convert.pdf"])
+        .current_dir(&cwd)
+        .output();
+
+    let curl_output = match curl_result {
+        Ok(output) => output,
+        Err(_e) => {
+            // Retry once after another second
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            Command::new("curl")
+                .args(["-F", "html=@index.html", "http://localhost:3000", "-o", "convert.pdf"])
+                .current_dir(&cwd)
+                .output()
+                .map_err(|e| PdfError {
+                    message: format!("curl failed: {}", e),
+                })?
+        }
+    };
+
+    if !curl_output.status.success() {
+        let stderr = String::from_utf8_lossy(&curl_output.stderr);
+        return Err(PdfError {
+            message: format!("curl failed with {}: {}", curl_output.status, stderr),
         });
     }
 
@@ -1006,14 +1027,8 @@ impl DockerBackend {
                 "-d",
                 "--name",
                 &container_name,
-                "-v",
-                &format!("{}:/data/", cwd.display()),
-                "-w",
-                "/data/",
-                "--entrypoint",
-                "sleep",
-                "pdfix/html-to-pdf:latest",
-                "infinity",
+                "-p", "3000:3000",
+                "4teamwork/weasyprint",
             ])
             .output()
             .map_err(|e| PdfError {
@@ -1042,7 +1057,7 @@ impl DockerBackend {
         let _ = std::fs::remove_file(&html_path);
         let _ = std::fs::remove_file(&pdf_path);
 
-        // Write HTML to volume and flush to disk before docker reads it
+        // Write HTML to disk for curl to upload
         let mut file = std::fs::File::create(&html_path).map_err(|e| PdfError {
             message: e.to_string(),
         })?;
@@ -1054,28 +1069,19 @@ impl DockerBackend {
             message: format!("failed to sync HTML file: {}", e),
         })?;
 
-        // Exec html-to-pdf inside the running container
-        let output = std::process::Command::new("docker")
-            .args([
-                "exec",
-                &self.container_name,
-                "/usr/html-to-pdf/venv/bin/python3",
-                "/usr/html-to-pdf/src/main.py",
-                "html-to-pdf",
-                "-i",
-                "index.html",
-                "-o",
-                "convert.pdf",
-            ])
+        // Use curl to POST HTML to the WeasyPrint server
+        let output = std::process::Command::new("curl")
+            .args(["-F", "html=@index.html", "http://localhost:3000", "-o", "convert.pdf"])
+            .current_dir(&self.cwd)
             .output()
             .map_err(|e| PdfError {
-                message: format!("docker exec failed: {}", e),
+                message: format!("curl failed: {}", e),
             })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(PdfError {
-                message: format!("html-to-pdf failed: {}", stderr),
+                message: format!("curl failed: {}", stderr),
             });
         }
 
@@ -2334,7 +2340,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // requires Docker running with pdfix/html-to-pdf image
+    #[ignore] // requires Docker running with 4teamwork/weasyprint image
     fn test_pdf_docker_backend_renders_valid_pdf() {
         use std::process::Command;
 
