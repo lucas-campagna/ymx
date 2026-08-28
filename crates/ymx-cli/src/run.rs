@@ -969,38 +969,49 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
         });
     }
 
-    // Wait for the WeasyPrint server to be ready.
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    // Wait for the WeasyPrint server to be ready — poll with curl, up to 10 seconds total.
+    let max_wait = std::time::Duration::from_secs(10);
+    let start = std::time::Instant::now();
+    let mut curl_output = None;
 
-    // Try curl; retry once after 1s if it fails.
-    let curl_result = Command::new("curl")
-        .args(["-F", "html=@index.html", "http://localhost:3000", "-o", "convert.pdf"])
-        .current_dir(&cwd)
-        .output();
+    // Initial wait to let the server initialize
+    std::thread::sleep(std::time::Duration::from_secs(5));
 
-    let curl_output = match curl_result {
-        Ok(output) => output,
-        Err(_e) => {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            Command::new("curl")
-                .args(["-F", "html=@index.html", "http://localhost:3000", "-o", "convert.pdf"])
-                .current_dir(&cwd)
-                .output()
-                .map_err(|e| PdfError {
-                    message: format!("curl failed: {}", e),
-                })?
+    while start.elapsed() < max_wait {
+        match Command::new("curl")
+            .args(["-F", "html=@index.html", "http://localhost:3000", "-o", "convert.pdf"])
+            .current_dir(&cwd)
+            .output()
+        {
+            Ok(output) => {
+                curl_output = Some(output);
+                break;
+            }
+            Err(_) => {
+                // Connection refused or reset — server not ready yet, wait and retry
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
         }
-    };
+    }
 
-    // Stop and remove the container.
+    // Stop and remove the container regardless of outcome.
     let _ = Command::new("docker")
         .args(["rm", "-f", &container_name])
         .output();
 
-    if !curl_output.status.success() {
-        let stderr = String::from_utf8_lossy(&curl_output.stderr);
+    let curl_out = match curl_output {
+        Some(o) => o,
+        None => {
+            return Err(PdfError {
+                message: "WeasyPrint server did not become ready within 10 seconds".to_string(),
+            });
+        }
+    };
+
+    if !curl_out.status.success() {
+        let stderr = String::from_utf8_lossy(&curl_out.stderr);
         return Err(PdfError {
-            message: format!("curl failed with {}: {}", curl_output.status, stderr),
+            message: format!("curl failed with {}: {}", curl_out.status, stderr),
         });
     }
 
