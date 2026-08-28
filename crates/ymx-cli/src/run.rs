@@ -946,6 +946,20 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
         message: format!("failed to sync HTML file: {}", e),
     })?;
 
+    // Clean up any stale container still holding port 3000
+    if let Ok(ids) = Command::new("docker")
+        .args(["ps", "--filter", "publish=3000", "-q"])
+        .output()
+    {
+        for id in String::from_utf8_lossy(&ids.stdout).lines() {
+            if !id.is_empty() {
+                let _ = Command::new("docker")
+                    .args(["rm", "-f", id])
+                    .output();
+            }
+        }
+    }
+
     // Start container in detached mode with a unique name so we can clean it up after.
     let container_name = format!("ymx-pdf-{}", std::process::id());
     let docker_start = Command::new("docker")
@@ -1040,6 +1054,20 @@ impl DockerBackend {
         let cwd = std::env::current_dir().map_err(|e| PdfError {
             message: e.to_string(),
         })?;
+
+        // Clean up any stale container still holding port 3000
+        if let Ok(ids) = std::process::Command::new("docker")
+            .args(["ps", "--filter", "publish=3000", "-q"])
+            .output()
+        {
+            for id in String::from_utf8_lossy(&ids.stdout).lines() {
+                if !id.is_empty() {
+                    let _ = std::process::Command::new("docker")
+                        .args(["rm", "-f", id])
+                        .output();
+                }
+            }
+        }
 
         // Start container in detached mode (no --rm so it stays running)
         let output = std::process::Command::new("docker")
