@@ -1,6 +1,6 @@
 {
   "name": "@lprett/ymx",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "YMX TypeScript/WASM library - compile YAML to JSON with JavaScript integration",
   "type": "module",
   "main": "./nodejs/ymx_web.js",
