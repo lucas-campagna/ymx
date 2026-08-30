@@ -1379,9 +1379,13 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
         RenderState::Error => {
             print!("\x1b[2J\x1b[H✗ ERROR");
             std::io::stdout().flush().ok();
+            if diags.is_empty() {
+                eprintln!(" (no diagnostics available)");
+            } else {
                 for diag in &diags {
                     eprintln!("{}", diag.render());
                 }
+            }
         }
     }
     if shutdown.load(Ordering::SeqCst) {
@@ -1430,8 +1434,12 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
                 RenderState::Error => {
                     print!("\x1b[2J\x1b[H✗ ERROR");
                     std::io::stdout().flush().ok();
-                    for diag in &diags {
-                        eprintln!("{}", diag.render());
+                    if diags.is_empty() {
+                        eprintln!(" (no diagnostics available)");
+                    } else {
+                        for diag in &diags {
+                            eprintln!("{}", diag.render());
+                        }
                     }
                 }
             }
