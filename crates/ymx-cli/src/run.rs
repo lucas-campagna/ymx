@@ -1391,7 +1391,7 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
     match state {
         RenderState::Success => {
             let label = format!(
-                "{} successfully compiled at {:.3}s",
+                "{} successfully compiled in {:.3}s",
                 watch_path.display(),
                 elapsed.as_secs_f64()
             );
@@ -1446,7 +1446,7 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
             match state {
                 RenderState::Success => {
                     let label = format!(
-                        "{} successfully compiled at {:.3}s",
+                        "{} successfully compiled in {:.3}s",
                         watch_path.display(),
                         elapsed.as_secs_f64()
                     );
