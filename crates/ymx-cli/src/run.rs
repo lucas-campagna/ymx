@@ -1110,6 +1110,28 @@ impl DockerBackend {
             message: format!("failed to sync HTML file: {}", e),
         })?;
 
+        // Wait for the WeasyPrint server to be ready — poll with curl, up to 10 seconds total.
+        let max_wait = std::time::Duration::from_secs(10);
+        let start = std::time::Instant::now();
+
+        // Initial wait to let the server initialize (container already running in watch mode)
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        while start.elapsed() < max_wait {
+            match std::process::Command::new("curl")
+                .args(["--connect-only", &format!("http://localhost:{}", self.port)])
+                .output()
+            {
+                Ok(output) if output.status.success() => {
+                    // Server is ready
+                    break;
+                }
+                _ => {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            }
+        }
+
         // Use curl to POST HTML to the WeasyPrint server
         let output = std::process::Command::new("curl")
             .args(["-F", "html=@index.html", &format!("http://localhost:{}", self.port), "-o", "convert.pdf"])
