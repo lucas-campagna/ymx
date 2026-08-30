@@ -1382,7 +1382,7 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
 
     // Run initial compile
     let start = Instant::now();
-    eprintln!("Compiling...");
+    eprintln!("Compiling {}...", watch_path.display());
     let (outcome, diags, _output) = run_single_compile(cli, docker_backend.as_ref());
     let elapsed = start.elapsed();
     let state = match outcome {
@@ -1438,7 +1438,7 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
             last_mtimes = current_mtimes;
 
             let start = Instant::now();
-            eprintln!("Compiling...");
+            eprintln!("Compiling {}...", watch_path.display());
             let (outcome, diags, _output) = run_single_compile(cli, docker_backend.as_ref());
             let elapsed = start.elapsed();
             let state = match outcome {
