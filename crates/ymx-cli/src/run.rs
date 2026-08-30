@@ -1287,6 +1287,18 @@ fn run_single_compile(
     }
 }
 
+/// Format input->output path string for watch mode messages.
+#[cfg(feature = "watch")]
+fn watch_msg_path(watch_path: &Path, cli: &ParsedCli) -> String {
+    let input = watch_path.display().to_string();
+    let output = cli
+        .output
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "stdout".to_string());
+    format!("{} -> {}", input, output)
+}
+
 /// Watch mode: runs the compile pipeline on every .yml/.yaml file change.
 /// Exits cleanly on SIGINT/SIGTERM (exit 0).
 #[cfg(feature = "watch")]
@@ -1382,7 +1394,7 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
 
     // Run initial compile
     let start = Instant::now();
-    eprintln!("Compiling {}...", watch_path.display());
+    eprintln!("{}: Compiling...", watch_msg_path(watch_path, cli));
     let (outcome, diags, _output) = run_single_compile(cli, docker_backend.as_ref());
     let elapsed = start.elapsed();
     let state = match outcome {
@@ -1392,8 +1404,8 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
     match state {
         RenderState::Success => {
             let label = format!(
-                "{} successfully compiled in {:.3}s",
-                watch_path.display(),
+                "{}: ✓ compiled in {:.3}s",
+                watch_msg_path(watch_path, cli),
                 elapsed.as_secs_f64()
             );
             print!("\x1b[2J\x1b[H{label}");
@@ -1438,7 +1450,7 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
             last_mtimes = current_mtimes;
 
             let start = Instant::now();
-            eprintln!("Compiling {}...", watch_path.display());
+            eprintln!("{}: Compiling...", watch_msg_path(watch_path, cli));
             let (outcome, diags, _output) = run_single_compile(cli, docker_backend.as_ref());
             let elapsed = start.elapsed();
             let state = match outcome {
@@ -1448,8 +1460,8 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
             match state {
                 RenderState::Success => {
                     let label = format!(
-                        "{} successfully compiled in {:.3}s",
-                        watch_path.display(),
+                        "{}: ✓ compiled in {:.3}s",
+                        watch_msg_path(watch_path, cli),
                         elapsed.as_secs_f64()
                     );
                     print!("\x1b[2J\x1b[H{label}");
