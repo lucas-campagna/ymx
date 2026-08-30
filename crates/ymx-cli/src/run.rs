@@ -1379,9 +1379,9 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
         RenderState::Error => {
             print!("\x1b[2J\x1b[H✗ ERROR");
             std::io::stdout().flush().ok();
-            for diag in &diags {
-                eprintln!("[{}] {}", diag.code, diag.message);
-            }
+                for diag in &diags {
+                    eprintln!("{}", diag.render());
+                }
         }
     }
     if shutdown.load(Ordering::SeqCst) {
@@ -1431,7 +1431,7 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
                     print!("\x1b[2J\x1b[H✗ ERROR");
                     std::io::stdout().flush().ok();
                     for diag in &diags {
-                        eprintln!("[{}] {}", diag.code, diag.message);
+                        eprintln!("{}", diag.render());
                     }
                 }
             }
