@@ -1394,7 +1394,7 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
 
     // Run initial compile
     let start = Instant::now();
-    print!("{}: Compiling...\n", watch_msg_path(watch_path, cli));
+    print!("\x1b[2J\x1b[H{}: Compiling...\n", watch_msg_path(watch_path, cli));
     std::io::stdout().flush().ok();
     let (outcome, diags, _output) = run_single_compile(cli, docker_backend.as_ref());
     let elapsed = start.elapsed();
@@ -1451,7 +1451,7 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
             last_mtimes = current_mtimes;
 
             let start = Instant::now();
-            print!("{}: Compiling...\n", watch_msg_path(watch_path, cli));
+            print!("\x1b[2J\x1b[H{}: Compiling...\n", watch_msg_path(watch_path, cli));
             std::io::stdout().flush().ok();
             let (outcome, diags, _output) = run_single_compile(cli, docker_backend.as_ref());
             let elapsed = start.elapsed();
