@@ -1001,24 +1001,12 @@ fn post_html_to_pdf(port: u16, html: &str, output_path: &Path) -> Result<(), Pdf
 /// Render HTML to PDF using Docker (4teamwork/weasyprint server).
 pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
     use std::fs;
-    use std::io::Write;
     use std::process::Command;
 
     let cwd = std::env::current_dir().map_err(|e| PdfError {
         message: e.to_string(),
     })?;
-    let html_path = cwd.join("index.html");
     let pdf_path = cwd.join("convert.pdf");
-
-    let mut file = fs::File::create(&html_path).map_err(|e| PdfError {
-        message: e.to_string(),
-    })?;
-    file.write_all(html.as_bytes()).map_err(|e| PdfError {
-        message: e.to_string(),
-    })?;
-    file.sync_all().map_err(|e| PdfError {
-        message: format!("failed to sync HTML file: {}", e),
-    })?;
 
     // Start container in detached mode with a unique name so we can clean it up after.
     let container_name = format!("ymx-pdf-{}", std::process::id());
@@ -1061,7 +1049,6 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
         message: format!("failed to read convert.pdf: {}", e),
     })?;
 
-    let _ = fs::remove_file(&html_path);
     let _ = fs::remove_file(&pdf_path);
 
     Ok(pdf_bytes)
@@ -1116,28 +1103,14 @@ impl DockerBackend {
 
     /// Render HTML to PDF using the running container.
     fn render(&self, html: &str) -> Result<Vec<u8>, PdfError> {
-        let html_path = self.cwd.join("index.html");
         let pdf_path = self.cwd.join("convert.pdf");
 
         // Remove any previous files
-        let _ = std::fs::remove_file(&html_path);
         let _ = std::fs::remove_file(&pdf_path);
-
-        // Write HTML to temp file (still needed for multipart form upload)
-        let mut file = std::fs::File::create(&html_path).map_err(|e| PdfError {
-            message: e.to_string(),
-        })?;
-        use std::io::Write;
-        file.write_all(html.as_bytes()).map_err(|e| PdfError {
-            message: e.to_string(),
-        })?;
-        file.sync_all().map_err(|e| PdfError {
-            message: format!("failed to sync HTML file: {}", e),
-        })?;
 
         // Wait for the WeasyPrint server to be ready, up to 10 seconds total.
         let max_wait = Duration::from_secs(10);
-        std::thread::sleep(Duration::from_secs(2));
+        // std::thread::sleep(Duration::from_secs(1));
         wait_for_server(self.port, max_wait)?;
 
         // POST HTML to the WeasyPrint server
@@ -1167,7 +1140,6 @@ impl DockerBackend {
         })?;
 
         // Clean up temp files
-        let _ = std::fs::remove_file(&html_path);
         let _ = std::fs::remove_file(&pdf_path);
 
         Ok(pdf_bytes)
