@@ -33,16 +33,15 @@
 //! 4. Otherwise `compile(&project, &opts)` — any diagnostic renders to
 //!    stderr and yields [`RunOutcome::Diagnostic`]; success hits [`emit`].
 
-use std::io::{IsTerminal, Write};
-use std::net::TcpListener;
+use std::io::{IsTerminal, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 #[cfg(feature = "watch")]
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-#[cfg(feature = "watch")]
-use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
 
@@ -940,6 +939,65 @@ fn find_available_port() -> Result<u16, PdfError> {
     }
 }
 
+/// Check if a server is ready to accept connections.
+fn check_server_ready(port: u16) -> bool {
+    TcpStream::connect(format!("localhost:{}", port)).is_ok()
+}
+
+/// Wait for the WeasyPrint server to be ready, polling with TCP connections.
+fn wait_for_server(port: u16, max_wait: Duration) -> Result<(), PdfError> {
+    let start = Instant::now();
+    while start.elapsed() < max_wait {
+        if check_server_ready(port) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Err(PdfError {
+        message: "Server did not become ready".to_string(),
+    })
+}
+
+/// POST HTML to the WeasyPrint server and save the PDF response.
+fn post_html_to_pdf(port: u16, html: &str, output_path: &Path) -> Result<(), PdfError> {
+    let mut stream = TcpStream::connect(format!("localhost:{}", port)).map_err(|e| PdfError {
+        message: format!("connection failed: {}", e),
+    })?;
+
+    stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
+
+    let boundary = "----YmXBoundary123";
+    let body = format!(
+        "--{}\r\nContent-Disposition: form-data; name=\"html\"; filename=\"index.html\"\r\nContent-Type: text/html\r\n\r\n{}\r\n--{}--\r\n",
+        boundary, html, boundary
+    );
+
+    let request = format!(
+        "POST / HTTP/1.1\r\nHost: localhost:{}\r\nUser-Agent: ymx\r\nConnection: close\r\nContent-Type: multipart/form-data; boundary={}\r\nContent-Length: {}\r\n\r\n{}",
+        port, boundary, body.len(), body
+    );
+
+    stream.write_all(request.as_bytes()).map_err(|e| PdfError {
+        message: format!("send failed: {}", e),
+    })?;
+
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).map_err(|e| PdfError {
+        message: format!("read failed: {}", e),
+    })?;
+
+    let response_str = String::from_utf8_lossy(&response);
+    if let Some(pos) = response_str.find("\r\n\r\n") {
+        let body = &response[pos + 4..];
+        std::fs::write(output_path, body).map_err(|e| PdfError {
+            message: format!("write failed: {}", e),
+        })?;
+        Ok(())
+    } else {
+        Err(PdfError { message: "Invalid HTTP response".to_string() })
+    }
+}
+
 /// Render HTML to PDF using Docker (4teamwork/weasyprint server).
 pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
     use std::fs;
@@ -986,51 +1044,18 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
         });
     }
 
-    // Wait for the WeasyPrint server to be ready — poll with curl, up to 10 seconds total.
-    let max_wait = std::time::Duration::from_secs(10);
-    let start = std::time::Instant::now();
-    let mut curl_output = None;
+    // Wait for the WeasyPrint server to be ready, up to 10 seconds total.
+    let max_wait = Duration::from_secs(10);
+    std::thread::sleep(Duration::from_secs(1));
+    wait_for_server(port, max_wait)?;
 
-    // Initial wait to let the server initialize
-    std::thread::sleep(std::time::Duration::from_secs(1));
-
-    while start.elapsed() < max_wait {
-        match Command::new("curl")
-            .args(["-F", "html=@index.html", &format!("http://localhost:{port}"), "-o", "convert.pdf"])
-            .current_dir(&cwd)
-            .output()
-        {
-            Ok(output) => {
-                curl_output = Some(output);
-                break;
-            }
-            Err(_) => {
-                // Connection refused or reset — server not ready yet, wait and retry
-                std::thread::sleep(std::time::Duration::from_secs(1));
-            }
-        }
-    }
+    // POST HTML to the WeasyPrint server
+    post_html_to_pdf(port, html, &pdf_path)?;
 
     // Stop and remove the container regardless of outcome.
     let _ = Command::new("docker")
         .args(["rm", "-f", &container_name])
         .output();
-
-    let curl_out = match curl_output {
-        Some(o) => o,
-        None => {
-            return Err(PdfError {
-                message: "WeasyPrint server did not become ready within 10 seconds".to_string(),
-            });
-        }
-    };
-
-    if !curl_out.status.success() {
-        let stderr = String::from_utf8_lossy(&curl_out.stderr);
-        return Err(PdfError {
-            message: format!("curl failed with {}: {}", curl_out.status, stderr),
-        });
-    }
 
     let pdf_bytes = fs::read(&pdf_path).map_err(|e| PdfError {
         message: format!("failed to read convert.pdf: {}", e),
@@ -1098,7 +1123,7 @@ impl DockerBackend {
         let _ = std::fs::remove_file(&html_path);
         let _ = std::fs::remove_file(&pdf_path);
 
-        // Write HTML to disk for curl to upload
+        // Write HTML to temp file (still needed for multipart form upload)
         let mut file = std::fs::File::create(&html_path).map_err(|e| PdfError {
             message: e.to_string(),
         })?;
@@ -1110,43 +1135,13 @@ impl DockerBackend {
             message: format!("failed to sync HTML file: {}", e),
         })?;
 
-        // Wait for the WeasyPrint server to be ready — poll with curl, up to 10 seconds total.
-        let max_wait = std::time::Duration::from_secs(10);
-        let start = std::time::Instant::now();
+        // Wait for the WeasyPrint server to be ready, up to 10 seconds total.
+        let max_wait = Duration::from_secs(10);
+        std::thread::sleep(Duration::from_secs(2));
+        wait_for_server(self.port, max_wait)?;
 
-        // Initial wait to let the server initialize (container already running in watch mode)
-        std::thread::sleep(std::time::Duration::from_secs(2));
-
-        while start.elapsed() < max_wait {
-            match std::process::Command::new("curl")
-                .args(["--connect-only", &format!("http://localhost:{}", self.port)])
-                .output()
-            {
-                Ok(output) if output.status.success() => {
-                    // Server is ready
-                    break;
-                }
-                _ => {
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                }
-            }
-        }
-
-        // Use curl to POST HTML to the WeasyPrint server
-        let output = std::process::Command::new("curl")
-            .args(["-F", "html=@index.html", &format!("http://localhost:{}", self.port), "-o", "convert.pdf"])
-            .current_dir(&self.cwd)
-            .output()
-            .map_err(|e| PdfError {
-                message: format!("curl failed: {}", e),
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(PdfError {
-                message: format!("curl failed: {}", stderr),
-            });
-        }
+        // POST HTML to the WeasyPrint server
+        post_html_to_pdf(self.port, html, &pdf_path)?;
 
         // Sync the directory to ensure container writes are flushed to the host volume
         let pdf_dir = pdf_path.parent().unwrap_or(std::path::Path::new("."));
