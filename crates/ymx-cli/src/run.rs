@@ -992,7 +992,7 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
     let mut curl_output = None;
 
     // Initial wait to let the server initialize
-    std::thread::sleep(std::time::Duration::from_secs(5));
+    std::thread::sleep(std::time::Duration::from_secs(1));
 
     while start.elapsed() < max_wait {
         match Command::new("curl")
