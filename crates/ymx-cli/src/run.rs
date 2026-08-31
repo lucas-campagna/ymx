@@ -37,11 +37,11 @@ use std::io::{IsTerminal, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{Duration, Instant};
 #[cfg(feature = "watch")]
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
 
@@ -994,7 +994,9 @@ fn post_html_to_pdf(port: u16, html: &str, output_path: &Path) -> Result<(), Pdf
         })?;
         Ok(())
     } else {
-        Err(PdfError { message: "Invalid HTTP response".to_string() })
+        Err(PdfError {
+            message: "Invalid HTTP response".to_string(),
+        })
     }
 }
 
@@ -1017,7 +1019,8 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
             "-d",
             "--name",
             &container_name,
-            "-p", &format!("{port}:8080"),
+            "-p",
+            &format!("{port}:8080"),
             "4teamwork/weasyprint",
         ])
         .output()
@@ -1034,11 +1037,14 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
 
     // Wait for the WeasyPrint server to be ready, up to 10 seconds total.
     let max_wait = Duration::from_secs(10);
-    std::thread::sleep(Duration::from_secs(1));
     wait_for_server(port, max_wait)?;
 
     // POST HTML to the WeasyPrint server
-    post_html_to_pdf(port, html, &pdf_path)?;
+    let mut count = 0;
+    while post_html_to_pdf(port, html, &pdf_path).is_err() && count < 10 {
+        std::thread::sleep(Duration::from_millis(500));
+        count += 1;
+    }
 
     // Stop and remove the container regardless of outcome.
     let _ = Command::new("docker")
@@ -1079,7 +1085,8 @@ impl DockerBackend {
                 "-d",
                 "--name",
                 &container_name,
-                "-p", &format!("{port}:8080"),
+                "-p",
+                &format!("{port}:8080"),
                 "4teamwork/weasyprint",
             ])
             .output()
@@ -1110,11 +1117,15 @@ impl DockerBackend {
 
         // Wait for the WeasyPrint server to be ready, up to 10 seconds total.
         let max_wait = Duration::from_secs(10);
-        // std::thread::sleep(Duration::from_secs(1));
+        // std::thread::sleep(Duration::from_millis(500));
         wait_for_server(self.port, max_wait)?;
 
         // POST HTML to the WeasyPrint server
-        post_html_to_pdf(self.port, html, &pdf_path)?;
+        let mut count = 0;
+        while post_html_to_pdf(self.port, html, &pdf_path).is_err() && count < 10 {
+            std::thread::sleep(Duration::from_millis(500));
+            count += 1;
+        }
 
         // Sync the directory to ensure container writes are flushed to the host volume
         let pdf_dir = pdf_path.parent().unwrap_or(std::path::Path::new("."));
@@ -1361,7 +1372,10 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
 
     // Run initial compile
     let start = Instant::now();
-    print!("\x1b[2J\x1b[H{}: Compiling...\n", watch_msg_path(watch_path, cli));
+    print!(
+        "\x1b[2J\x1b[H{}: Compiling...\n",
+        watch_msg_path(watch_path, cli)
+    );
     std::io::stdout().flush().ok();
     let (outcome, diags, _output) = run_single_compile(cli, docker_backend.as_ref());
     let elapsed = start.elapsed();
@@ -1418,7 +1432,10 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
             last_mtimes = current_mtimes;
 
             let start = Instant::now();
-            print!("\x1b[2J\x1b[H{}: Compiling...\n", watch_msg_path(watch_path, cli));
+            print!(
+                "\x1b[2J\x1b[H{}: Compiling...\n",
+                watch_msg_path(watch_path, cli)
+            );
             std::io::stdout().flush().ok();
             let (outcome, diags, _output) = run_single_compile(cli, docker_backend.as_ref());
             let elapsed = start.elapsed();
