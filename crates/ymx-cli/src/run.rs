@@ -1000,6 +1000,21 @@ fn post_html_to_pdf(port: u16, html: &str, output_path: &Path) -> Result<(), Pdf
     }
 }
 
+/// Wrap `post_html_to_pdf` with retry logic.
+fn try_post_html_to_pdf(
+    port: u16,
+    html: &str,
+    output_path: &Path,
+    max_retries: u32,
+) -> Result<(), PdfError> {
+    let mut count = 0;
+    while post_html_to_pdf(port, html, output_path).is_err() && count < max_retries {
+        std::thread::sleep(Duration::from_millis(500));
+        count += 1;
+    }
+    Ok(())
+}
+
 /// Render HTML to PDF using Docker (4teamwork/weasyprint server).
 pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
     use std::fs;
@@ -1040,11 +1055,7 @@ pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
     wait_for_server(port, max_wait)?;
 
     // POST HTML to the WeasyPrint server
-    let mut count = 0;
-    while post_html_to_pdf(port, html, &pdf_path).is_err() && count < 10 {
-        std::thread::sleep(Duration::from_millis(500));
-        count += 1;
-    }
+    try_post_html_to_pdf(port, html, &pdf_path, 10)?;
 
     // Stop and remove the container regardless of outcome.
     let _ = Command::new("docker")
@@ -1121,11 +1132,7 @@ impl DockerBackend {
         wait_for_server(self.port, max_wait)?;
 
         // POST HTML to the WeasyPrint server
-        let mut count = 0;
-        while post_html_to_pdf(self.port, html, &pdf_path).is_err() && count < 10 {
-            std::thread::sleep(Duration::from_millis(500));
-            count += 1;
-        }
+        try_post_html_to_pdf(self.port, html, &pdf_path, 10)?;
 
         // Sync the directory to ensure container writes are flushed to the host volume
         let pdf_dir = pdf_path.parent().unwrap_or(std::path::Path::new("."));
