@@ -6,9 +6,7 @@ comp:
   y?: 10
   out: $x
 _test:
-  comp:
-    args: {}
-    result: {x: 2, y: 10, out: 2}
+  comp: {x: 2, y: 10, out: 2}
   comp:
     args: {x: 99}
     result: {x: 99, y: 10, out: 99}
