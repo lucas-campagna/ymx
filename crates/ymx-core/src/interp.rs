@@ -127,29 +127,33 @@ fn scan_impl(src: &str, base: Span, shell_calls: bool) -> Result<Vec<Segment>, D
                                 break;
                             }
                         }
-                        if shell_calls && chars.peek().map(|(_, c)| *c) == Some('(') {
+                        if chars.peek().map(|(_, c)| *c) == Some('(') {
                             let rest = &src[start..];
                             match callsite::parse_prefix(rest) {
                                 Ok(Some((call, consumed))) => {
-                                    let span = span_at(base, src, start);
-                                    debug_assert_eq!(call.name, name);
-                                    let args_start = call.name.len() + 2;
-                                    let args_end = consumed.saturating_sub(1);
-                                    let args = rest[args_start..args_end].to_string();
-                                    let target = start + consumed;
-                                    while let Some(&(next_idx, _)) = chars.peek() {
-                                        if next_idx < target {
-                                            chars.next();
-                                        } else {
-                                            break;
+                                    let is_shell_call = shell_calls;
+                                    let has_named_args = call.args.iter().any(|a| a.key.is_some());
+                                    if is_shell_call || has_named_args {
+                                        let span = span_at(base, src, start);
+                                        debug_assert_eq!(call.name, name);
+                                        let args_start = call.name.len() + 2;
+                                        let args_end = consumed.saturating_sub(1);
+                                        let args = rest[args_start..args_end].to_string();
+                                        let target = start + consumed;
+                                        while let Some(&(next_idx, _)) = chars.peek() {
+                                            if next_idx < target {
+                                                chars.next();
+                                            } else {
+                                                break;
+                                            }
                                         }
+                                        segments.push(Segment::Call {
+                                            name: call.name,
+                                            args,
+                                            span,
+                                        });
+                                        continue;
                                     }
-                                    segments.push(Segment::Call {
-                                        name: call.name,
-                                        args,
-                                        span,
-                                    });
-                                    continue;
                                 }
                                 Ok(None) => {}
                                 Err((code, message)) => {
@@ -252,7 +256,27 @@ pub fn resolve(
     match segments {
         [Segment::Text(t)] => Ok(Value::string(t.clone())),
         [Segment::Arg { name, span }] => resolve_arg(name, *span, scope),
-        [Segment::Math { src, .. }] => engine.eval(src, scope),
+        [Segment::Math { src, span }] => {
+            // Check if the math source is a shell-style call with named arguments
+            // (e.g., `b(x=12, y=34)`). These cannot be parsed by the math engine
+            // because `=` is not a math token. Route them through resolve_shell_call.
+            // Component calls with positional or no args can be handled by engine.eval.
+            let with_dollar = format!("${src}");
+            if let Ok(Some((call, consumed))) = callsite::parse_prefix(&with_dollar) {
+                if consumed == with_dollar.len() && call.args.iter().any(|a| a.key.is_some()) {
+                    // Named arguments present - route through shell_call hook.
+                    let v = scope.invoke_shell(&call, *span)?;
+                    // If the result is a string, re-evaluate it as math
+                    if let Value::String(s) = &v {
+                        return engine.eval(s, scope);
+                    }
+                    return render_into_text(&v, scope, *span).map(Value::string);
+                }
+            }
+            engine
+                .eval(src, scope)
+                .or_else(|_| resolve_named_arg_math(src, scope, *span, engine))
+        }
         [Segment::Call { name, args, span }] => {
             Ok(Value::string(resolve_shell_call(name, args, *span, scope)?))
         }
@@ -271,7 +295,10 @@ pub fn resolve(
                         out.push_str(&render_into_text(&v, scope, *span)?);
                     }
                     Segment::Math { src, span } => {
-                        let v = engine.eval(src, scope)?;
+                        let v = match engine.eval(src, scope) {
+                            Ok(v) => v,
+                            Err(_) => resolve_named_arg_math(src, scope, *span, engine)?,
+                        };
                         out.push_str(&render_into_text(&v, scope, *span)?);
                     }
                     Segment::Call { name, args, span } => {
@@ -311,6 +338,16 @@ pub fn resolve_shell(
                 out.push_str(&render_into_text(&v, scope, *span)?);
             }
             Segment::Math { src, span } => {
+                // Check if the math source is a shell-style call with named arguments.
+                let with_dollar = format!("${src}");
+                if let Ok(Some((call, consumed))) = callsite::parse_prefix(&with_dollar) {
+                    if consumed == with_dollar.len() && call.args.iter().any(|a| a.key.is_some()) {
+                        // Named arguments present - route through shell_call hook.
+                        let v = scope.invoke_shell(&call, *span)?;
+                        out.push_str(&render_into_text(&v, scope, *span)?);
+                        continue;
+                    }
+                }
                 let v = engine.eval(src, scope)?;
                 out.push_str(&render_into_text(&v, scope, *span)?);
             }
@@ -450,6 +487,59 @@ fn span_at(base: Span, src: &str, offset: usize) -> Span {
             }
         });
     Span { line, col }
+}
+
+/// Try to evaluate a math expression that may contain named-arg calls
+/// (e.g. `b(x=12, y=34) + b(x=12, y=34)`). The math engine can't parse
+/// `=` tokens, so we pre-evaluate each named-arg call via invoke_shell
+/// and substitute the text results back into the expression.
+fn resolve_named_arg_math(
+    src: &str,
+    scope: &Scope<'_>,
+    span: Span,
+    engine: &dyn MathEngine,
+) -> Result<Value, Diagnostic> {
+    let mut result = String::with_capacity(src.len());
+    let bytes = src.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        let is_dollar = bytes[i] == b'$';
+        let name_start = if is_dollar { i + 1 } else { i };
+
+        if name_start < bytes.len()
+            && (bytes[name_start].is_ascii_alphabetic() || bytes[name_start] == b'_')
+        {
+            let mut j = name_start;
+            while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                j += 1;
+            }
+
+            if j < bytes.len() && bytes[j] == b'(' {
+                let call_src = &src[i..];
+                let with_dollar = if is_dollar {
+                    call_src.to_string()
+                } else {
+                    format!("${call_src}")
+                };
+
+                if let Ok(Some((call, consumed))) = callsite::parse_prefix(&with_dollar) {
+                    if call.args.iter().any(|a| a.key.is_some()) {
+                        let v = scope.invoke_shell(&call, span)?;
+                        let text = render_into_text(&v, scope, span)?;
+                        result.push_str(&text);
+                        i += if is_dollar { consumed } else { consumed - 1 };
+                        continue;
+                    }
+                }
+            }
+        }
+
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+
+    engine.eval(&result, scope)
 }
 
 /// A syntax-error diagnostic (`E010`) for a scan failure.

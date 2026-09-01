@@ -1,3 +1,10 @@
-main: $b(x=12, y=34)
+direct_call: $b(x=12, y=34)
+inside_call: ${b(x=12, y=34)}
+direct_call_two: $b(x=12, y=34) + $b(x=12, y=34)
+inside_call_two: ${b(x=12, y=34) + b(x=12, y=34)}
 b: $x + $y
-_test: "12 + 34"
+_test: 
+  direct_call: "12 + 34"
+  inside_call: 46
+  direct_call_two: "12 + 34 + 12 + 34"
+  inside_call_two: 92

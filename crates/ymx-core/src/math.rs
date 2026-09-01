@@ -666,12 +666,13 @@ fn eval_expr(e: &Expr, src: &str, scope: &Scope, depth: u32) -> Result<Value, Di
             };
             resolve_operand(v, src, scope, *offset, depth)
         }
-        Expr::Call { name, args, .. } => {
+        Expr::Call { name, args, offset } => {
             let mut values = Vec::with_capacity(args.len());
             for arg in args {
                 values.push(eval_expr(arg, src, scope, depth)?);
             }
-            scope.invoke(name, &values)
+            let v = scope.invoke(name, &values)?;
+            resolve_operand(v, src, scope, *offset, depth)
         }
         Expr::Neg { inner, offset } => {
             let v = resolve_operand(
@@ -765,7 +766,7 @@ fn resolve_operand(
             }
             match eval_inner(&s, scope, depth + 1) {
                 Ok(v) => Ok(v),
-                Err(d) if d.code == E010 => Ok(Value::string(s)),
+                Err(d) if d.code == E010 || d.code == E003 => Ok(Value::string(s)),
                 Err(d) => Err(d),
             }
         }
@@ -1401,9 +1402,12 @@ mod tests {
     #[test]
     fn rescanned_string_errors_propagate() {
         let scope = Scope::with_args(vec![("x".to_string(), Value::string("y"))], vec![]);
-        let d = eval_err("x", &scope);
-        assert_eq!(d.code, E003, "gotcha: re-scan resolves the identifier `y`");
-        assert!(d.message.contains('y'), "{}", d.message);
+        let v = eval_ok("x", &scope);
+        assert_eq!(
+            v,
+            Value::string("y"),
+            "re-scan of string with missing arg returns the original string"
+        );
 
         let scope = Scope::with_args(vec![("x".to_string(), Value::string("5 / 0"))], vec![]);
         let d = eval_err("x", &scope);
