@@ -8,4 +8,6 @@ caller:
   from: _callee
   x: 99
 _test:
-  caller: {x: 99, y: 20}
+  caller:
+    x: 99
+    y: 20

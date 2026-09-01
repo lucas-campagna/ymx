@@ -2,5 +2,8 @@ comp:
   out: $sh{echo nope}
 _test:
   comp:
-    args: {}
-    result: {out: {exit_code: 0, stdout: "nope\n", stderr: ""}}
+    out:
+      exit_code: 0
+      stdout: "nope\n"
+      stderr: ""
+      

@@ -8,5 +8,9 @@ comp:
 _test:
   comp: {x: 2, y: 10, out: 2}
   comp:
-    args: {x: 99}
-    result: {x: 99, y: 10, out: 99}
+    args:
+      x: 99
+    result:
+      x: 99
+      y: 10
+      out: 99

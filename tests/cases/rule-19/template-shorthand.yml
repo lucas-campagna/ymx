@@ -1,9 +1,10 @@
 $box:
   name$sh: echo $name
+
 box_call:
   $box:
     name: world
+
 _test:
   box_call:
-    args: {}
     error: E010

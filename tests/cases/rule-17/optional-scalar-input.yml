@@ -6,4 +6,6 @@ _callee:
 caller:
   from: _callee
 _test:
-  caller: {x: 10, y: 20}
+  caller:
+    x: 10
+    y: 20

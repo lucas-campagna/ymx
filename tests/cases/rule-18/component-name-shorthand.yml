@@ -9,8 +9,13 @@ add$:
 
 _test:
   comp:
-    args: {x: 3, y: 5}
-    result: {a: 8}
+    args:
+      x: 3
+      y: 5
+    result:
+      a: 8
   add:
-    args: {x: 3, y: 5}
+    args:
+      x: 3
+      y: 5
     result: 8

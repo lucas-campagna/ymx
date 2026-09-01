@@ -9,7 +9,5 @@ comp_no_arg:
 comp:
   x?$: "2 + 3"
 _test:
-  comp_with_arg:
-    result: {x: 99}
-  comp_no_arg:
-    result: {x: 5}
+  comp_with_arg: {x: 99}
+  comp_no_arg: {x: 5}

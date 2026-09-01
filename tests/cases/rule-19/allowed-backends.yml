@@ -3,6 +3,4 @@ _ymx:
 comp:
   out: $sh{echo ok}
 _test:
-  comp:
-    args: {}
-    result: {out: {exit_code: 0, stdout: "ok\n", stderr: ""}}
+  comp: {out: {exit_code: 0, stdout: "ok\n", stderr: ""}}

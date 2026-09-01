@@ -17,21 +17,12 @@ unknown:
 non_scalar:
   out: $sh{echo $obj()}
 _test:
-  positional:
-    args: {}
-    result: {out: {exit_code: 0, stdout: "46\n", stderr: ""}}
-  named:
-    args: {}
-    result: {out: {exit_code: 0, stdout: "102\n", stderr: ""}}
-  no_args:
-    args: {}
-    result: {out: {exit_code: 0, stdout: "ready\n", stderr: ""}}
+  positional: {out: {exit_code: 0, stdout: "46\n", stderr: ""}}
+  named: {out: {exit_code: 0, stdout: "102\n", stderr: ""}}
+  no_args: {out: {exit_code: 0, stdout: "ready\n", stderr: ""}}
   unknown:
-    args: {}
     error: E002
   non_scalar:
-    args: {}
     error: E011
   recurse:
-    args: {}
     error: E008

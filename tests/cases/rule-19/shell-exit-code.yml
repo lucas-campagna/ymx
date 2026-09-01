@@ -2,9 +2,5 @@ main$sh: "exit 1"
 test_with_template$sh: "echo 123abc"
 $test_with_template: $stdout
 _test:
-  main:
-    args: {}
-    result: {exit_code: 1, stdout: "", stderr: ""}
-  test_with_template:
-    args: {}
-    result: "123abc\n"
+  main: {exit_code: 1, stdout: "", stderr: ""}
+  test_with_template: "123abc\n"

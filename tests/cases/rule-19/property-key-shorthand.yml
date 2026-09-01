@@ -2,5 +2,7 @@ comp:
   main$sh: echo hi
 _test:
   comp:
-    args: {}
-    result: {main: {exit_code: 0, stdout: "hi\n", stderr: ""}}
+    main:
+      exit_code: 0
+      stdout: "hi\n"
+      stderr: ""

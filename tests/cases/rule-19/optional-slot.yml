@@ -3,11 +3,12 @@ with_pos:
   0: 5
 without_pos:
   from: comp
+with_pos_shortcut:
+  comp: 5
 comp:
   0?: 99
   out: $0
 _test:
-  with_pos:
-    result: {0: 5, out: 5}
-  without_pos:
-    result: {0: 99, out: 99}
+  with_pos: {0: 5, out: 5}
+  without_pos: {0: 99, out: 99}
+  with_pos_shortcut: {0: 5, out: 5}
