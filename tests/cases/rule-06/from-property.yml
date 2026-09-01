@@ -4,5 +4,4 @@ CompA:
   y: 34
 CompB: $x + $y
 _test:
-  CompA:
-    result: "12 + 34"
+  CompA: "12 + 34"

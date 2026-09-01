@@ -2,5 +2,4 @@ a:
   from: b
 b: 123
 _test:
-  a:
-    result: 123
+  a: 123
