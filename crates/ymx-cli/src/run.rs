@@ -744,13 +744,20 @@ fn run_test_branch(project: &Project, opts: &Options) -> RunOutcome {
     }
     let results = run_tests(project, opts, Some(&opts.entry));
     let total = results.len();
-    let mut passed = 0usize;
-    for result in &results {
-        if result.passed {
-            passed += 1;
-            println!("PASS {}", result.test.target);
-        } else {
-            println!("FAIL {} {}", result.test.target, diff(result));
+    let passed = results.iter().filter(|r| r.passed).count();
+    let failed = total - passed;
+
+    if failed > 0 {
+        for result in &results {
+            if !result.passed {
+                println!("FAIL {} {}", result.test.target, diff(result));
+            }
+        }
+    } else {
+        for result in &results {
+            if result.passed {
+                println!("PASS {}", result.test.target);
+            }
         }
     }
     println!("PASS: {passed}/{total}");
