@@ -7,6 +7,4 @@ comp:
   float$: 2.5
   from_string$: "3"
 _test:
-  comp:
-    args: {}
-    result: {int: 1, float: 2.5, from_string: 3}
+  comp: {int: 1, float: 2.5, from_string: 3}
