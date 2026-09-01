@@ -562,6 +562,11 @@ fn build_error_code(entry_file: &Path) -> Option<String> {
 }
 
 /// Handle extraction error for recursive tests, updating counters and printing results.
+struct TestLine {
+    passed: bool,
+    output: String,
+}
+
 fn handle_extract_error(
     relpath: &str,
     diags: &[Diagnostic],
@@ -569,26 +574,33 @@ fn handle_extract_error(
     total_tests: &mut usize,
     total_passed: &mut usize,
     overall_success: &mut bool,
-) {
+) -> Option<TestLine> {
     if let Some(code) = expected_code {
         if diags.iter().any(|d| d.code == code) {
-            println!("PASS {}: _build_error", relpath);
             *total_tests += 1;
             *total_passed += 1;
+            Some(TestLine {
+                passed: true,
+                output: format!("PASS {}: _build_error", relpath),
+            })
         } else {
             let actual_code = diags
                 .first()
                 .map(|d| d.code.to_string())
                 .unwrap_or_default();
-            println!(
-                "FAIL {}: _build_error mismatch (expected {}, got {})",
-                relpath, code, actual_code
-            );
             *total_tests += 1;
             *overall_success = false;
+            Some(TestLine {
+                passed: false,
+                output: format!(
+                    "FAIL {}: _build_error mismatch (expected {}, got {})",
+                    relpath, code, actual_code
+                ),
+            })
         }
     } else {
         eprintln!("ymx: warning: {}: {}", relpath, diags[0].message);
+        None
     }
 }
 
@@ -607,6 +619,7 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
     let mut total_passed = 0usize;
     let mut total_tests = 0usize;
     let mut overall_success = true;
+    let mut lines_to_print: Vec<TestLine> = Vec::new();
 
     for entry_file in &roots {
         let relpath = entry_file
@@ -621,20 +634,26 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
             Err(diags) => {
                 if let Some(ref expected_code) = build_error {
                     if diags.iter().any(|d| d.code == *expected_code) {
-                        println!("PASS {}: _build_error", relpath);
                         total_tests += 1;
                         total_passed += 1;
+                        lines_to_print.push(TestLine {
+                            passed: true,
+                            output: format!("PASS {}: _build_error", relpath),
+                        });
                     } else {
                         let actual_code = diags
                             .first()
                             .map(|d| d.code.to_string())
                             .unwrap_or_default();
-                        println!(
-                            "FAIL {}: _build_error mismatch (expected {}, got {})",
-                            relpath, expected_code, actual_code
-                        );
                         total_tests += 1;
                         overall_success = false;
+                        lines_to_print.push(TestLine {
+                            passed: false,
+                            output: format!(
+                                "FAIL {}: _build_error mismatch (expected {}, got {})",
+                                relpath, expected_code, actual_code
+                            ),
+                        });
                     }
                 } else {
                     eprintln!("ymx: warning: {}: {}", relpath, diags[0].message);
@@ -670,26 +689,30 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
                     match extract_options(&project, &fallback_overrides) {
                         Ok(o) => o,
                         Err(diags) => {
-                            handle_extract_error(
+                            if let Some(line) = handle_extract_error(
                                 &relpath,
                                 &diags,
                                 build_error.as_deref(),
                                 &mut total_tests,
                                 &mut total_passed,
                                 &mut overall_success,
-                            );
+                            ) {
+                                lines_to_print.push(line);
+                            }
                             continue;
                         }
                     }
                 } else {
-                    handle_extract_error(
+                    if let Some(line) = handle_extract_error(
                         &relpath,
                         &diags,
                         build_error.as_deref(),
                         &mut total_tests,
                         &mut total_passed,
                         &mut overall_success,
-                    );
+                    ) {
+                        lines_to_print.push(line);
+                    }
                     continue;
                 }
             }
@@ -710,19 +733,30 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
         let results = run_tests(&project, &opts, Some(&opts.entry));
         total_tests += results.len();
 
-        let has_failure = results.iter().any(|r| !r.passed);
-
         for result in &results {
             if result.passed {
                 total_passed += 1;
-                if !has_failure {
-                    println!("PASS {}: {}", relpath, result.test.target);
-                }
+                lines_to_print.push(TestLine {
+                    passed: true,
+                    output: format!("PASS {}: {}", relpath, result.test.target),
+                });
             } else {
                 overall_success = false;
-                println!("FAIL {}: {} {}", relpath, result.test.target, diff(result));
+                lines_to_print.push(TestLine {
+                    passed: false,
+                    output: format!("FAIL {}: {} {}", relpath, result.test.target, diff(result)),
+                });
             }
         }
+    }
+
+    let any_failure = lines_to_print.iter().any(|l| !l.passed);
+
+    for line in &lines_to_print {
+        if any_failure && line.passed {
+            continue;
+        }
+        println!("{}", line.output);
     }
 
     println!(
