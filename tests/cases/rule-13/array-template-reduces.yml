@@ -7,5 +7,4 @@ $a:
   - ${x + y}
   - $x + $y < $last
 _test:
-  a:
-    result: "1 + 2 < 6"
+  a: "1 + 2 < 6"

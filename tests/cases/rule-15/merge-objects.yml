@@ -8,10 +8,10 @@ g: $merge({x:1, y:0}, ${b()})
 h: $merge(${a()}, {y:2, z:3})
 i: $merge({x:1, y:0}, {y:2, z:3})
 _test:
-  c: {result: {x: 1, y: 2, z: 3}}
-  d: {result: {x: 1, y: 2, z: 3}}
-  e: {result: {x: 1, y: 2, z: 3}}
-  f: {result: {x: 1, y: 2, z: 3}}
-  g: {result: {x: 1, y: 2, z: 3}}
-  h: {result: {x: 1, y: 2, z: 3}}
-  i: {result: {x: 1, y: 2, z: 3}}
+  c: {x: 1, y: 2, z: 3}
+  d: {x: 1, y: 2, z: 3}
+  e: {x: 1, y: 2, z: 3}
+  f: {x: 1, y: 2, z: 3}
+  g: {x: 1, y: 2, z: 3}
+  h: {x: 1, y: 2, z: 3}
+  i: {x: 1, y: 2, z: 3}

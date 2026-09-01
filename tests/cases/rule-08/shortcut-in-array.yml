@@ -4,7 +4,5 @@ direct:
 in_array:
   - comp: 1
 _test:
-  direct:
-    result: 2
-  in_array:
-    result: [2]
+  direct: 2
+  in_array: [2]

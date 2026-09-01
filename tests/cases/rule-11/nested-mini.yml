@@ -9,5 +9,4 @@ mini_top:
       a:
         from: five
 _test:
-  mini_top:
-    result: {mini: 5}
+  mini_top: {mini: 5}
