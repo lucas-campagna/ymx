@@ -676,6 +676,8 @@ impl<'a> Resolver<'a> {
         } else {
             &def.full_name
         };
+        let bare_name = bare_name.strip_suffix('?').unwrap_or(bare_name);
+        let bare_name = bare_name.strip_suffix('$').unwrap_or(bare_name);
         let name = format!("${}", bare_name);
         // Look up templates in the chain: `$comp3`, `$comp3$`, `$comp3?`, `$comp3$?`.
         let tpl = self
@@ -906,6 +908,8 @@ impl<'a> Resolver<'a> {
         } else {
             &def.full_name
         };
+        let bare_name = bare_name.strip_suffix('?').unwrap_or(bare_name);
+        let bare_name = bare_name.strip_suffix('$').unwrap_or(bare_name);
         let name = format!("${}", bare_name);
         let tpl = self
             .lookup_template(&ns, &name, def.file)
