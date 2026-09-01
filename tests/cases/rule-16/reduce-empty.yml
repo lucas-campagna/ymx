@@ -3,7 +3,5 @@ empty: []
 c: $reduce($adder, ${empty()})
 d: $reduce($adder, $empty())
 _test:
-  c:
-    result: null
-  d:
-    result: null
+  c: null
+  d: null
