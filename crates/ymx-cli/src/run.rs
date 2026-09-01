@@ -710,10 +710,14 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
         let results = run_tests(&project, &opts, Some(&opts.entry));
         total_tests += results.len();
 
+        let has_failure = results.iter().any(|r| !r.passed);
+
         for result in &results {
             if result.passed {
                 total_passed += 1;
-                println!("PASS {}: {}", relpath, result.test.target);
+                if !has_failure {
+                    println!("PASS {}: {}", relpath, result.test.target);
+                }
             } else {
                 overall_success = false;
                 println!("FAIL {}: {} {}", relpath, result.test.target, diff(result));
