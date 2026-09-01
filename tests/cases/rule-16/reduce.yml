@@ -5,7 +5,5 @@ items:
 c: $reduce($adder, ${items()})
 d: $reduce($adder, $items())
 _test:
-  c:
-    result: 8
-  d:
-    result: 8
+  c: 8
+  d: 8

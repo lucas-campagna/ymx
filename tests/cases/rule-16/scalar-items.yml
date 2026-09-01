@@ -6,7 +6,5 @@ items:
 c: $map($step, ${items()})
 d: $map($step, $items())
 _test:
-  c:
-    result: [1 + 10, 2 + 10, 3 + 10]
-  d:
-    result: [1 + 10, 2 + 10, 3 + 10]
+  c: [1 + 10, 2 + 10, 3 + 10]
+  d: [1 + 10, 2 + 10, 3 + 10]
