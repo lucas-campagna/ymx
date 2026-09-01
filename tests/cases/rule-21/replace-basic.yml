@@ -2,9 +2,9 @@
 ---
 main: $replace("hello world", "world", "rust")
 _test:
-  main: {result: "hello rust"}
-  all: {result: "bbbb"}
-  none: {result: "abc"}
+  main: "hello rust"
+  all: "bbbb"
+  none: "abc"
 
 all: $replace("aaaa", "a", "b")
 none: $replace("abc", "x", "y")

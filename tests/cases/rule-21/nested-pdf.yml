@@ -8,10 +8,5 @@ outer:
 
 _test:
   outer:
-    result:
-      from: div
-      class: container
-      children:
-        from: div
-        class: inner
-        children: Nested content here
+    format: html
+    result: "<div class=\"container\"><div class=\"inner\">Nested content here</div></div>"

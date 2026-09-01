@@ -1,14 +1,14 @@
 # tests/cases/rule-21/math-aggregates.yml
 ---
 _test:
-  sum_main: {result: 6}
-  sum_empty: {result: 0}
-  avg_main: {result: 2.0}
-  avg_empty: {result: null}
-  min_main: {result: 1}
-  max_main: {result: 3}
-  min_empty: {result: null}
-  max_empty: {result: null}
+  sum_main: 6
+  sum_empty: 0
+  avg_main: 2.0
+  avg_empty: null
+  min_main: 1
+  max_main: 3
+  min_empty: null
+  max_empty: null
   sum_bad: {error: E011}
 
 sum_main: $sum([1,2,3])

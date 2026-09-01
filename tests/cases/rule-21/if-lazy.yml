@@ -1,8 +1,8 @@
 # tests/cases/rule-21/if-lazy.yml
 ---
 _test:
-  if_true: {result: "yes"}
-  if_false: {result: "no"}
+  if_true: "yes"
+  if_false: "no"
   if_null: {error: E011}
   if_zero: {error: E011}
   if_bad_cond: {error: E011}

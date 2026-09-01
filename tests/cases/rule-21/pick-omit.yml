@@ -1,22 +1,19 @@
 # tests/cases/rule-21/pick-omit.yml
 ---
-pick_main: $pick({a:1,b:2,c:3}, ["a","c"])
 _test:
   pick_main:
-    result:
-      a: 1
-      c: 3
-  pick_missing:
-    result: {}
+    a: 1
+    c: 3
+  pick_missing: {}
   omit_main:
-    result:
-      a: 1
-      c: 3
+    a: 1
+    c: 3
   bad_pick:
     error: E011
   bad_omit:
     error: E011
 
+pick_main: $pick({a:1,b:2,c:3}, ["a","c"])
 pick_missing: $pick({a:1}, ["nonexistent"])
 omit_main: $omit({a:1,b:2,c:3}, ["b"])
 bad_pick: $pick(123, [])

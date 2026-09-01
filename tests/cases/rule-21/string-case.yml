@@ -1,10 +1,10 @@
 # tests/cases/rule-21/string-case.yml
 ---
 _test:
-  up: {result: "HELLO"}
-  down: {result: "hello"}
-  trim_hello: {result: "hello"}
-  trim_no_ws: {result: "hello"}
+  up: "HELLO"
+  down: "hello"
+  trim_hello: "hello"
+  trim_no_ws: "hello"
 
 up: $upper("hello")
 down: $lower("HELLO")

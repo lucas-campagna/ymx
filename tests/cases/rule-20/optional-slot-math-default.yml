@@ -5,13 +5,14 @@
 comp_with_pos:
   from: comp
   0: 99
+
 comp_no_pos:
   from: comp
+
 comp:
   0?$: "2 + 3"
   out: $0
+
 _test:
-  comp_with_pos:
-    result: {0: 99, out: 99}
-  comp_no_pos:
-    result: {0: 5, out: 5}
+  comp_with_pos: {0: 99, out: 99}
+  comp_no_pos: {0: 5, out: 5}

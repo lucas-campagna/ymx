@@ -1,8 +1,8 @@
 # tests/cases/rule-21/filter-basic.yml
 ---
 _test:
-  main: {result: [1,2,3,4]}
-  empty: {result: []}
+  main: [1,2,3,4]
+  empty: []
   bad_callable: {error: E011}
   bad_array: {error: E011}
 

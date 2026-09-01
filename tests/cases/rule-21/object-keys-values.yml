@@ -1,12 +1,12 @@
 # tests/cases/rule-21/object-keys-values.yml
 ---
-k: $keys({b:2,a:1})
 _test:
-  k: {result: ["b","a"]}
-  v: {result: [2,1]}
+  k: ["b","a"]
+  v: [2,1]
   bad_keys: {error: E011}
   bad_values: {error: E011}
 
+k: $keys({b:2,a:1})
 v: $values({b:2,a:1})
 bad_keys: $keys("not object")
 bad_values: $values(123)

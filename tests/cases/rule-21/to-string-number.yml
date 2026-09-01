@@ -1,13 +1,13 @@
 # tests/cases/rule-21/to-string-number.yml
 ---
 _test:
-  to_s_int: {result: "123"}
-  to_s_float: {result: "2.5"}
-  to_s_null: {result: "null"}
-  to_n_int: {result: 42}
-  to_n_float: {result: 3.14}
-  to_n_bad: {result: null}
-  to_n_pass: {result: 123}
+  to_s_int: "123"
+  to_s_float: "2.5"
+  to_s_null: "null"
+  to_n_int: 42
+  to_n_float: 3.14
+  to_n_bad: null
+  to_n_pass: 123
 
 to_s_int: $to_string(123)
 to_s_float: $to_string(2.5)

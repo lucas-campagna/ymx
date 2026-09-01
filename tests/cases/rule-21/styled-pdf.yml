@@ -6,8 +6,5 @@ styled:
 
 _test:
   styled:
-    result:
-      from: div
-      class: "btn primary large"
-      style: "color: blue; font-size: 14px; margin: 10px"
-      children: Styled content
+    format: html
+    result: "<div class=\"btn primary large\" style=\"color: blue; font-size: 14px; margin: 10px\">Styled content</div>"

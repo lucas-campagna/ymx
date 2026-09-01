@@ -3,6 +3,4 @@
 # Equivalent to: main: $sh{echo hello}
 main$sh: echo hello
 _test:
-  main:
-    args: {}
-    result: {exit_code: 0, stdout: "hello\n", stderr: ""}
+  main: {exit_code: 0, stdout: "hello\n", stderr: ""}

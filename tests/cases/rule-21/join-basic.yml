@@ -2,10 +2,10 @@
 ---
 main: $join(["a","b","c"], "-")
 _test:
-  main: {result: "a-b-c"}
-  empty_arr: {result: ""}
-  empty_delim: {result: "hello"}
-  single: {result: "a"}
+  main: "a-b-c"
+  empty_arr: ""
+  empty_delim: "hello"
+  single: "a"
 
 empty_arr: $join([], "x")
 empty_delim: $join(["hello"], "")

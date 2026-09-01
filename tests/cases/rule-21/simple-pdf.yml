@@ -4,6 +4,5 @@ main:
 
 _test:
   main:
-    result:
-      from: div
-      children: Hello PDF World
+    format: html
+    result: <div>Hello PDF World</div>

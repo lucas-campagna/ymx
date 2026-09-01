@@ -1,13 +1,15 @@
 _test:
   root:
     format: html
-    result: <html><body><button>count 1</button><button>count 2</button></body></html>
+    result: <html><body><button>count 1</button><button>count 2</button><button>count 3</button></body></html>
 
 root:
   html:
     body:
-      - $my_button("count 1")
-      - $my_button("count 2")
+      - my_button: count 1
+      - from: my_button
+        0: count 2
+      - $my_button("count 3")
 
 my_button:
   button: $0

@@ -2,28 +2,19 @@
 ---
 _test:
   entries_main:
-    result:
-      - key: b
-        value: 2
-      - key: a
-        value: 1
+    - key: b
+      value: 2
+    - key: a
+      value: 1
   from_entries_main:
-    result:
-      a: 1
-      b: 2
-  from_entries_dup:
-    result:
-      a: 2
-  from_entries_empty:
-    result: {}
-  from_entries_bad_key:
-    error: E011
-  from_entries_missing_key:
-    error: E011
-  bad_entries:
-    error: E011
-  bad_from_entries:
-    error: E011
+    a: 1
+    b: 2
+  from_entries_dup: {a: 2}
+  from_entries_empty: {}
+  from_entries_bad_key: {error: E011}
+  from_entries_missing_key: {error: E011}
+  bad_entries: {error: E011}
+  bad_from_entries: {error: E011}
 
 entries_main: $entries({b:2,a:1})
 from_entries_main: $from_entries([{key:"a",value:1},{key:"b",value:2}])

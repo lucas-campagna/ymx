@@ -1,9 +1,9 @@
 # tests/cases/rule-21/coalesce-basic.yml
 ---
 _test:
-  main: {result: 1}
-  false_not_null: {result: false}
-  all_null: {result: null}
+  main: 1
+  false_not_null: false
+  all_null: null
 
 main: $coalesce(null, null, 1, 2)
 false_not_null: $coalesce(null, false, 0)
