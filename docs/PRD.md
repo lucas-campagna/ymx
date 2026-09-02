@@ -12,6 +12,8 @@ The project provides a tool/compiler that turns YAML source files into documents
 
 - **Document**: a single YAML source file parsed by YMX.
 - **Component**: each top-level key-value pair in a document defines a component. The key is the component's name and the value gives its content (rule 1).
+- **Builtin component**: an engine-provided component that is always present in the global namespace — `sh`, `pw` (rule 19). Callable through every call form (`from`, the rule-8 shortcut, `$name(...)` parens, `$name{...}` braces, math `name(...)`); its body is implemented by the engine (shell execution via the configured `CommandExecutor`). Distinct from the builtin *special forms* (`$map`, `$reduce`, `$merge`, `$split`, …) which are invoked only via their `$`-prefixed paren forms and reserve their names (`E007`).
+- **Brace call**: the `$name{payload}` inline call form (rule 22) — a component call whose single payload may be a structured literal (object/array) that the paren form rejects (E013).
 - **Property**: a key-value pair inside a component. Properties are also the arguments the component accepts when called.
 - **Argument**: a value passed to a component when it is called. Arguments are referenced in component bodies as `$name` (named) or `$0`, `$1`, `$2`, … (positional).
 - **Template component**: a component whose name starts with `$` (e.g. `$box`). Templates are applied automatically after the component that uses them is called (rule 5). Templates can chain indefinitely (`$a`, `$$a`, `$$$a`, …).
@@ -30,7 +32,7 @@ The project is written in Rust. Rust provides type and memory safety without a g
 
 YMX is being built in versions. The rules in this document describe the language and are stable across versions; the *output targets* arrive incrementally.
 
-**v1 (current)**: the resolver for rules 1–18, emits JSON. CLI and library only. HTML rendering (rule 20) is being implemented incrementally in v1.x releases.
+**v1 (current)**: the resolver for rules 1–20 (rules 21–22 planned), emits JSON; the HTML (rule 20) and PDF renderers ship feature-gated. CLI and library only.
 
 **v2**: HTML renderer + CLI flag to pick the target.
 
@@ -61,9 +63,9 @@ ymx/
 - **YAML parsing**: `yaml-rust2` is used directly (inside `ymx-core`) so source spans (line/column) are preserved on every scalar for diagnostics.
 - **Output**: YAML → intermediate `Value` IR → serialize to JSON (v1). The IR is `Null | Bool | String | Int(i64) | Float(f64) | Array | Object`; object keys preserve YAML insertion order. HTML/PDF renderers consume the same IR in later versions.
 - **Math**: a `MathEngine` trait evaluates `${...}`. v1 uses dynamic operand resolution — a String-valued operand is re-scanned as a math expression when it parses as one (see rule 7), numerically coerced when possible, and `+` falls back to string concatenation otherwise. The trait is the boundary for swapping to a Lua/Python/JavaScript engine in the future.
-- **Builtins**: a `Builtin` trait. v1 ships `$map`, `$reduce`, `$merge`. Each builtin is a *special form* that declares its own argument-evaluation strategy (e.g. `$map`/`$reduce` keep their first argument unevaluated as a callable component). The trait is the future plugin boundary.
+- **Builtins**: a `Builtin` trait. v1 ships `$map`, `$reduce`, `$merge` plus the extended 1.34 wave (`$split`, `$join`, `$trim`, … `$if`, `$when`). Each builtin is a *special form* that declares its own argument-evaluation strategy (e.g. `$map`/`$reduce` keep their first argument unevaluated as a callable component). The trait is the future plugin boundary. Two further builtin **components** (`sh`, `pw` — rule 19) are ordinary namespace entries with engine-implemented (executor-backed) bodies, callable via every call form — unlike the special forms, which are paren-only.
 - **Diagnostics**: structured `Diagnostic { file, line, col, component, code, message }` (where `file` is the resolved file path) rendered to stderr as `[code] file:line:col (component): message` and surfaced identically through `--format diagnostics` (one diagnostic per line, no JSON on stdout). Designed so a richer "bug report" mode (full call-stack + local-argument dump) can be added later without breaking the API. The stable error codes are listed in *Diagnostic codes* below.
-- **Cycles**: no precise cycle detection in v1; a configurable depth cap (`--max-depth`, default 256) prevents runaway recursion and surfaces as a "max-depth exceeded" diagnostic (`E008`). On entry to each recursive operation in rule 11's pipeline — each inline `$comp(...)` call (rule 3), each math `comp(...)` call (rule 7), each template step in a chain (rule 5), and each `from` dispatch (rule 6) — the counter is **checked before** incrementing: if `depth == max_depth` the operation aborts with `E008` (so at most `max_depth` recursive operations are allowed); otherwise `depth` is incremented by 1 and the operation proceeds.
+- **Cycles**: no precise cycle detection in v1; a configurable depth cap (`--max-depth`, default 256) prevents runaway recursion and surfaces as a "max-depth exceeded" diagnostic (`E008`). On entry to each recursive operation in rule 11's pipeline — each inline `$comp(...)` call (rule 3), each `$name{...}` brace call (rule 22), each math `comp(...)` call (rule 7), each template step in a chain (rule 5), and each `from` dispatch (rule 6) — the counter is **checked before** incrementing: if `depth == max_depth` the operation aborts with `E008` (so at most `max_depth` recursive operations are allowed); otherwise `depth` is incremented by 1 and the operation proceeds.
 
 ### Diagnostic codes
 
@@ -72,20 +74,20 @@ Every diagnostic renders to stderr as `[code] file:line:col (component): message
 | Code | Stage | Diagnostic | Example |
 |------|-------|------------|---------|
 | `E001` | load | YAML parse error or unsupported YAML feature (multi-document stream `---`, complex mapping key, merge key `<<`); also the load-stage catch-all for I/O failures (missing root, unreadable file) and non-string top-level keys. | `a: 1\n---\nb: 2` in one file → multi-document stream not supported. `0: value` → non-string top-level key. |
-| `E002` | compile | Unknown component reference. | `a: $nonexistent` → `a` references a component that does not exist. |
+| `E002` | compile | Unknown component reference — including a brace-call / key-suffix target that resolves to no component (rule 22); a builtin special-form name used in braces is E002 with a hint to use the paren form. | `a: $nonexistent` → `a` references a component that does not exist. `$typo{1}` → no component `typo` (rule 22). |
 | `E003` | compile | Missing required argument. A property `$x` is referenced but neither supplied by the caller nor declared with `x?:`. | `a: $x` called with no `x` argument → missing required `x`. |
 | `E004` | load | Duplicate component name in the same namespace. Two top-level definitions of `foo` in the same directory. | `a.yml` defines `x: 1` and `b.yml` also defines `x: 2` → both in the global namespace → `E004`. |
 | `E005` | compile | File-scope violation. A `_`-prefixed component is referenced from outside its document. | `_helper: 42` in `a.yml`; `b.yml` calls `$a(_helper=$_helper)` → cross-document reference to file-scoped `_helper` → `E005`. |
 | `E006` | compile | Ambiguous shortcut. Two properties in the same component body both match names of existing components. | `a:\n  b: 1\n  c: 2\nb: $0\nc: $0` — both `b` and `c` match components → shortcut is ambiguous → `E006`. |
-| `E007` | load | Reserved name used as a component or template (`map`/`reduce`/`merge`). | `map: 1` → defining a component named `map` (or `$map`, `$$map`, …) is rejected. |
+| `E007` | load | Reserved name used as a component or template: any builtin special-form effective identifier (`map`, `reduce`, `merge`, `split`, `join`, `trim`, `upper`, `lower`, `replace`, `filter`, `sort`, `reverse`, `unique`, `flatten`, `first`, `last`, `slice`, `keys`, `values`, `entries`, `from_entries`, `pick`, `omit`, `type`, `is_array`, `is_object`, `is_string`, `is_number`, `is_null`, `to_string`, `to_number`, `coalesce`, `sum`, `avg`, `min`, `max`, `if`, `when`) plus the builtin components `sh`/`pw` (rule 19) — all for every leading-`$` variant. | `map: 1` → defining a component named `map` (or `$map`, `$$map`, …) is rejected. `sh: 1` → rejected (would shadow the builtin component). |
 | `E008` | compile | Max-depth exceeded. The recursion depth cap (`--max-depth`, default 256) was exhausted. | A chain of 300 nested `$a()` calls hits the 256-deep limit → `E008`. |
 | `E009` | options | Entry not found. Entry path has fewer than two segments, resolves to a missing file, has an ambiguous `.yml`/`.yaml` stem, or the entry name is not a valid component identifier. | `ymx .` with no `main.yml`; `ymx ./folder` where both `folder.yml` and `folder.yaml` exist; `ymx ./file.yml --entry NOT_A_VALID_NAME`. |
-| `E010` | both | Invalid syntax: malformed call-site, bad string escape (`\X`), math identifier prefix `$letter`, mixed-shape template chain, unknown/invalid `_ymx` field, or malformed `_test` block. Also the v1 rejection of rule-18 constructs (`$` suffix on property key, `?$` combination). | `\n` in a string (unknown escape); `${ $x }` (bare `$` in math — drop the `$`); `plain: "maybe"` (invalid enum value); `x$?: y` (wrong modifier order). |
+| `E010` | both | Invalid syntax: malformed call-site, bad string escape (`\X`), math identifier prefix `$letter`, mixed-shape template chain, unknown/invalid `_ymx` field, malformed `_test` block, malformed brace-call payload (non-identifier object key, unbalanced literal — rule 22), or wrong modifier order (`$?`, `$<name>?`). | `\n` in a string (unknown escape); `${ $x }` (bare `$` in math — drop the `$`); `plain: "maybe"` (invalid enum value); `x$?: y` (wrong modifier order); `{a-b: 1}` as a brace-call payload (non-identifier key — rule 22). |
 | `E011` | compile | Math error (type mismatch, division by zero, non-numeric operand) or builtin argument type error (non-array 2nd arg to `$map`/`$reduce`; mixed-shape `$merge`). | `${true + 1}` → Bool + Int is a type mismatch. `$map(a, "not an array")` → second arg must be Array. `$merge({a:1}, [1,2])` → Object + Array is an unsupported merge shape. |
 | `E012` | compile | Positional argument after a named argument in a call. | `$f(name=1, 2)` → positional arg `2` follows named `name=1` → `E012`. |
-| `E013` | compile | Array/object literal as a direct call argument. Not supported in v1. | `$f([1,2,3])` or `$g({a:1})` → v1 does not support passing inline collection literals as call arguments. |
+| `E013` | compile | Array/object literal as a direct call argument (paren form; the `$name{...}` brace form accepts object/array payloads — rule 22). | `$f([1,2,3])` or `$g({a:1})` → the paren form rejects inline collection literals as direct call arguments; use the brace form `$f{[1,2,3]}` (rule 22). |
 | `E015` | load | Meta-key reserved name used as a component or template. A top-level key that is a leading-`$` variant of `_ymx` or `_test`. | `$_ymx:\n  v: 1` or `$$_test: 2` → leading-`$` variants of meta keys are rejected as reserved. |
-| `E016` | compile | Shell execution error (unknown backend, disallowed backend, spawn failure, or executor not provided). | `$sh{echo hi}` with no executor → E016. `$pw{...}` when `allowed_backends: [sh]` → E016. |
+| `E016` | compile | Shell execution error (executor not provided, disallowed backend, or spawn failure). | `$sh{echo hi}` with no executor → E016. `$pw{...}` when `allowed_backends: [sh]` → E016. |
 | `E017` | render | Array/object children without a `from` component wrapper. | `$mycomp: {a: 1, b: 2}` with no `from` in children → E017. |
 | `E018` | compile | IPC call failure: no host provided, disallowed transport, spawn failure, process crash, protocol violation, timeout, error_pattern match, or non-2xx HTTP response. Also raised when a lifecycle hook (`before_start`, etc.) fails. | `$py{print(1)}` with `Options.ipc = None` → E018. |
 
@@ -123,7 +125,7 @@ A document may carry three reserved **meta keys** at its top level — `_ymx` (f
 | `format`          | string      | `json`      | `json` or `diagnostics` |
 | `pretty`          | bool        | `false`     | pretty-print JSON output |
 | `plain`           | bool        | `false`     | `true` promotes sub-namespace components **and** templates into the global namespace; `false` promotes nothing; `template` (string) promotes templates only. Invalid value → `E010`. See *Component visibility* |
-| `allowed_backends` | list of strings | (all) | Restricts which executor backends may be used (rule 19). If absent, all backends are allowed. If set (e.g. `[sh]`), only those backends are permitted — using a non-listed backend emits E016. |
+| `allowed_backends` | list of strings | (all) | Restricts which shell components may execute (rule 19). If absent, both `sh` and `pw` are allowed. If set (e.g. `[sh]`), only the listed backends are permitted — calling a non-listed shell component emits E016. |
 
 > `entry` is intentionally **not** a `_ymx` field: the entry determines which document's `_ymx` block is the project's front-matter source, so it is resolved before front matter is read. The entry is therefore CLI-only: `--entry <component>` if provided, else `main`. The CLI receives a file path as the positional argument; the project root is the file's parent directory, and the entry path is derived as `<file_stem>.<component>` (always exactly 2 segments). The entry path is a **file-path address** (`<folder.path>.<file>.<component>`), distinct from the namespace dotted path used by `from` / `$name` resolution: `main.main` → root folder + `main.yml` + component `main`; `b.x` → file `b.yml` in the project root + component `x`. One segment is not a valid entry path (`E009`). The entry *file* must exist (else `E009`). The entry *component* is **not** required to exist at load/option-resolution time — it is only required when something actually compiles it (CLI compile mode, or a bare-A/B `_test` targeting the entry); a missing entry component at that point surfaces as `E002` (unknown component reference), like any other unknown component ref. This lets `_test`-only documents that target other components via type-2 maps omit the entry component entirely.
 
@@ -310,7 +312,7 @@ pub enum ExecError {
     SpawnFailed(String),
 }
 
-/// Executor for shell commands (`$sh{...}`, `$pw{...}`, etc.).
+/// Executor for shell commands (backing the `sh`/`pw` builtin components — rule 19).
 /// Implemented by the caller (ymx-lib provides StdExecutor); ymx-core stays I/O-free.
 pub trait CommandExecutor: Send + Sync {
     fn execute(&self, backend: &str, command: &str) -> Result<ExecOutput, ExecError>;
@@ -493,7 +495,8 @@ pub struct ParsedCli {
 - Structured diagnostics reporting file path, line, column, and component name where an issue occurred, plus an error code.
 - Usable as a CLI tool and as a Rust library (`ymx-lib`).
 - Inline `_test` blocks (see *Project metadata*) drive a tests-first development flow via `ymx-test`.
-- Shell execution builtins (`$sh`, `$pw`) with extensible backend registry and `_ymx.allowed_backends` restriction (rule 19).
+- Shell components (`sh`, `pw`) as builtin components with `_ymx.allowed_backends` restriction (rule 19).
+- Brace calls `$name{payload}` and the `$<name>` key suffix — component calls with structured (scalar / object / array) payloads (rule 22).
 - External components via `_use` IPC declarations — persistent subprocess sessions (pipe/socket/http transports), text/json modes, request/response hooks, lifecycle hooks, and `_ymx.allowed_ipc` restriction (rule 21).
 
 **Later**
@@ -537,9 +540,10 @@ Inside a string value, `$` triggers interpolation; `\` is the escape character.
 - `$name` (where `name` is `[A-Za-z_][A-Za-z0-9_]*`) references a named argument. The `name` grammar does not include `.`; namespace-qualified names (e.g. `subdir.comp`) are not reachable via bare `$name` (see *Multi-file projects*).
 - `$0`, `$1`, … `$N` (where `N` is decimal digits) reference positional arguments.
 - `${...}` enters math context (rule 7).
+- `$name{...}` is a brace call of the component `name` (rule 22); `${...}` (empty name) is the math context (rule 7).
 - `\$` produces a literal `$`; `\\` produces a literal `\`. Any other `\X` is a hard error (`E010`).
 
-**Interpolation result type.** When the *entire* value of a property is a single interpolation — `$name`, `$N`, or `${...}` with no surrounding text — the result keeps the interpoland's native type (e.g. `phone: $user_phone` yields `123456789` as Int when the bound argument is an Int). When an interpolation appears with surrounding text, the result is a String in which each interpoland is rendered per the *Number→string rendering* rule below.
+**Interpolation result type.** When the *entire* value of a property is a single interpolation — `$name`, `$N`, `${...}`, or a `$name{...}` brace call (rule 22) with no surrounding text — the result keeps the interpoland's native type (e.g. `phone: $user_phone` yields `123456789` as Int when the bound argument is an Int). When an interpolation appears with surrounding text, the result is a String in which each interpoland is rendered per the *Number→string rendering* rule below.
 
 **Number→string rendering.** When a number is rendered into text (string interpolation, math string-concat under `+`, or a scalar surfaced inside a larger string):
 - Int renders plainly: `20` → `"20"`.
@@ -563,17 +567,19 @@ Referencing a file-scoped component from outside its document is a hard error (`
 
 **Reserved names.** Two kinds of effective identifiers are reserved and not user-definable as components/templates:
 
-1. **Builtin names** — `map`, `reduce`, `merge` — used by `$map`, `$reduce`, `$merge` (rules 15–16). Defining any component or template whose effective identifier is one of these is a hard error (`E007`), regardless of the leading `$` count. The builtins are always invoked via their `$`-prefixed forms.
+1. **Builtin names** — the effective identifiers of all builtin special forms: `map`, `reduce`, `merge` (rules 15–16) plus the 1.34 wave — `split`, `join`, `trim`, `upper`, `lower`, `replace`, `filter`, `sort`, `reverse`, `unique`, `flatten`, `first`, `last`, `slice`, `keys`, `values`, `entries`, `from_entries`, `pick`, `omit`, `type`, `is_array`, `is_object`, `is_string`, `is_number`, `is_null`, `to_string`, `to_number`, `coalesce`, `sum`, `avg`, `min`, `max`, `if`, `when`. Plus the builtin components `sh`/`pw` (rule 19). Defining any component or template whose effective identifier is one of these is a hard error (`E007`), regardless of the leading `$` count. The special forms are always invoked via their `$`-prefixed forms; the builtin components are ordinary namespace entries callable via every call form (rule 19).
 2. **Meta keys** — `_ymx` (front matter) and `_test` (tests) — described in *Project metadata*. When present at the top level of a document they are intercepted by the engine as metadata and are **never** registered as components or templates. They are not file-scoped components despite their leading `_`; the `_`-prefix visibility rule simply does not apply to them. The bare top-level keys `_ymx` and `_test` are **consumed** (no error); a user component/template cannot be named `_ymx` or `_test` — any such top-level key is treated as the meta block of that name. A component or template whose **effective identifier** equals `_ymx` or `_test` but which carries one or more leading `$` (e.g. `$_ymx`, `$_test`, `$$_ymx`) is **rejected as a reserved name** (`E015`): only the bare meta keys are consumed, and the leading-`$` variants are not legal user-defined components/templates. Meta extraction is performed by `ymx-config` (`_ymx`) and `ymx-test` (`_test`); `ymx-core` only recognizes the two names, excludes them from the namespace, and stores their raw parsed values on the `Project`.
 
 > A namespace dot (`.`) appears only at the *lookup* layer for `from` targets and math `name(...)` calls (e.g. `from: subdir.comp`); it is not part of an effective identifier and cannot appear inside `$name` interpolation. Cross-namespace component references are reached via `from` (rule 6) or via the math `subdir.comp(...)` form (rule 7), never via bare `$subdir.comp` (which would interpolate `$subdir` then the literal text `.comp`).
 
 **Property-key modifiers.** A *property key* (the left-hand side of a property, inside a component body) may carry one or two trailing modifiers that affect how the property is resolved — they are **stripped before** the property name is used for resolution, matching, or the rule-8 shortcut, so `x?` and `x$` both target the slot named `x`.
 
-- `?` (optional / default-merge — rule 17, **v1**): `x?: v` declares a default `v` for `x` and activates object-merge mode for the enclosing component.
-- `$` (math shorthand — rule 18, **v2**): `x$: src` ≡ `x: ${src}` — the value is a math source string, evaluated to produce the property value.
-- Combination `?$` (**v1**): `x?$: src` ≡ `x?: ${src}` — an optional property whose default is a math-evaluated expression. `x$?:` is `E010` (wrong order).
-- The modifiers apply to **all property keys** — ordinary string names, integer positional keys (`0?:`, `1$:` ⇒ default for / math-evaluate `$0`, `$1`), and the template/component-name position (the leading name of a top-level pair: `a$: src` ≡ `a: ${src}`). They do **not** apply to the reserved meta fields `_ymx`/`_test` nor to any field *inside* those meta blocks: those are not callable components (no template, no `from`, no `${...}`, no `$N`) and the modifiers are rejected on them (`E010`).
+- `?` (optional / default-merge — rule 17): `x?: v` declares a default `v` for `x` and activates object-merge mode for the enclosing component.
+- `$` (math shorthand — rule 18): `x$: src` ≡ `x: ${src}` — the value is a math source string, evaluated to produce the property value.
+- Combination `?$`: `x?$: src` ≡ `x?: ${src}` — an optional property whose default is a math-evaluated expression. `x$?:` is `E010` (wrong order).
+- `$<name>` (brace-call shorthand — rule 22): `x$name: <v>` ≡ `x: $name{<v>}` — the value is the payload of a brace call to the component `name` (declared or imported; templates are not valid targets). The empty-name form `x$:` is the math shorthand above.
+- Combination `?$<name>`: `x?$name: <v>` ≡ `x?: $name{<v>}` — an optional property whose default is a brace call, lazily evaluated (rule 17). `x$name?:` is `E010` (wrong order).
+- The modifiers apply to **all property keys** — ordinary string names, integer positional keys (`0?:`, `1$:` ⇒ default for / math-evaluate `$0`, `$1`), and the template/component-name position (the leading name of a top-level pair: `a$: src` ≡ `a: ${src}`, `a$abc: src` ≡ `a: $abc{src}`). They do **not** apply to the reserved meta fields `_ymx`/`_test` nor to any field *inside* those meta blocks: those are not callable components (no template, no `from`, no `${...}`, no `$N`) and the modifiers are rejected on them (`E010`).
 
 ### 1. Top-level keys are components
 
@@ -618,7 +624,9 @@ Here `$b` is treated as a call to the `b` component from inside `a`'s body, rath
 
 > Call-site argument grammar. The `(...)` of an inline `$name(...)` (rule 3) or math `name(...)` (rule 7) call holds a comma-separated argument list. Each argument is either positional `value` or named `key=value` (where `key` is an effective identifier). Positional args bind to `$0`, `$1`, …; named args bind to `$key`. Mixing positional and named is allowed, but a positional arg may not appear *after* a named one (hard error `E012`); `()` calls with no arguments. The call target of an inline `$name(...)` is a single effective identifier (namespace-local); cross-namespace calls go through the math `name(...)` form, which accepts a dotted path (rule 7), or through `from` (rule 6).
 
-> Argument value parsing. An argument value token is parsed, in order, as Null (`null`/`~`), Bool (`true`/`false`), Int (integer literal), Float (decimal or exponent literal), or String; unquoted text that matches none becomes a String. Single- or double-quoted tokens are always Strings. Argument values may contain nested `$call(...)` and `${...}` (resolved as nested call-sites per rule 11). A direct argument value that is an inline YAML array/object literal (e.g. `$b([1,2])` or `$b({x:1})`) is a hard error in v1 (`E013`); build structured arguments with a `from`-mini-component instead.
+> Argument value parsing. An argument value token is parsed, in order, as Null (`null`/`~`), Bool (`true`/`false`), Int (integer literal), Float (decimal or exponent literal), or String; unquoted text that matches none becomes a String. Single- or double-quoted tokens are always Strings. Argument values may contain nested `$call(...)` and `${...}` (resolved as nested call-sites per rule 11). A direct argument value that is an inline YAML array/object literal (e.g. `$b([1,2])` or `$b({x:1})`) is a hard error (`E013`); build structured arguments with a `from`-mini-component instead.
+
+> **Brace form.** `$name{payload}` (rule 22) is the sibling inline-call form whose single payload may be a structured literal, which the paren form rejects (E013). For scalar and named payloads the two are argument-equivalent: `$b(40)` ≡ `$b{40}` and `$b(c=1, d=2)` ≡ `$b{{c:1, d:2}}`.
 
 ### 4. Positional arguments are supported with `$0`, `$1`, `$2`, …
 
@@ -697,7 +705,7 @@ So calling `a` returns `"final: 21"`.
 
 > **Mixed-shape chains (v1 limitation).** A single chain whose links mix the array shape (rules 12–14) with the non-array shape (rule 5) is **not defined in v1** and raises `E010` when the mismatched link is reached — e.g. `$a` is non-array but `$$a` is array, or `$a` returns an array into a non-array `$$a`. The supported chains are: all links non-array (rule 5), or a terminal array-`$a` applied to a component via rules 12/13/14. This is a documented gap pending a concrete use case; revisit in a later version.
 
-> **Merge-mode templates (v2).** A template whose body contains at least one `?:` property activates rule 17's object-merge mode: the caller's supplied properties forward into the output and win over the template body, while the body (and its `?:` defaults) fills the gaps. A template with no `?:` property keeps the rule-5 behavior above (its output is its own resolved body).
+> **Merge-mode templates.** A template whose body contains at least one `?:` property activates rule 17's object-merge mode: the caller's supplied properties forward into the output and win over the template body, while the body (and its `?:` defaults) fills the gaps. A template with no `?:` property keeps the rule-5 behavior above (its output is its own resolved body).
 
 ### 6. Components can call each other with the `from` property
 
@@ -845,7 +853,7 @@ Any property referenced by a component (via `$name`, `$0`, `${name}`, etc.) must
 
 Resolving a component runs in three steps, in this fixed order:
 
-1. **Property resolution (before template)** — every property value of the component is fully resolved. A property value is a *nested call-site* when it is an object containing the `from` key, or any value containing an inline `$comp(...)` call (rule 3) or a `${...}` interpolation (rule 7). Nested call-sites resolve **bottom-up**: the deepest nested call is evaluated first, its return value bubbles up to its parent, and so on, until every property of the component has a fully resolved value. Bare `$name` (no parens) resolves as: (a) a named argument `name` in scope → that argument's value; (b) else → hard error (rule 10, `E003`). Use `$name()` (with empty parens) to call a component without arguments. `$name(...)` unconditionally calls the component `name` (rule 3) and bypasses the argument lookup. Inside `${...}` (math context) there is **no fallback**: a bare identifier refers to an argument or the math result of the previous step (`last`); to call a component inside math, use the `name(...)` form (rule 7). *(v2 only for `$`; `?` is v1)* Property-key modifiers (`?`, `$`) are stripped first; a `$`-suffix value is wrapped in `${...}` and a `?:` default is recorded for later merge binding (rule 17).
+1. **Property resolution (before template)** — every property value of the component is fully resolved. A property value is a *nested call-site* when it is an object containing the `from` key, or any value containing an inline `$comp(...)` call (rule 3), a `${...}` interpolation (rule 7), or a `$name{...}` brace call (rule 22). Nested call-sites resolve **bottom-up**: the deepest nested call is evaluated first, its return value bubbles up to its parent, and so on, until every property of the component has a fully resolved value. Bare `$name` (no parens) resolves as: (a) a named argument `name` in scope → that argument's value; (b) else → hard error (rule 10, `E003`). Use `$name()` (with empty parens) to call a component without arguments. `$name(...)` unconditionally calls the component `name` (rule 3) and bypasses the argument lookup. Inside `${...}` (math context) there is **no fallback**: a bare identifier refers to an argument or the math result of the previous step (`last`); to call a component inside math, use the `name(...)` form (rule 7). Property-key modifiers (`?`, `$`, `$<name>`) are stripped first; a `$`-suffix value is wrapped in `${...}`, a `$<name>`-suffix value becomes a brace call (rule 22), and a `?:` default is recorded for later merge binding (rule 17).
 2. **Template chain (rule 5)** — applied to the post-step-1 property set. The innermost template runs first, its result feeds the next template, and so on. Each template link is itself a **normal component call** and follows this same three-step flow (its own property resolution, its own template chain, its own `from`/shortcut dispatch), **with one exception**: the *first* link of a chain whose `$template` is an array uses the rule 12/13/14 map/reduce semantics instead of a single call. Templates can only be reached through their **direct** child: `a` invokes `$a`; if `$a` is absent, `a` does **not** skip to `$$a` — the chain is broken at that point. Template names are not valid `from` targets.
 3. **`from` / shortcut dispatch (rules 6 and 8, after template)** — these are **mutually exclusive and sugar-equivalent**: the rule-8 shortcut is sugar for `from`, so exactly one of them fires. If the (post-template) value of `from` names a valid *regular* component, `from` dispatches: the target is called with the rest of the property set as arguments (the `from` key itself is **not** forwarded; the rule-8 shortcut is **suppressed**), and the return value replaces the component's output. If `from` does **not** name a valid regular component (templates excluded; non-String `from`; missing target), `from` is a **plain forwarded property** and the rule-8 shortcut fires normally against the post-template property set (a property whose name matches a component → that component is called with the remaining properties as arguments, the matched key's value passed as `$0`; the invalid `from` is forwarded alongside them as an ordinary argument). Either dispatch target is a normal component call following this same three-step flow.
 
@@ -1176,7 +1184,7 @@ main: $button
 
 > **Scope of `?:`.** `?:` applies to ordinary property names and to integer positional keys (`0?:` ⇒ default for `$0`, `1?:` ⇒ default for `$1`, …). The `?$` combination (`0?$:` ⇒ optional slot with math-evaluated default) is also v1. `?:` does **not** apply to the reserved meta fields `_ymx`/`_test` or to any field *inside* those meta blocks; a `?:` on such a key is `E010` (see *Property-key modifiers*).
 
-### 18. Math shorthand (`$` suffix) *(v2)*
+### 18. Math shorthand (`$` suffix)
 
 A trailing `$` on a property key (or on the leading name of a top-level component/template) is shorthand for wrapping the value in a `${...}` math expression.
 
@@ -1213,58 +1221,42 @@ a:
 ```
 The first `x$?:` is an error. The correct form for a math-evaluated optional default is `x?$: src`.
 
-> This rule (rule 18) is v2. Rule 17 (`?`) is v1. Non-string `$`-suffix values and wrong modifier order surface as `E010` (invalid syntax).
+> Non-string `$`-suffix values and wrong modifier order surface as `E010` (invalid syntax).
 
-### 19. Shell execution builtins (`$sh`, `$pw`)
+> A trailing `$` followed by a name (`x$name: <v>`) is the rule-22 brace-call shorthand — the value is the payload of a call to the component `name`. The empty form (`x$:`) documented here is the default math context.
 
-The `$sh{<command>}` and `$pw{<command>}` forms execute a shell command and return its result as `{exit_code: Int, stdout: String, stderr: String}`.
+### 19. Shell components (`sh`, `pw`)
 
-**Value form:** `$sh{<command>}` / `$pw{<command>}` — the command string is interpolated (all scalar types; Array/Object → E011), then executed via the configured `CommandExecutor`. The result is always an object with `exit_code` (Int), `stdout` (String), and `stderr` (String).
+`sh` and `pw` are **builtin components** — engine-provided definitions that are always present in the global namespace and callable through every call form like a user-defined component: `from: sh`, the rule-8 shortcut (`sh: <command>`), `$sh(...)` parens, `$sh{...}` braces (rule 22), and math `sh(...)`. Their bodies are implemented by the engine: the command string is the `$0` argument rendered to text and executed via the configured `CommandExecutor` (`sh` → `sh -c`, `pw` → PowerShell). The result is always `{exit_code: Int, stdout: String, stderr: String}`.
 
 ```yml
 content: $sh{cat path/to/file.txt}
 greeting: $pw{Write-Output "Hello World!"}
 ```
 
-**Property-key shorthand:** any property key ending with `$<backend>` (e.g. `name$sh:`, `$box$sh:`, `$$$t$pw:`) is sugar for wrapping the value in `$<backend>{...}`. The suffix is stripped from the key. Applies to all property keys — regular components, templates, and chained templates alike.
+**Body semantics.** Conceptually the builtin is the virtual definition `$sh$: $0` (not writable user syntax — `sh` is reserved, see below): the body is just `$0`. The command string has already been interpolated before it arrives: per rule 22, brace-call payload values resolve in the **enclosing component's scope** before binding, so `$name`, `$0`, `${...}`, and `$name(args)` component calls inside `$sh{echo $name}` resolve against the calling component's arguments. An Object or Array bound to `$0` is `E011` when rendered to the command string. An empty payload (`$sh{}`) binds no arguments, so the body's `$0` reference is `E003` (rule 10) — use `$sh{""}` to run an empty command.
+
+**Property-key shorthand.** `main$sh: <command>` is an instance of the rule-22 `$<name>` suffix: `main: $sh{<command>}`. The suffix applies to all property keys — nested properties, top-level component names, and template names (`$box$sh:`) alike.
 
 ```yml
-# Property-key shorthand (all equivalent to their value-form counterparts)
 main$sh: cat path/to/file.txt
 # same as
 main: $sh{cat path/to/file.txt}
-
-$box$sh: echo $name
-# same as
-$box: $sh{echo $name}
 ```
 
-**Extensibility:** any `$<backend>{<command>}` is recognized. The backend name is passed to the executor; unknown backends → E016.
+**Restriction via `_ymx.allowed_backends`.** The front-matter field `allowed_backends` (a list of strings) limits which of the shell components may execute. If absent, both are allowed. If set (e.g. `[sh]`), calling a non-listed one emits `E016`.
 
-**Error handling:** non-zero exit codes are returned as part of the result (not an error). E016 is emitted only for spawn failures, missing executor (`opts.executor` is `None`), or disallowed backend (not in `allowed_backends`).
+**Error handling.** Non-zero exit codes are part of the result, not errors. `E016` is emitted only when the executor is missing (`opts.executor` is `None`, e.g. CLI `--no-exec`), the backend is disallowed by `allowed_backends`, or spawning fails.
 
-**Interpolation inside `$sh{...}`:** the command string undergoes the same interpolation as regular strings — `$name`, `$0`, `${...}` are resolved before execution. In addition, `$name(args)` (function-call syntax) calls the named component with the given arguments before shell execution — the same call grammar as math `name(...)` calls (rule 7), but with a `$` prefix marking it as interpolation. Positional args bind to `$0`, `$1`, …; named args use `key=value`. The component's return value is rendered to a string and interpolated in place. Scalar values render per *Number→string rendering*; Array/Object arguments → E011.
+**Reserved names.** `sh` and `pw` are reserved (`E007`) for every leading-`$` variant — a user component, template, `_use` import, or `-c` overlay definition named `sh`/`pw`/`$sh`/… is rejected at load; it would shadow the builtin.
 
-```yml
-file: path/to/file.txt
-lines: $sh{wc -l < $file}
-# $file interpolates to "path/to/file.txt", then the command is executed
-# lines → {"exit_code": 0, "stdout": "      42 path/to/file.txt\n", "stderr": ""}
-```
+**No arbitrary backends.** Backend names are no longer callable syntax: `$ruby{puts 1}` is `E002` (no component `ruby`). To reach another interpreter, wrap `sh` in a component and interpolate the payload:
 
 ```yml
-# Component call inside $sh — the component is called first, result interpolated into the command
-sum: ${$0 + $1}
-lines: $sh{echo $sum(1,2)}
-# $sum(1,2) calls the 'sum' component → "3", command becomes "echo 3"
-# lines → {"exit_code": 0, "stdout": "3\n", "stderr": ""}
-```
-
-**Restriction via `_ymx.allowed_backends`:** the front-matter field `allowed_backends` (a list of strings) limits which backends may be used. If absent, all backends are allowed. If set, only the listed backends are permitted — using a non-listed backend emits E016.
-
-```yml
-_ymx:
-  allowed_backends: [sh]
+py: $sh{python -c $0}
+main: $py{print(1 + 2)}
+# → py called with $0 = "print(1 + 2)" → sh executes "python -c print(1 + 2)"
+# → {exit_code: 0, stdout: "3\n", stderr: ""}
 ```
 
 ### 20. HTML renderer (rule 20)
@@ -1477,6 +1469,54 @@ All fields are optional unless noted.
 
 **E004 collision.** If an IPC alias name collides with an existing component name in the same namespace → `E004` at load.
 
-**E007 / E015 reserved names.** IPC aliases follow the same reserved-name rules as regular components: `map`/`reduce`/`merge` → `E007`; `$_ymx`-style variants → `E015`.
+**E007 / E015 reserved names.** IPC aliases follow the same reserved-name rules as regular components: any builtin special-form effective identifier, or the builtin components `sh`/`pw`, → `E007` (see *Reserved names*); `$_ymx`-style variants → `E015`.
 
 **Note on `$`-interpolation in config.** Fields inside a `_use` IPC declaration are **meta** (like `_ymx` fields) — they are not YMX component bodies and **do not undergo `$name` / `${...}` interpolation**. Engine-provided variables (like `{$project}`) are not supported in v1. Use `env` for environment data; use shell hooks for side effects.
+
+### 22. Brace calls and the `$<name>` key suffix
+
+A **brace call** — `$name{payload}` — is an inline component call, sibling to the paren form (rule 3), whose single payload may be a structured literal. It runs during step 1 of rule 11 (property resolution, bottom-up, like `$name(...)`) and consumes a depth slot (`E008` on cap).
+
+**Payload grammar.** The braces hold exactly one payload value:
+
+| Payload | Binding |
+|---|---|
+| scalar (number / string / bool / null) | binds `$0` |
+| object literal `{k: v, …}` | spread to named arguments (`k` → `$k`); keys must be effective identifiers, otherwise `E010` |
+| array literal `[v0, v1, …]` | positional spread (`$0`, `$1`, …) |
+| empty `{}` | no arguments (≡ `$name()`) |
+
+Payload values are parsed per the call-site argument-value grammar (rule 3) and **resolved in the enclosing component's scope before binding** — `$name`, `$0`, `${...}`, and nested calls inside a payload resolve against the caller's arguments, exactly like any nested call-site. Nested brace calls are allowed (depth-capped). This caller-scope rule is what makes the call shapes below argument-equivalent.
+
+**Target.** `name` is a single effective identifier (no dots; cross-namespace targets are reached via `plain` promotion, like `$name(...)`). It resolves to a declared or imported regular component, or a builtin component (`sh`, `pw` — rule 19). Templates are not valid targets. An unknown name is `E002`; a builtin special-form name (`map`, `split`, …) is `E002` with a hint to use the paren form. The callee is an ordinary component call — its own template chain, `from` dispatch, and `?:` merge mode all apply.
+
+**Result.** A brace call that is the entire property value yields the callee's result with its native type; embedded in surrounding text it renders per *Number→string rendering* (Object/Array into text → `E011`).
+
+**Key suffix.** `<key>$<name>: <value>` is sugar for `<key>: $<name>{<value>}` — the value (any YAML node: scalar, mapping, sequence) is the payload. The empty-name form `<key>$:` is the rule-18 math shorthand. The suffix combines with `?` as `?$<name>` (`<key>?$name: <value>` ≡ `<key>?: $name{<value>}` — an optional property whose default is a brace call, lazily evaluated per rule 17); the reverse order `$<name>?` is `E010`. Two definitions with the same base name and different suffixes (`a$b:` and `a$c:`, or `a$b:` and `a$:`) both claim to be `a` and are `E004` at load.
+
+**Equivalences.** For a scalar payload, every call shape binds the same arguments (`sh` generalizes to any declared or imported component):
+
+```yml
+comp:
+  from: sh
+  0: echo 123        # from-dispatch (rule 6): sh called with $0 = "echo 123"
+comp:
+  sh: echo 123       # rule-8 shortcut: the same call
+comp: $sh{echo 123}  # brace call: the same call
+comp$sh: echo 123    # key suffix: sugar for the brace call
+```
+
+For an object payload the brace and suffix forms are argument-equivalent to `from` with named properties:
+
+```yml
+abc$: c + d
+main:
+  a$abc:             # ≡ a: $abc{{c: 1, d: 2}} — abc called with c=1, d=2
+    c: 1
+    d: 2
+# main → {a: 3}
+```
+
+**Relation to E013.** The paren form still rejects array/object literals as direct arguments (`$b([1,2])` → `E013`); the brace form is the structured-payload escape hatch: `$b{[1,2]}` → `$0=1, $1=2`.
+
+**Brace scanning.** The payload is captured with balanced, quote-aware brace matching (so `$sh{awk '{print $1}'}` keeps the full command). The `${...}` math form is unchanged — it still closes at the first `}` (the math grammar has no `}`).

@@ -61,6 +61,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.38 | `done` | `_use` transitive re-export | ymx-lib | [1.38-use-reexport.md](1.38-use-reexport.md) | 1.25 |
 | 1.39 | `planned` | External components via `_use` IPC declarations (core) | ymx-core, ymx-lib, ymx-cli | [1.39-ipc-core.md](1.39-ipc-core.md) | 1.38 |
 | 1.40 | `planned` | IPC transports, structured mode & hooks (rule 21 extended) | ymx-core, ymx-lib | [1.40-ipc-transports-hooks.md](1.40-ipc-transports-hooks.md) | 1.39 |
+| 1.41 | `planned` | Brace calls & builtin sh/pw components (rule 22) | ymx-core, tests/ | [1.41-brace-calls.md](1.41-brace-calls.md) | 1.18, 1.26, 1.27, 1.31 |
 
 ## v2 milestones
 
