@@ -1,0 +1,5 @@
+a: {x: 1}
+$a: {out: $y}
+_test:
+  a:
+    error: E003

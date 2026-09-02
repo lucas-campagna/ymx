@@ -1,0 +1,7 @@
+num: ${5 / 2}
+neg_exp: ${2 ** -3}
+large: ${2 ** 20}
+_test:
+  num: 2.5
+  neg_exp: 0.125
+  large: 1048576

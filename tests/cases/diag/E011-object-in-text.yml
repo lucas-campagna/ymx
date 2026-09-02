@@ -1,0 +1,9 @@
+obj_in_text: "value: $obj"
+list_in_text: "v: $list"
+_test:
+  obj_in_text:
+    args: {obj: {a: 1}}
+    error: E011
+  list_in_text:
+    args: {list: [1, 2]}
+    error: E011

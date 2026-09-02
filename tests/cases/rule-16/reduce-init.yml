@@ -1,0 +1,7 @@
+inc: ${last + $0}
+nums: [1, 2, 3]
+c: $reduce($inc, $nums(), 0)
+d: $reduce($inc, $nums(), 100)
+_test:
+  c: 6
+  d: 106

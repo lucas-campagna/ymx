@@ -1,0 +1,4 @@
+_use: {x: "helper.nope"}
+main: 1
+_test:
+  _build_error: E002

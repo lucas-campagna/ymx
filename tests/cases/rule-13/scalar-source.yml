@@ -1,0 +1,6 @@
+a: 5
+$a:
+  - ${$0 + 1}
+  - "last=$last v=$0"
+_test:
+  a: "last=6 v=5"

@@ -1,0 +1,5 @@
+main: ${ $x }
+_test:
+  main:
+    args: {x: 1}
+    error: E010

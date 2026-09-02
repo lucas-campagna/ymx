@@ -1,0 +1,3 @@
+_use: {one: "mid.middle"}
+main: $one()
+_test: 3

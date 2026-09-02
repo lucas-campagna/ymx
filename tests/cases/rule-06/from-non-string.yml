@@ -1,0 +1,7 @@
+num:
+  from: 123
+flag:
+  from: true
+_test:
+  num: {from: 123}
+  flag: {from: true}

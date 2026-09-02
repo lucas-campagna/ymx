@@ -166,7 +166,7 @@ A document may carry three reserved **meta keys** at its top level — `_ymx` (f
 - **Wildcard string**: `_use: {"*": "foo"}` — import all public components and templates from `foo.yml` into the global namespace, keeping their original names.
 - **Named entries**: `_use: {x: "foo.bar", ...}` — for each `alias: "file.component"`, import `component` from `file.yml` and register it under `alias` in the global namespace. The file must exist and the component must be defined (E002 if not). Multiple files may define the same component internally; renaming prevents collisions.
 
-All imported components land in the **global namespace** of the entry file. File-scoped components (`_`-prefixed) cannot be imported (E005). If an imported file has its own `_use`, that is processed too (transitive imports). A cycle in the import graph raises `E001`.
+All imported components land in the **global namespace** of the entry file. File-scoped components (`_`-prefixed) cannot be imported (E005). If an imported file has its own `_use`, that is processed first — the imported file's own imports are resolved and registered in its namespace before it is consumed by the caller. This makes `_use`-imported names **re-exportable**: a component imported into `mid.yml` via `_use` is visible in `mid.yml`'s namespace and can be imported by other files that import from `mid.yml`. For example, if `mid.yml` has `_use: {middle: "leaf.deep"}`, then `middle` is available in `mid.yml`'s namespace, and an entry file can import it via `_use: {one: "mid.middle"}`. A cycle in the import graph raises `E001`.
 
 Only the **entry file's** `_use` and those of its transitively imported files are processed. `_use` in other files (not imported) is ignored.
 
@@ -441,6 +441,7 @@ tests/cases/rule-NN/<scenario>.yml   # one file = one scenario = one project roo
 - The only diagnostics that are **not** `_test`-driveable by construction are produced by parsing the `_test` block itself (the malformed-`_test`-block part of `E010`) and YAML-parse failures (`E001`) of the document that hosts the `_test` block — both yield an unreadable `_test`. Together with the other load-time codes (`E004`, `E007`, `E015`) they are exercised by ordinary crate `#[test]` unit tests with inline YAML snippets. The test crate `ymx-test` exposes enough of `parse_tests`/`run_tests` to drive these where convenient.
 - `_ymx` in a scenario's entry document sets non-default flags the rule needs (e.g. `max_depth` for an `E008` case, a custom `from_keyword` for rule 6 keyword-override scenarios, or `plain: template` / `plain: true` for namespace-promotion scenarios).
 - Multi-file / namespace / file-scope scenarios are no longer supported in the flat layout; scenarios that require multiple documents use `_use` within the single file or are tested via crate `#[test]` unit tests with inline YAML.
+- Scenarios that exercise `_use` transitive re-export use the subdirectory layout (e.g. `use/transitive/`) with an entry file, intermediate file, and leaf file — the entry's `_use` names an intermediate file's `_use`-imported component, verifying the re-export chain.
 
 ## Compiling Rules
 

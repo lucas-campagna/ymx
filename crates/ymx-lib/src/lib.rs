@@ -587,12 +587,15 @@ pub fn load_project(root: &Path) -> Result<Project, Vec<Diagnostic>> {
         file_scoped_defs: Vec<ymx_core::namespace::Definition>,
         meta_ymx: Option<(FileId, Value)>,
         meta_test: Option<(FileId, Value)>,
+        // Named imports via _use: alias -> (target_file_path, target_component)
+        // These are populated after the first pass
+        use_imports: Option<Vec<(String, PathBuf, String)>>,
     }
 
     let mut file_data_map: std::collections::HashMap<PathBuf, FileData> =
         std::collections::HashMap::new();
 
-    // First pass: parse all files and extract their data
+    // First pass: parse all files and extract their data (minus _use imports)
     for path in &file_paths {
         let file_id = FileId(project.files.len() as u32);
         project.files.push(path.clone());
@@ -643,8 +646,68 @@ pub fn load_project(root: &Path) -> Result<Project, Vec<Diagnostic>> {
                 file_scoped_defs: extract.file_scoped_defs,
                 meta_ymx: extract.meta_ymx.map(|mv| (file_id, mv.value)),
                 meta_test: extract.meta_test.map(|mv| (file_id, mv.value)),
+                use_imports: None,
             },
         );
+    }
+
+    // Second pass: extract _use imports for each file
+    for path in &file_paths {
+        let contents = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let node = match parse_document(&contents) {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        let extract = extract_document(FileId(0), &node);
+        let raw_use = extract.meta_use.and_then(|mv| parse_raw_use(&mv.value));
+
+        if let Some(RawUse::NamedImports(imports)) = raw_use {
+            let resolved_imports: Vec<(String, PathBuf, String)> = imports
+                .into_iter()
+                .filter_map(|(alias, file_path_str, component)| {
+                    resolve_file_stem(&file_path_str, &project_root)
+                        .ok()
+                        .map(|target_path| (alias, target_path, component))
+                })
+                .collect();
+
+            if let Some(fd) = file_data_map.get_mut(path) {
+                fd.use_imports = Some(resolved_imports);
+            }
+        }
+    }
+
+    // Helper to resolve a component through the _use chain (returns (file_path, component))
+    // If the component is directly defined, returns (file_path, component)
+    // If the component is imported via _use, follows the chain recursively
+    fn resolve_through_use_chain(
+        file_path: &Path,
+        component: &str,
+        file_data_map: &std::collections::HashMap<PathBuf, FileData>,
+    ) -> Option<(PathBuf, String)> {
+        let fd = file_data_map.get(file_path)?;
+        // First check if component is directly defined
+        if fd.defs.iter().any(|d| d.full_name == component) {
+            return Some((file_path.to_path_buf(), component.to_string()));
+        }
+        // Then check file-scoped (shouldn't be importable, but check anyway)
+        if fd.file_scoped_defs.iter().any(|d| d.full_name == component) {
+            return None; // file-scoped, not importable
+        }
+        // Follow _use imports
+        if let Some(ref imports) = fd.use_imports {
+            for (_alias, target_path, target_comp) in imports {
+                if let Some(result) =
+                    resolve_through_use_chain(target_path, target_comp, file_data_map)
+                {
+                    return Some(result);
+                }
+            }
+        }
+        None
     }
 
     // Determine the entry file's _use directive
@@ -691,7 +754,7 @@ pub fn load_project(root: &Path) -> Result<Project, Vec<Diagnostic>> {
                 };
 
                 if let Some(target_data) = file_data_map.get(&target_path) {
-                    let comp_exists = target_data.defs.iter().any(|d| d.full_name == component);
+                    // First check if component is directly defined in target file
                     let comp_file_scoped = target_data
                         .file_scoped_defs
                         .iter()
@@ -710,21 +773,35 @@ pub fn load_project(root: &Path) -> Result<Project, Vec<Diagnostic>> {
                                 target_path.display()
                             ),
                         });
-                    } else if !comp_exists {
-                        diags.push(Diagnostic {
-                            file: Some(entry_file.clone()),
-                            line: 1,
-                            col: 1,
-                            component: Some(alias.clone()),
-                            code: E002,
-                            message: format!(
-                                "component `{}` not found in `{}`",
-                                component,
-                                target_path.display()
-                            ),
-                        });
-                    } else {
-                        validated.push((alias, target_path, component));
+                        continue;
+                    }
+
+                    // Resolve component through _use chain (transitive re-export support)
+                    let resolved =
+                        resolve_through_use_chain(&target_path, &component, &file_data_map);
+
+                    match resolved {
+                        Some((_, _)) => {
+                            // Found the component (directly or via _use chain)
+                            // For the validated entry, use the original target_path and component
+                            // (the actual resolution happens at compile time)
+                            validated.push((alias, target_path, component));
+                        }
+                        None => {
+                            // Not found - could be file-scoped or not defined
+                            diags.push(Diagnostic {
+                                file: Some(entry_file.clone()),
+                                line: 1,
+                                col: 1,
+                                component: Some(alias.clone()),
+                                code: E002,
+                                message: format!(
+                                    "component `{}` not found in `{}`",
+                                    component,
+                                    target_path.display()
+                                ),
+                            });
+                        }
                     }
                 } else {
                     diags.push(Diagnostic {
@@ -801,12 +878,16 @@ pub fn load_project(root: &Path) -> Result<Project, Vec<Diagnostic>> {
     // Handle named imports: register specific components with alias names
     if let EntryImport::NamedImports(named_imports) = &entry_import {
         for (alias, target_path, component) in named_imports {
-            if let Some(target_data) = file_data_map.get(target_path) {
-                if let Some(def) = target_data.defs.iter().find(|d| d.full_name == *component) {
-                    let mut aliased_def = def.clone();
-                    aliased_def.full_name = alias.clone();
-                    if let Err(dup) = project.namespaces.register("", aliased_def) {
-                        diags.push(dup.into_diagnostic(target_path.clone()));
+            // Resolve through _use chain to find the actual definition
+            let resolved = resolve_through_use_chain(target_path, component, &file_data_map);
+            if let Some((final_path, final_comp)) = resolved {
+                if let Some(target_data) = file_data_map.get(&final_path) {
+                    if let Some(def) = target_data.defs.iter().find(|d| d.full_name == final_comp) {
+                        let mut aliased_def = def.clone();
+                        aliased_def.full_name = alias.clone();
+                        if let Err(dup) = project.namespaces.register("", aliased_def) {
+                            diags.push(dup.into_diagnostic(final_path.clone()));
+                        }
                     }
                 }
             }

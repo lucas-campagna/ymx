@@ -1,0 +1,10 @@
+user:
+  name: $user_name
+  phone: $user_phone
+  score: $score
+  active: $active
+  nick: $nick
+_test:
+  user:
+    args: {user_name: Mathew, user_phone: 123456789, score: 2.5, active: true, nick: null}
+    result: {name: Mathew, phone: 123456789, score: 2.5, active: true, nick: null}

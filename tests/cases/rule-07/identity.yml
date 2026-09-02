@@ -1,0 +1,9 @@
+same: ${$0}
+obj: ${o}
+_test:
+  same:
+    args: [2.5]
+    result: 2.5
+  obj:
+    args: {o: {a: 1, b: [1, 2]}}
+    result: {a: 1, b: [1, 2]}

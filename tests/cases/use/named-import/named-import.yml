@@ -1,0 +1,3 @@
+_use: {greet: "helper.hello"}
+main: $greet(name=World)
+_test: "Hello, World!"

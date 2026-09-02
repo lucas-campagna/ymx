@@ -1,0 +1,4 @@
+_use: {x: "other.y"}
+main: 1
+_test:
+  _build_error: E001

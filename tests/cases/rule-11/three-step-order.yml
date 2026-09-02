@@ -1,0 +1,9 @@
+a:
+  from: $b()
+$a:
+  from: $from
+  x: 2
+b: c
+c: ${1 + x}
+_test:
+  a: 3

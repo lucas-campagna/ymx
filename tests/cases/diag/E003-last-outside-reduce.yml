@@ -1,0 +1,4 @@
+main: ${last + 1}
+_test:
+  main:
+    error: E003

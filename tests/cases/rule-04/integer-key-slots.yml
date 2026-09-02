@@ -1,0 +1,12 @@
+pair: "$0 / $1"
+wrap:
+  from: pair
+  0: left
+  1: right
+string_zero:
+  "0": named
+  out: $0
+_test:
+  wrap: "left / right"
+  string_zero:
+    error: E003

@@ -1,0 +1,5 @@
+join3: "$0 / $1 / $2"
+_test:
+  join3:
+    args: [a, b, c]
+    result: "a / b / c"

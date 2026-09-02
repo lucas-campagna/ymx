@@ -1,0 +1,7 @@
+_use: "*"
+_ymx:
+  plain: true
+helper: 1
+main: $helper()
+_test:
+  _build_error: E004

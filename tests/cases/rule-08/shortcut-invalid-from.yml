@@ -1,0 +1,6 @@
+a:
+  from: missing
+  b: 1
+b: [$0, $from]
+_test:
+  a: [1, missing]

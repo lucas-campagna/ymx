@@ -1,7 +1,7 @@
 ---
 version: "2.x"
 title: "YMX v2 implementation plan"
-short: "Index of versioned implementation milestones (1.1 – 1.37, 2.1)"
+short: "Index of versioned implementation milestones (1.1 – 1.38, 2.1)"
 description: |
   Tracks the build of YMX v2 per docs/PRD.md: the rules-1–18 resolver, JSON
   output, CLI + library, inline `_test`, file-path entry addressing, and
@@ -58,6 +58,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.35 | `done` | HTML renderer | ymx-core, ymx-cli | [1.35-html-renderer.md](1.35-html-renderer.md) | 1.34 |
 | 1.36 | `done` | PDF renderer (feature-gated) | ymx-cli | [1.36-pdf-renderer.md](1.36-pdf-renderer.md) | 1.35 |
 | 1.37 | `done` | CLI `--watch` mode (feature-gated) | ymx-cli | [1.37-watch-mode.md](1.37-watch-mode.md) | 1.36 |
+| 1.38 | `planned` | `_use` transitive re-export | ymx-lib | [1.38-use-reexport.md](1.38-use-reexport.md) | 1.25 |
 
 ## v2 milestones
 

@@ -1,0 +1,7 @@
+plain: $outer($inner(2), y=1)
+math: ${outer(inner(2), y=1)}
+outer: $0 + $y
+inner: ${$0 * 10}
+_test:
+  plain: "20 + 1"
+  math: 21

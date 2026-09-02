@@ -1,0 +1,22 @@
+outer:
+  x: 10
+  y: 20
+  inner:
+    from: add
+    a: $x
+add: ${a + y}
+ok:
+  x: 10
+  y: 20
+  inner:
+    from: add2
+    a: $x
+    b: $y
+add2: ${a + b}
+_test:
+  outer:
+    args: {x: 10, y: 20}
+    error: E003
+  ok:
+    args: {x: 10, y: 20}
+    result: {x: 10, y: 20, inner: 30}

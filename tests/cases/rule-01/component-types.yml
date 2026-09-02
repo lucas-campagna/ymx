@@ -1,0 +1,15 @@
+str: hello
+int: 42
+float: 2.5
+flag: true
+nil: null
+list: [1, two, 3.0]
+obj: {a: 1, b: x}
+_test:
+  str: hello
+  int: 42
+  float: 2.5
+  flag: true
+  nil: null
+  list: [1, two, 3.0]
+  obj: {a: 1, b: x}

@@ -1,0 +1,17 @@
+mod: ${10 % 3}
+pow_int: ${2 ** 10}
+pow_neg: ${2 ** -2}
+prec: ${2 + 3 * 4}
+paren: ${(2 + 3) * 4}
+unary: ${-2 + 5}
+div: ${5 / 2}
+right_assoc: ${2 ** 3 ** 2}
+_test:
+  mod: 1
+  pow_int: 1024
+  pow_neg: 0.25
+  prec: 14
+  paren: 20
+  unary: 3
+  div: 2.5
+  right_assoc: 512

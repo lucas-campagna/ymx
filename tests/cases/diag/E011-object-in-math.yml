@@ -1,0 +1,5 @@
+main: ${obj + 1}
+_test:
+  main:
+    args: {obj: {a: 1}}
+    error: E011

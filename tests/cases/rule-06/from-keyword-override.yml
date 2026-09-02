@@ -1,0 +1,8 @@
+_ymx:
+  from_keyword: src
+a:
+  src: b
+  x: 12
+b: ${x + 1}
+_test:
+  a: 13

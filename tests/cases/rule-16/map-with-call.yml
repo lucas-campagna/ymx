@@ -1,0 +1,8 @@
+double: ${$0 * 2}
+items:
+  - 10
+  - 20
+  - 30
+c: $map($double, $items())
+_test:
+  c: [20, 40, 60]

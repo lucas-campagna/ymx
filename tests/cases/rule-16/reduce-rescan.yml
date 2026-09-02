@@ -1,0 +1,8 @@
+a: $a + $b
+b:
+  - {a: 1, b: 2}
+  - a: ${last}
+    b: 10
+c: $reduce($a, $b())
+_test:
+  c: "3 + 10"

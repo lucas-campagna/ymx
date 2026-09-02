@@ -1,0 +1,15 @@
+$a:
+  - sum: ${x + y}
+    x: 0
+  - ${sum + x + y}
+  - a: $x
+    b: ${2*y}
+    sum: $last
+a:
+  - x: 1
+    y: 2
+  - x: 3
+    y: 4
+_test:
+  a:
+    error: E010

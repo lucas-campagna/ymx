@@ -1,0 +1,6 @@
+b: component-b
+main: $b()
+_test:
+  main:
+    args: {b: arg-b}
+    result: component-b

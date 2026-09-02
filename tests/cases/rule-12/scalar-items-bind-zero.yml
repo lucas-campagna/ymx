@@ -1,0 +1,6 @@
+double: ${$0 * 2}
+nums: [1, 2, 3]
+result: $map($double, $nums())
+main: $result()
+_test:
+  result: [2, 4, 6]

@@ -1,0 +1,6 @@
+add: ${last + $0}
+nums: [1, 2, 3]
+mapped: $map($add, $nums(), 0)
+_test:
+  mapped:
+    error: E011

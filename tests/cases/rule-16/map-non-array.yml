@@ -1,0 +1,6 @@
+double: ${$0 * 2}
+x: 5
+c: $map($double, $x())
+_test:
+  c:
+    error: E011

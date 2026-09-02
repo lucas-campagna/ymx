@@ -1,0 +1,7 @@
+comp:
+  from: target
+  x: 10
+  extra: ignored
+target: $x
+_test:
+  comp: 10

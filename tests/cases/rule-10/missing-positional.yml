@@ -1,0 +1,4 @@
+main: $0 + $1
+_test:
+  args: [1]
+  error: E003

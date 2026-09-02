@@ -1,0 +1,4 @@
+_use: {s: "helper._secret"}
+main: 1
+_test:
+  _build_error: E005

@@ -1,0 +1,5 @@
+a: {v: 1}
+$a: {out: $v}
+$$a: {final: $out}
+_test:
+  a: {final: 1}

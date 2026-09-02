@@ -1,0 +1,13 @@
+calc: ${expr + 1}
+chain: ${a + b}
+free_text: ${t + s}
+_test:
+  calc:
+    args: {expr: "1 + 2"}
+    result: 4
+  chain:
+    args: {a: "10", b: "x * 2", x: 5}
+    result: 20
+  free_text:
+    args: {t: "hello world", s: "!"}
+    result: "hello world!"

@@ -1,0 +1,13 @@
+greet: "Hello, $name! You have $count items."
+float_render: "v=$v"
+sum_text: ${s + n}
+_test:
+  greet:
+    args: {name: Ada, count: 3}
+    result: "Hello, Ada! You have 3 items."
+  float_render:
+    args: {v: 2.0}
+    result: "v=2.0"
+  sum_text:
+    args: {s: "count: ", n: 2.5}
+    result: "count: 2.5"

@@ -1,0 +1,5 @@
+main: ${arr + 1}
+_test:
+  main:
+    args: {arr: [1, 2]}
+    error: E011

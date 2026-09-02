@@ -1,0 +1,5 @@
+main: ${b + 1}
+_test:
+  main:
+    args: {b: true}
+    error: E011

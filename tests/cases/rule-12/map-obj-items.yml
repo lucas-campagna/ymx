@@ -1,0 +1,11 @@
+$items:
+  doubled: ${val * 2}
+items:
+  - {val: 1}
+  - {val: 2}
+  - {val: 3}
+_test:
+  items:
+    - {doubled: 2}
+    - {doubled: 4}
+    - {doubled: 6}

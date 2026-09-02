@@ -1,0 +1,4 @@
+inc: ${last + $0}
+c: $reduce($inc, [1, 2, 3], "0")
+_test:
+  c: 6

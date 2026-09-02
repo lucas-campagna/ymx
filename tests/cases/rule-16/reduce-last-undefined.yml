@@ -1,0 +1,6 @@
+needs_last: $last + $0
+one: [7]
+c: $reduce($needs_last, $one())
+_test:
+  c:
+    error: E003
