@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use crate::diag::{Diagnostic, FileId, Span, E004, E007, E015};
 use crate::ir::Value;
 use crate::parse::{node_to_value, Entry, Key, Node};
+use crate::resolve::{parse_property_key, Suffix};
 
 /// The three reserved meta keys (bare form, consumed by the engine).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,70 +189,40 @@ pub fn classify(full_name: &str, span: Span) -> DefClass {
     let dollar_count = idx as u32;
     let after_leading = &full_name[idx..];
 
-    // Check for executor suffix `$<backend>` BEFORE trailing modifier stripping.
-    // `main$sh` → base="main", backend="sh"; `main$` → no exec suffix (empty backend).
-    // Only `sh` and `pw` are executor backends; other `$<name>` suffixes are
-    // key-suffix component calls (`a$b: v` ≡ `a: $b{v}`).
-    let has_exec_suffix = {
-        let dollar_pos_opt = after_leading.rfind('$');
-        match dollar_pos_opt {
-            None => false,
-            Some(0) => false,
-            Some(dollar_pos) => {
-                let backend = &after_leading[dollar_pos + 1..];
-                // Only `sh` and `pw` are executor backends.
-                backend == "sh" || backend == "pw"
-            }
-        }
-    };
-
-    // Check for key-suffix pattern `key$name` where key and name are valid identifiers.
-    // This is a key-suffix component call (`a$b: v` ≡ `a: $b{v}`).
-    // Only `sh`/`pw` use the exec_backend path above; other names are key-suffix.
-    let has_key_suffix = {
-        let dollar_pos_opt = after_leading.rfind('$');
-        match dollar_pos_opt {
-            None => false,
-            Some(0) => false, // leading $ — template or builtin
-            Some(dollar_pos) => {
-                let key = &after_leading[..dollar_pos];
-                let name = &after_leading[dollar_pos + 1..];
-                !name.is_empty() && is_valid_effective_id(key) && is_valid_effective_id(name)
-            }
-        }
-    };
-
-    // Strip trailing `?$`, `$?`, `$`, or `?` before effective-id validation.
-    // `?$` is the correct v2 order (optional + math); `$?` is the wrong order
-    // (rule 20) — both set trailing_dollar + trailing_question.
-    let (effective_id, trailing_dollar, trailing_question, exec_backend) = if has_exec_suffix {
-        let dollar_pos = after_leading.rfind('$').unwrap();
-        let base = &after_leading[..dollar_pos];
-        let backend = &after_leading[dollar_pos + 1..];
-        (base, false, false, Some(backend.to_string()))
-    } else if has_key_suffix {
-        // `key$name` — key-suffix component call. Store with exec_backend so
-        // compile-time resolution can route it correctly.
-        let dollar_pos = after_leading.rfind('$').unwrap();
-        let base = &after_leading[..dollar_pos];
-        let name = &after_leading[dollar_pos + 1..];
-        (base, false, false, Some(name.to_string()))
-    } else if let Some(stripped) = after_leading.strip_suffix("?$") {
-        (stripped, true, true, None)
-    } else if let Some(stripped) = after_leading.strip_suffix("$?") {
-        (stripped, true, true, None)
-    } else if let Some(stripped) = after_leading.strip_suffix('$') {
-        (stripped, true, false, None)
-    } else if let Some(stripped) = after_leading.strip_suffix('?') {
-        (stripped, false, true, None)
+    // Normalize `$?` to `?$` before calling parse_property_key. Both orders
+    // are accepted in definition names (both set trailing_dollar +
+    // trailing_question); the wrong-order check happens at compile time
+    // (E011 in Resolver::call_root). parse_property_key rejects `$?` as
+    // E010 for property keys, so we normalize to preserve existing behavior.
+    let normalized = if let Some(base) = after_leading.strip_suffix("$?") {
+        format!("{}?$", base)
     } else {
-        (after_leading, false, false, None)
+        after_leading.to_string()
     };
 
-    if !is_valid_effective_id(effective_id) {
+    let parsed = match parse_property_key(&normalized) {
+        Ok(pk) => pk,
+        Err(_) => return DefClass::InvalidName(span),
+    };
+
+    let effective_id = parsed.base;
+    let trailing_dollar = matches!(parsed.suffix, Suffix::Math);
+    let trailing_question = parsed.optional;
+    let exec_backend = match &parsed.suffix {
+        Suffix::Call(name) => {
+            // Validate the call name is a valid effective identifier, matching
+            // the original key-suffix validation in classify.
+            if !is_valid_effective_id(name) {
+                return DefClass::InvalidName(span);
+            }
+            Some(name.clone())
+        }
+        _ => None,
+    };
+
+    if !is_valid_effective_id(&effective_id) {
         return DefClass::InvalidName(span);
     }
-    let effective_id = effective_id.to_string();
     let file_scoped = effective_id.starts_with('_');
     let meta = ComponentMeta {
         full_name: full_name.to_string(),
