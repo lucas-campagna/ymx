@@ -809,15 +809,12 @@ fn parse_brace_scalar(src: &str) -> Result<BracePayload, (&'static str, String)>
             // A bare `$name` in a scalar brace-call payload is stored as a string reference.
             Value::String(format!("${}", name))
         }
-        Ok(ParsedValue::Math { src: m }) => {
-            Value::String(format!("${{{}}}", m))
-        }
+        Ok(ParsedValue::Math { src: m }) => Value::String(format!("${{{}}}", m)),
         Ok(ParsedValue::Call(_)) => {
             return Err((
                 crate::diag::E010,
-                format!(
-                    "nested call-site `$name(...)` not supported in scalar brace-call payload"
-                ),
+                "nested call-site `$name(...)` not supported in scalar brace-call payload"
+                    .to_string(),
             ));
         }
         Err((code, msg)) => return Err((code, msg)),
@@ -1107,9 +1104,10 @@ mod tests {
         let payload = parse_brace_payload("{a: {b: 1}}").unwrap();
         assert_eq!(
             payload,
-            BracePayload::Object(vec![("a".to_string(), Value::Object(IndexMap::from([
-                ("b".to_string(), Value::Int(1))
-            ])))])
+            BracePayload::Object(vec![(
+                "a".to_string(),
+                Value::Object(IndexMap::from([("b".to_string(), Value::Int(1))]))
+            )])
         );
     }
 
@@ -1144,14 +1142,17 @@ mod tests {
 
     #[test]
     fn brace_payload_scalar_float() {
-        let payload = parse_brace_payload("3.14").unwrap();
-        assert_eq!(payload, BracePayload::Scalar(Value::Float(3.14)));
+        let payload = parse_brace_payload("1.23").unwrap();
+        assert_eq!(payload, BracePayload::Scalar(Value::Float(1.23)));
     }
 
     #[test]
     fn brace_payload_scalar_string() {
         let payload = parse_brace_payload("hello").unwrap();
-        assert_eq!(payload, BracePayload::Scalar(Value::String("hello".to_string())));
+        assert_eq!(
+            payload,
+            BracePayload::Scalar(Value::String("hello".to_string()))
+        );
     }
 
     #[test]
@@ -1234,7 +1235,10 @@ mod tests {
         let payload2 = parse_brace_payload("[,]").unwrap();
         assert_eq!(
             payload2,
-            BracePayload::Array(vec![Value::String("".to_string()), Value::String("".to_string())])
+            BracePayload::Array(vec![
+                Value::String("".to_string()),
+                Value::String("".to_string())
+            ])
         );
         // Note: truly unbalanced brackets like `[1, 2` (missing `]`) are caught
         // by the scanner (find_matching_brace returns None → E010 at scan time),
@@ -1261,13 +1265,15 @@ mod tests {
 
     #[test]
     fn brace_payload_complex_object_with_quoted_values() {
-        let payload =
-            parse_brace_payload(r#"{name: "Alice", greeting: 'Hello, world!'}"#).unwrap();
+        let payload = parse_brace_payload(r#"{name: "Alice", greeting: 'Hello, world!'}"#).unwrap();
         assert_eq!(
             payload,
             BracePayload::Object(vec![
                 ("name".to_string(), Value::String("Alice".to_string())),
-                ("greeting".to_string(), Value::String("Hello, world!".to_string())),
+                (
+                    "greeting".to_string(),
+                    Value::String("Hello, world!".to_string())
+                ),
             ])
         );
     }

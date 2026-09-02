@@ -673,7 +673,10 @@ impl<'a> Resolver<'a> {
                 other => Value::Array(vec![other]),
             };
             let mut m = IndexMap::new();
-            m.insert("__brace_call".to_string(), Value::string(suffix_name.clone()));
+            m.insert(
+                "__brace_call".to_string(),
+                Value::string(suffix_name.clone()),
+            );
             m.insert("__brace_args".to_string(), args_value);
             let marker = Value::Object(m);
             let result = self.maybe_exec(marker, def.span, def.file)?;
@@ -880,7 +883,12 @@ impl<'a> Resolver<'a> {
                                 });
                             }
                         };
-                        return self.execute_command(backend, &cmd_str, Span { line: 1, col: 1 }, file);
+                        return self.execute_command(
+                            backend,
+                            &cmd_str,
+                            Span { line: 1, col: 1 },
+                            file,
+                        );
                     }
                 }
                 match self.shortcut(m, &[], file, component)? {
@@ -926,12 +934,11 @@ impl<'a> Resolver<'a> {
                     });
                 }
                 Ok(def) => matches.push((k.as_str(), def, v)),
-                Err(LookupMiss::NotFound) => {
+                Err(LookupMiss::NotFound)
                     // Check if it's a builtin executor (sh/pw).
-                    if (k == "sh" || k == "pw") && builtin_match.is_none() {
+                    if (k == "sh" || k == "pw") && builtin_match.is_none() => {
                         builtin_match = Some((k.as_str(), v));
                     }
-                }
                 _ => {}
             }
         }
@@ -962,7 +969,9 @@ impl<'a> Resolver<'a> {
                     });
                 }
             };
-            return self.execute_command(builtin, &cmd_str, Span { line: 1, col: 1 }, file).map(Some);
+            return self
+                .execute_command(builtin, &cmd_str, Span { line: 1, col: 1 }, file)
+                .map(Some);
         }
         match matches.len() {
             0 => Ok(None),
@@ -1487,7 +1496,11 @@ impl<'a> Resolver<'a> {
         // - None: value is NOT a math expression (just optional, use as-is)
         // - Some((true, None)): value is a math expression to be evaluated (for `?$`)
         // - Some((false, Some(component))): value is argument for key-suffix call to `component`
-        let mut optional_named: Vec<(String, &crate::parse::Entry, Option<(bool, Option<String>)>)> = Vec::new();
+        let mut optional_named: Vec<(
+            String,
+            &crate::parse::Entry,
+            Option<(bool, Option<String>)>,
+        )> = Vec::new();
         let mut optional_slots: Vec<(usize, &crate::parse::Entry, bool)> = Vec::new();
 
         for entry in entries {
@@ -1677,9 +1690,13 @@ impl<'a> Resolver<'a> {
                     }
                     let base = &s[..qdollar_pos]; // "x?$abc" → "x"
                     let component = &s[qdollar_pos + 2..]; // after "?$"
-                    // Store for lazy evaluation via optional_named mechanism.
-                    // The entry will be evaluated only if caller doesn't supply `base`.
-                    optional_named.push((base.to_string(), entry, Some((false, Some(component.to_string())))));
+                                                           // Store for lazy evaluation via optional_named mechanism.
+                                                           // The entry will be evaluated only if caller doesn't supply `base`.
+                    optional_named.push((
+                        base.to_string(),
+                        entry,
+                        Some((false, Some(component.to_string()))),
+                    ));
                     set.order.push(PropKey::Named(base.to_string()));
                 }
                 _ => {
@@ -2070,7 +2087,12 @@ impl<'a> Resolver<'a> {
                                 });
                             }
                         };
-                        return self.execute_command(backend, &cmd_str, Span { line: 1, col: 1 }, file);
+                        return self.execute_command(
+                            backend,
+                            &cmd_str,
+                            Span { line: 1, col: 1 },
+                            file,
+                        );
                     }
                 }
                 match self.shortcut(&props.named, &props.slots, file, component)? {
@@ -2182,10 +2204,7 @@ impl<'a> Resolver<'a> {
                     return args_from(named, positional);
                 }
                 // Check for Named form: {"c": 1, "d": 2} — direct object as named args.
-                if !m.is_empty()
-                    && !m.contains_key("named")
-                    && !m.contains_key("positional")
-                {
+                if !m.is_empty() && !m.contains_key("named") && !m.contains_key("positional") {
                     let named = m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     return args_from(named, vec![]);
                 }
@@ -2514,7 +2533,9 @@ impl<'a> Resolver<'a> {
                     // If the resolved value is exactly "$N" (a positional reference),
                     // extract positional[N] from the caller's scope.
                     let positional = match resolved {
-                        Value::String(ref s) if s.starts_with('$') && s[1..].bytes().all(|b| b.is_ascii_digit()) => {
+                        Value::String(ref s)
+                            if s.starts_with('$') && s[1..].bytes().all(|b| b.is_ascii_digit()) =>
+                        {
                             let idx = s[1..].parse::<usize>().unwrap();
                             if let Some(v) = scope.positional_at(idx) {
                                 vec![v.clone()]
@@ -2549,7 +2570,10 @@ impl<'a> Resolver<'a> {
                 Args::Named(named) => {
                     // For named args, use the first positional if available, else E003.
                     // sh/pw take a single positional arg (the command).
-                    if let Some((_, v)) = named.iter().find(|(k, _)| k.bytes().all(|b| b.is_ascii_digit())) {
+                    if let Some((_, v)) = named
+                        .iter()
+                        .find(|(k, _)| k.bytes().all(|b| b.is_ascii_digit()))
+                    {
                         Self::value_to_cmd_string(v, name, span)?
                     } else {
                         return Err(Diagnostic {
@@ -2579,7 +2603,10 @@ impl<'a> Resolver<'a> {
                     // Mixed: try positional first.
                     if let Some(v) = positional.first() {
                         Self::value_to_cmd_string(v, name, span)?
-                    } else if let Some((_, v)) = named.iter().find(|(k, _)| k.bytes().all(|b| b.is_ascii_digit())) {
+                    } else if let Some((_, v)) = named
+                        .iter()
+                        .find(|(k, _)| k.bytes().all(|b| b.is_ascii_digit()))
+                    {
                         Self::value_to_cmd_string(v, name, span)?
                     } else {
                         return Err(Diagnostic {
@@ -2625,7 +2652,9 @@ impl<'a> Resolver<'a> {
                 // extract positional[N] from the caller's scope. Otherwise, use
                 // the resolved value as a scalar.
                 let positional = match resolved {
-                    Value::String(ref s) if s.starts_with('$') && s[1..].bytes().all(|b| b.is_ascii_digit()) => {
+                    Value::String(ref s)
+                        if s.starts_with('$') && s[1..].bytes().all(|b| b.is_ascii_digit()) =>
+                    {
                         let idx = s[1..].parse::<usize>().unwrap();
                         if let Some(v) = scope.positional_at(idx) {
                             vec![v.clone()]
@@ -2728,9 +2757,10 @@ impl<'a> Resolver<'a> {
                 Args::Named(named) => {
                     // sh/pw take a single positional arg (the command).
                     // If named args are provided, try to find a positional one.
-                    if let Some((_, v)) = named.iter().find(|(k, _)| {
-                        k.bytes().all(|b| b.is_ascii_digit())
-                    }) {
+                    if let Some((_, v)) = named
+                        .iter()
+                        .find(|(k, _)| k.bytes().all(|b| b.is_ascii_digit()))
+                    {
                         Self::value_to_cmd_string(v, name, span)?
                     } else {
                         return Err(Diagnostic {
@@ -2760,9 +2790,10 @@ impl<'a> Resolver<'a> {
                     // Mixed: try positional first.
                     if let Some(v) = positional.first() {
                         Self::value_to_cmd_string(v, name, span)?
-                    } else if let Some((_, v)) = named.iter().find(|(k, _)| {
-                        k.bytes().all(|b| b.is_ascii_digit())
-                    }) {
+                    } else if let Some((_, v)) = named
+                        .iter()
+                        .find(|(k, _)| k.bytes().all(|b| b.is_ascii_digit()))
+                    {
                         Self::value_to_cmd_string(v, name, span)?
                     } else {
                         return Err(Diagnostic {
@@ -2804,11 +2835,7 @@ impl<'a> Resolver<'a> {
 
     /// Extract a command string from a value for sh/pw execution.
     /// Returns E011 if the value cannot be rendered as a string.
-    fn value_to_cmd_string(
-        v: &Value,
-        name: &str,
-        span: Span,
-    ) -> Result<String, Diagnostic> {
+    fn value_to_cmd_string(v: &Value, name: &str, span: Span) -> Result<String, Diagnostic> {
         match v {
             Value::String(s) => Ok(s.clone()),
             Value::Int(i) => Ok(i.to_string()),
