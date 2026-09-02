@@ -159,6 +159,8 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
                             )),
                         },
                         "plain" => match field_value {
+                            Value::Bool(false) => plain = Some(PlainMode::False),
+                            Value::Bool(true) => plain = Some(PlainMode::All),
                             Value::String(s) if s == "false" => plain = Some(PlainMode::False),
                             Value::String(s) if s == "true" => plain = Some(PlainMode::All),
                             Value::String(s) if s == "template" => {
@@ -167,7 +169,7 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
                             _ => diags.push(invalid_field(
                                 &entry_file,
                                 "plain",
-                                "expected one of \"false\" | \"true\" | \"template\" (a string)",
+                                "expected a boolean (YAML `true`/`false`) or the string `\"template\"`",
                             )),
                         },
                         "allowed_backends" => match field_value {
@@ -502,7 +504,7 @@ mod tests {
 
     #[test]
     fn plain_rejects_non_string_enum_values() {
-        for src in ["plain: \"maybe\"\n", "plain: true\n", "plain: 5\n"] {
+        for src in ["plain: \"maybe\"\n", "plain: 5\n"] {
             let p = with_ymx(project(), 0, src);
             let diags = extract_options(&p, &CliOverrides::default_for_tests()).unwrap_err();
             assert_eq!(diags.len(), 1, "{src}");
@@ -639,6 +641,8 @@ mod tests {
             ("plain: \"false\"\n", PlainMode::False),
             ("plain: \"true\"\n", PlainMode::All),
             ("plain: \"template\"\n", PlainMode::TemplatesOnly),
+            ("plain: true\n", PlainMode::All),
+            ("plain: false\n", PlainMode::False),
         ] {
             let p = with_ymx(project(), 0, src);
             let opts = extract_options(&p, &CliOverrides::default_for_tests()).expect(src);

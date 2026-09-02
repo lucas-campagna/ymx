@@ -1,5 +1,5 @@
 _ymx:
-  plain: "true"
+  plain: true
 helper: 10
 _test:
   helper: 10
