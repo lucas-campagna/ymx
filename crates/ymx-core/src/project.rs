@@ -6,9 +6,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use indexmap::IndexMap;
+
 use crate::diag::FileId;
 use crate::exec::CommandExecutor;
-use crate::ipc::IpcHost;
+use crate::ipc::{IpcHost, IpcSpec};
 use crate::ir::Value;
 use crate::namespace::{Definition, FileScopeStore, NamespaceStore};
 
@@ -155,6 +157,8 @@ pub struct Project {
     /// always present in the global namespace (task 1.1).
     pub sh_def: Definition,
     pub pw_def: Definition,
+    /// IPC alias declarations from `_use` mapping RHS entries, keyed by alias name.
+    pub ipc: IndexMap<String, IpcSpec>,
 }
 
 /// The effective global namespace under a [`PlainMode`].
@@ -194,6 +198,7 @@ impl Project {
                 exec_backend: Some("pw".to_string()),
                 ..Definition::default()
             },
+            ipc: IndexMap::new(),
             ..Project::default()
         }
     }
