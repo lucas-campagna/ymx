@@ -62,6 +62,8 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.39 | `planned` | External components via `_use` IPC declarations (core) | ymx-core, ymx-lib, ymx-cli | [1.39-ipc-core.md](1.39-ipc-core.md) | 1.38 |
 | 1.40 | `planned` | IPC transports, structured mode & hooks (rule 21 extended) | ymx-core, ymx-lib | [1.40-ipc-transports-hooks.md](1.40-ipc-transports-hooks.md) | 1.39 |
 | 1.41 | `done` | Brace calls & builtin sh/pw components (rule 22) | ymx-core, tests/ | [1.41-brace-calls.md](1.41-brace-calls.md) | 1.18, 1.26, 1.27, 1.31 |
+| 1.42 | `planned` | Fix key-suffix skip bug in resolve_property_set | ymx-core | [1.42-key-suffix-skip-fix.md](1.42-key-suffix-skip-fix.md) | 1.41 |
+| 1.43 | `planned` | Introduce ParsedKey for property-key modifier parsing | ymx-core | [1.43-parsed-key-refactor.md](1.43-parsed-key-refactor.md) | 1.42 |
 
 ## v2 milestones
 
