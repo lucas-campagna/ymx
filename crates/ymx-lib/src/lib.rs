@@ -318,7 +318,7 @@ impl StdIpcHost {
                 loop {
                     if std::time::Instant::now() >= deadline {
                         let _ = child.kill();
-                        return Err(IpcError::Timeout);
+                        return Err(IpcError::Timeout(timeout_ms));
                     }
 
                     // Check if process exited
@@ -547,7 +547,7 @@ impl StdIpcHost {
 
                     loop {
                         if std::time::Instant::now() >= deadline {
-                            return Err(IpcError::Timeout);
+                            return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
                         }
 
                         match reader.read_line(&mut line) {
@@ -602,7 +602,7 @@ impl StdIpcHost {
 
                     for line in reader.lines() {
                         if std::time::Instant::now() >= deadline {
-                            return Err(IpcError::Timeout);
+                            return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
                         }
 
                         let line = line.map_err(|e| IpcError::FramingError(e.to_string()))?;
@@ -642,7 +642,7 @@ impl StdIpcHost {
 
                     loop {
                         if std::time::Instant::now() >= deadline {
-                            return Err(IpcError::Timeout);
+                            return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
                         }
 
                         match stdout.read(&mut buf) {

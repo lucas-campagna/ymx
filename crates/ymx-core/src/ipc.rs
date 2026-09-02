@@ -196,7 +196,7 @@ pub enum IpcError {
     DisallowedTransport(String),
     SpawnFailed(String),
     Crashed,
-    Timeout,
+    Timeout(u64),
     FramingError(String),
     StatusCode(u16, String),
     HookFailed(String),
@@ -212,7 +212,7 @@ impl fmt::Display for IpcError {
             }
             IpcError::SpawnFailed(reason) => write!(f, "IPC spawn failed: {reason}"),
             IpcError::Crashed => write!(f, "IPC process crashed"),
-            IpcError::Timeout => write!(f, "IPC timeout"),
+            IpcError::Timeout(ms) => write!(f, "IPC timeout after {ms}ms"),
             IpcError::FramingError(reason) => write!(f, "IPC protocol error: {reason}"),
             IpcError::StatusCode(code, body) => {
                 write!(f, "IPC HTTP status {code}: {body}")
