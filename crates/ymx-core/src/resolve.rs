@@ -1802,10 +1802,18 @@ impl<'a> Resolver<'a> {
         for entry in entries {
             match &entry.key {
                 crate::parse::Key::String(name) => {
-                    // Skip `?`, `?$`, and `$` entries — they're all handled in the
-                    // first match arms above. `?`/`?$` are lazy (or ?$ math-lazy),
-                    // and `$` is the eager math shorthand.
-                    if name.ends_with('?') || name.ends_with("?$") || name.ends_with('$') {
+                    // Skip entries handled in the first match arms above:
+                    // - `?`, `?$`, `$` — lazy/math shortcuts
+                    // - `x?$abc` — optional + key-suffix (contains "?$")
+                    // - `x$sh`/`x$pw` — executor shorthand (has_executor_suffix)
+                    // - `x$abc` — key-suffix component call (has_key_suffix)
+                    if name.ends_with('?')
+                        || name.ends_with("?$")
+                        || name.ends_with('$')
+                        || name.contains("?$")
+                        || has_executor_suffix(name)
+                        || has_key_suffix(name)
+                    {
                         continue;
                     }
                     let is_math_key = name.ends_with('$');
