@@ -254,37 +254,27 @@ pub fn resolve_ref<'a>(
             if let Some(def) = project.namespaces.get("", name) {
                 return Ok(def);
             }
-            // For non-template components, also try appending a trailing `$` (the
-            // top-level `a$` shorthand registers as `full_name: "a$"` but is
-            // called by the bare name `a`).
-            if !name.ends_with('$') {
-                let with_dollar = format!("{}$", name);
-                if let Some(def) = project.namespaces.get("", &with_dollar) {
-                    // Only match if it's a shorthand component (trailing $) and
-                    // not a template definition (which has LEADING $).
-                    if def.full_name.ends_with('$') {
-                        return Ok(def);
-                    }
-                }
-            }
-            // Also try appending a trailing `?` (the top-level `a?` shorthand
-            // registers as `full_name: "a?"` but is called by the bare name `a`).
-            if !name.ends_with('?') {
-                let with_question = format!("{}?", name);
-                if let Some(def) = project.namespaces.get("", &with_question) {
-                    // Template definitions have LEADING $, not trailing ?.
-                    if !def.full_name.starts_with('$') {
-                        return Ok(def);
-                    }
-                }
-            }
-            // Also try appending a trailing `$?` (the top-level `a$?` shorthand
-            // registers as `full_name: "a$?"` but is called by the bare name `a`).
-            if !name.ends_with("$?") {
-                let with_dollar_question = format!("{}$?", name);
-                if let Some(def) = project.namespaces.get("", &with_dollar_question) {
-                    if !def.full_name.starts_with('$') {
-                        return Ok(def);
+            // Try trailing-modifier variants: `name$` (math shorthand),
+            // `name?` (optional), `name$?` (combo). Uses
+            // `lookup_fallback_suffixes` to skip variants the name already has.
+            for suffix in lookup_fallback_suffixes(name) {
+                let candidate = format!("{}{}", name, suffix);
+                if let Some(def) = project.namespaces.get("", &candidate) {
+                    match suffix {
+                        "$" => {
+                            // Only match shorthand components (trailing $)
+                            // and not a template definition (which has LEADING $).
+                            if def.full_name.ends_with('$') {
+                                return Ok(def);
+                            }
+                        }
+                        "?" | "$?" => {
+                            // Template definitions have LEADING $, not trailing ?.
+                            if !def.full_name.starts_with('$') {
+                                return Ok(def);
+                            }
+                        }
+                        _ => unreachable!(),
                     }
                 }
             }
@@ -312,33 +302,18 @@ pub fn resolve_ref<'a>(
                 paths.sort_unstable();
                 let templates_only = plain == PlainMode::TemplatesOnly;
                 for path in paths {
+                    // Exact match in sub-namespace.
                     if let Some(def) = project.namespaces.get(path, name) {
                         if !templates_only || def.full_name.starts_with('$') {
                             return Ok(def);
                         }
                     }
-                    // Also try the trailing-$ variant for sub-namespace lookups.
-                    if !name.ends_with('$') {
-                        let with_dollar = format!("{}$", name);
-                        if let Some(def) = project.namespaces.get(path, &with_dollar) {
-                            if !templates_only || def.full_name.starts_with('$') {
-                                return Ok(def);
-                            }
-                        }
-                    }
-                    // Also try the trailing-? variant for sub-namespace lookups.
-                    if !name.ends_with('?') {
-                        let with_question = format!("{}?", name);
-                        if let Some(def) = project.namespaces.get(path, &with_question) {
-                            if !templates_only || def.full_name.starts_with('$') {
-                                return Ok(def);
-                            }
-                        }
-                    }
-                    // Also try the trailing-$? variant for sub-namespace lookups.
-                    if !name.ends_with("$?") {
-                        let with_dollar_question = format!("{}$?", name);
-                        if let Some(def) = project.namespaces.get(path, &with_dollar_question) {
+                    // Trailing-modifier variants in sub-namespace. Uses
+                    // `lookup_fallback_suffixes` to skip variants the name
+                    // already has.
+                    for suffix in lookup_fallback_suffixes(name) {
+                        let candidate = format!("{}{}", name, suffix);
+                        if let Some(def) = project.namespaces.get(path, &candidate) {
                             if !templates_only || def.full_name.starts_with('$') {
                                 return Ok(def);
                             }
@@ -722,32 +697,7 @@ impl<'a> Resolver<'a> {
         let bare_name = bare_name.strip_suffix('$').unwrap_or(bare_name);
         let name = format!("${}", bare_name);
         // Look up templates in the chain: `$comp3`, `$comp3$`, `$comp3?`, `$comp3$?`.
-        let tpl = self
-            .lookup_template(&ns, &name, def.file)
-            .or_else(|| {
-                if !name.ends_with('$') {
-                    let with_dollar = format!("{}$", name);
-                    self.lookup_template(&ns, &with_dollar, def.file)
-                } else {
-                    None
-                }
-            })
-            .or_else(|| {
-                if !name.ends_with('?') {
-                    let with_question = format!("{}?", name);
-                    self.lookup_template(&ns, &with_question, def.file)
-                } else {
-                    None
-                }
-            })
-            .or_else(|| {
-                if !name.ends_with("$?") {
-                    let with_dollar_question = format!("{}$?", name);
-                    self.lookup_template(&ns, &with_dollar_question, def.file)
-                } else {
-                    None
-                }
-            });
+        let tpl = self.lookup_template_with_fallbacks(&ns, &name, def.file);
         let Some(tpl) = tpl else {
             return Ok(None);
         };
@@ -1049,32 +999,7 @@ impl<'a> Resolver<'a> {
         let bare_name = bare_name.strip_suffix('?').unwrap_or(bare_name);
         let bare_name = bare_name.strip_suffix('$').unwrap_or(bare_name);
         let name = format!("${}", bare_name);
-        let tpl = self
-            .lookup_template(&ns, &name, def.file)
-            .or_else(|| {
-                if !name.ends_with('$') {
-                    let with_dollar = format!("{}$", name);
-                    self.lookup_template(&ns, &with_dollar, def.file)
-                } else {
-                    None
-                }
-            })
-            .or_else(|| {
-                if !name.ends_with('?') {
-                    let with_question = format!("{}?", name);
-                    self.lookup_template(&ns, &with_question, def.file)
-                } else {
-                    None
-                }
-            })
-            .or_else(|| {
-                if !name.ends_with("$?") {
-                    let with_dollar_question = format!("{}$?", name);
-                    self.lookup_template(&ns, &with_dollar_question, def.file)
-                } else {
-                    None
-                }
-            });
+        let tpl = self.lookup_template_with_fallbacks(&ns, &name, def.file);
         let Some(tpl) = tpl else {
             return Ok(None);
         };
@@ -1219,6 +1144,27 @@ impl<'a> Resolver<'a> {
             .namespaces
             .get(ns, name)
             .or_else(|| resolve_ref(self.project, name, file, self.opts.plain.clone()).ok())
+    }
+
+    /// Rule-5 template lookup with suffix fallback: tries `name`, then
+    /// `name$`, `name?`, `name$?` in priority order, skipping suffixes
+    /// the name already has ([`lookup_fallback_suffixes`]). Each candidate
+    /// goes through [`lookup_template`] (own namespace + global + plain).
+    fn lookup_template_with_fallbacks(
+        &self,
+        ns: &str,
+        name: &str,
+        file: FileId,
+    ) -> Option<&'a Definition> {
+        self.lookup_template(ns, name, file).or_else(|| {
+            for suffix in lookup_fallback_suffixes(name) {
+                let candidate = format!("{}{}", name, suffix);
+                if let Some(def) = self.lookup_template(ns, &candidate, file) {
+                    return Some(def);
+                }
+            }
+            None
+        })
     }
 
     /// Rule-5 argument passing between chain steps: the next link's args
@@ -2916,6 +2862,42 @@ pub fn parse_property_key(raw: &str) -> Result<ParsedKey, Diagnostic> {
         optional,
         suffix,
     })
+}
+
+/// Given a component or template name being looked up, return an iterator of
+/// trailing suffixes to try for namespace-lookup fallback (in priority order:
+/// `"$"`, `"?"`, `"$?"`). Suffixes the name already has are skipped.
+///
+/// Uses [`parse_property_key`] (with `$?` → `?$` normalization matching
+/// [`classify`](crate::namespace::classify)) to determine which modifiers are
+/// already present. For example:
+/// - `"box"` → `["$", "?", "$?"]`
+/// - `"box$"` → `["?", "$?"]`
+/// - `"box?"` → `["$", "$?"]`
+/// - `"$box$?"` → `[]`
+pub fn lookup_fallback_suffixes(name: &str) -> impl Iterator<Item = &'static str> {
+    // Normalize `$?` → `?$` for parse_property_key (same as classify in
+    // namespace.rs), since `$?` is a valid component-name suffix but not
+    // a valid property-key modifier order.
+    let normalized = if let Some(base) = name.strip_suffix("$?") {
+        format!("{}?$", base)
+    } else {
+        name.to_string()
+    };
+    let pk = parse_property_key(&normalized).ok();
+    let has_dollar = pk
+        .as_ref()
+        .is_some_and(|k| matches!(k.suffix, Suffix::Math));
+    let has_question = pk.as_ref().is_some_and(|k| k.optional);
+    let has_dollar_question = name.ends_with("$?");
+
+    [
+        (!has_dollar).then_some("$"),
+        (!has_question).then_some("?"),
+        (!has_dollar_question).then_some("$?"),
+    ]
+    .into_iter()
+    .flatten()
 }
 
 /// The result of rule-11 step 1: a plain value or an object property set.
@@ -5593,5 +5575,59 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
             "{}",
             err.message
         );
+    }
+
+    // ---- Task 1.43: lookup_fallback_suffixes ----
+
+    #[test]
+    fn fallback_suffixes_bare_name_tries_all() {
+        let suffixes: Vec<_> = lookup_fallback_suffixes("box").collect();
+        assert_eq!(suffixes, vec!["$", "?", "$?"]);
+    }
+
+    #[test]
+    fn fallback_suffixes_dollar_suffix_skips_dollar() {
+        let suffixes: Vec<_> = lookup_fallback_suffixes("box$").collect();
+        assert_eq!(suffixes, vec!["?", "$?"]);
+    }
+
+    #[test]
+    fn fallback_suffixes_question_suffix_skips_question() {
+        let suffixes: Vec<_> = lookup_fallback_suffixes("box?").collect();
+        assert_eq!(suffixes, vec!["$", "$?"]);
+    }
+
+    #[test]
+    fn fallback_suffixes_dollar_question_suffix_skips_all() {
+        let suffixes: Vec<_> = lookup_fallback_suffixes("box$?").collect();
+        assert!(suffixes.is_empty());
+    }
+
+    #[test]
+    fn fallback_suffixes_template_with_dollar_prefix() {
+        let suffixes: Vec<_> = lookup_fallback_suffixes("$box").collect();
+        assert_eq!(suffixes, vec!["$", "?", "$?"]);
+    }
+
+    #[test]
+    fn fallback_suffixes_template_with_trailing_dollar() {
+        // `$box$` has a leading `$` (template prefix) and trailing `$` (math
+        // shorthand). parse_property_key treats the leading `$` as part of the
+        // name, so it can't detect the trailing `$` as a modifier. This means
+        // all three suffixes are tried (the extra `$box$$` is harmless).
+        let suffixes: Vec<_> = lookup_fallback_suffixes("$box$").collect();
+        assert_eq!(suffixes, vec!["$", "?", "$?"]);
+    }
+
+    #[test]
+    fn fallback_suffixes_template_with_question() {
+        let suffixes: Vec<_> = lookup_fallback_suffixes("$box?").collect();
+        assert_eq!(suffixes, vec!["$", "$?"]);
+    }
+
+    #[test]
+    fn fallback_suffixes_file_scoped_name() {
+        let suffixes: Vec<_> = lookup_fallback_suffixes("_x").collect();
+        assert_eq!(suffixes, vec!["$", "?", "$?"]);
     }
 }
