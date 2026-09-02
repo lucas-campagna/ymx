@@ -36,6 +36,8 @@ pub struct CliOverrides {
     pub plain: Option<PlainMode>,
     /// `--allowed-backends <list>` override (default `None` = all allowed).
     pub allowed_backends: Option<Vec<String>>,
+    /// `--allowed-ipc <list>` override (default `None` = all allowed).
+    pub allowed_ipc: Option<Vec<String>>,
     /// `--pdf-backend <system|bundled|docker>` override (default `System`).
     pub pdf_backend: Option<String>,
 }
@@ -51,6 +53,7 @@ impl CliOverrides {
             format: None,
             plain: None,
             allowed_backends: None,
+            allowed_ipc: None,
             pdf_backend: None,
         }
     }
@@ -108,6 +111,7 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
     let mut format: Option<Format> = None;
     let mut plain: Option<PlainMode> = None;
     let mut allowed_backends: Option<Vec<String>> = None;
+    let mut allowed_ipc: Option<Vec<String>> = None;
     let mut pdf_backend: Option<String> = None;
 
     if let Some((_, value)) = project.raw_meta_ymx.iter().find(|(fid, _)| *fid == file_id) {
@@ -202,6 +206,36 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
                                 "expected a list of strings",
                             )),
                         },
+                        "allowed_ipc" => match field_value {
+                            Value::Array(items) => {
+                                let mut transports = Vec::with_capacity(items.len());
+                                let mut valid = true;
+                                for item in items {
+                                    match item {
+                                        Value::String(s) if !s.is_empty() => {
+                                            transports.push(s.clone());
+                                        }
+                                        _ => {
+                                            valid = false;
+                                            diags.push(invalid_field(
+                                                &entry_file,
+                                                "allowed_ipc",
+                                                "expected a list of non-empty strings",
+                                            ));
+                                            break;
+                                        }
+                                    }
+                                }
+                                if valid {
+                                    allowed_ipc = Some(transports);
+                                }
+                            }
+                            _ => diags.push(invalid_field(
+                                &entry_file,
+                                "allowed_ipc",
+                                "expected a list of strings",
+                            )),
+                        },
                         "pdf_backend" => match field_value {
                             Value::String(s) if s == "system" => {
                                 pdf_backend = Some("system".to_string())
@@ -248,6 +282,7 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
     let effective_plain = cli.plain.clone().or(plain).unwrap_or(PlainMode::False);
     opts.plain = effective_plain.clone();
     opts.allowed_backends = cli.allowed_backends.clone().or(allowed_backends);
+    opts.allowed_ipc = cli.allowed_ipc.clone().or(allowed_ipc);
 
     // pdf_backend: CLI > entry-file _ymx > engine default
     let effective_pdf_backend = match &cli.pdf_backend {

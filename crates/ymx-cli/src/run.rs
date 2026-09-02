@@ -52,7 +52,9 @@ use ymx_lib::ymx_core::ir::Args;
 use ymx_lib::ymx_core::project::{Format, Options, Project};
 use ymx_lib::ymx_core::render::{pretty_print_html, DefaultHtmlRenderer, HtmlRenderer};
 use ymx_lib::ymx_core::resolve::{compile, compile_component};
-use ymx_lib::{load_project, load_project_with_override, Diagnostic, StdExecutor, Value};
+use ymx_lib::{
+    load_project, load_project_with_override, Diagnostic, StdExecutor, StdIpcHost, Value,
+};
 use ymx_test::{parse_tests, run_tests, Expected, TestResult};
 
 use crate::args::ParsedCli;
@@ -410,6 +412,7 @@ pub fn run(cli: &ParsedCli) -> RunOutcome {
             format: cli.format.clone(),
             plain: None,
             allowed_backends: cli.allowed_backends.clone(),
+            allowed_ipc: cli.allowed_ipc.clone(),
             pdf_backend: cli.pdf_backend.as_ref().map(|k| match k {
                 crate::args::PdfBackendKind::System => "system".to_string(),
                 crate::args::PdfBackendKind::Bundled => "bundled".to_string(),
@@ -430,6 +433,16 @@ pub fn run(cli: &ParsedCli) -> RunOutcome {
     // --no-exec disables shell execution entirely.
     if cli.no_exec {
         opts.executor = None;
+    }
+
+    // --no-ipc disables IPC entirely.
+    if cli.no_ipc {
+        opts.ipc = None;
+    } else if opts.ipc.is_none() {
+        // Inject StdIpcHost so IPC works out of the box.
+        if let Some(ref exec) = opts.executor {
+            opts.ipc = Some(Arc::new(StdIpcHost::new(exec.clone())));
+        }
     }
 
     if cli.test {
@@ -720,6 +733,13 @@ fn run_recursive_tests(dir: &Path) -> RunOutcome {
 
         // Enable shell execution for tests
         opts.executor = Some(Arc::new(StdExecutor));
+
+        // Inject StdIpcHost so IPC works in tests.
+        if opts.ipc.is_none() {
+            if let Some(ref exec) = opts.executor {
+                opts.ipc = Some(Arc::new(StdIpcHost::new(exec.clone())));
+            }
+        }
 
         if let Err(diags) = parse_tests(&project, Some(&opts.entry)) {
             eprintln!(
@@ -1308,6 +1328,15 @@ fn run_single_compile(
         opts.executor = None;
     }
 
+    // --no-ipc disables IPC entirely.
+    if cli.no_ipc {
+        opts.ipc = None;
+    } else if opts.ipc.is_none() {
+        if let Some(ref exec) = opts.executor {
+            opts.ipc = Some(Arc::new(StdIpcHost::new(exec.clone())));
+        }
+    }
+
     match compile(&project, &opts) {
         Ok(value) => {
             let (outcome, output) = emit(cli, &opts, &value, docker_backend);
@@ -1582,6 +1611,8 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
+            no_ipc: false,
+            allowed_ipc: None,
             code: None,
             pdf_backend: None,
             watch: None,
@@ -1608,6 +1639,8 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
+            no_ipc: false,
+            allowed_ipc: None,
             code: None,
             pdf_backend: None,
             watch: None,
@@ -1628,6 +1661,8 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
+            no_ipc: false,
+            allowed_ipc: None,
             code: None,
             pdf_backend: None,
             watch: None,
@@ -2188,6 +2223,8 @@ mod tests {
             stdin_is_script: true,
             allowed_backends: None,
             no_exec: false,
+            no_ipc: false,
+            allowed_ipc: None,
             code: Some("main: hello world".to_string()),
             pdf_backend: None,
             watch: None,
@@ -2211,6 +2248,8 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
+            no_ipc: false,
+            allowed_ipc: None,
             code: Some("comp1: 20\nmain: ${comp1()}".to_string()),
             pdf_backend: None,
             watch: None,
@@ -2234,6 +2273,8 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
+            no_ipc: false,
+            allowed_ipc: None,
             code: Some("comp2: 20\nmain: ${comp1()} + ${comp2()}".to_string()),
             pdf_backend: None,
             watch: None,
@@ -2262,6 +2303,8 @@ mod tests {
             stdin_is_script: true,
             allowed_backends: None,
             no_exec: false,
+            no_ipc: false,
+            allowed_ipc: None,
             code: Some("{\"main\": \"${1 + 2}\"}".to_string()),
             pdf_backend: None,
             watch: None,
@@ -2284,6 +2327,8 @@ mod tests {
             stdin_is_script: true,
             allowed_backends: None,
             no_exec: false,
+            no_ipc: false,
+            allowed_ipc: None,
             code: Some("main: ${10 / 2}".to_string()),
             pdf_backend: None,
             watch: None,
@@ -2306,6 +2351,8 @@ mod tests {
             stdin_is_script: true,
             allowed_backends: None,
             no_exec: false,
+            no_ipc: false,
+            allowed_ipc: None,
             code: Some("greeting: \"hi\"\nmain: ${greeting()}".to_string()),
             pdf_backend: None,
             watch: None,
@@ -2329,6 +2376,8 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
+            no_ipc: false,
+            allowed_ipc: None,
             code: Some("{\"comp2\": 20, \"main\": \"${comp1()} + ${comp2()}\"}".to_string()),
             pdf_backend: None,
             watch: None,
@@ -2352,6 +2401,8 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
+            no_ipc: false,
+            allowed_ipc: None,
             code: Some("main: ${base() * 3 + 1}".to_string()),
             pdf_backend: None,
             watch: None,
@@ -2375,6 +2426,8 @@ mod tests {
             stdin_is_script: false,
             allowed_backends: None,
             no_exec: false,
+            no_ipc: false,
+            allowed_ipc: None,
             code: Some("main: ${greet()}".to_string()),
             pdf_backend: None,
             watch: None,

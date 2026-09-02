@@ -43,6 +43,8 @@ cfg_if::cfg_if! {
             pub stdin_is_script: bool,
             pub allowed_backends: Option<Vec<String>>,
             pub no_exec: bool,
+            pub no_ipc: bool,
+            pub allowed_ipc: Option<Vec<String>>,
             pub code: Option<String>,
             pub pdf_backend: Option<PdfBackendKind>,
             pub watch: Option<PathBuf>,
@@ -62,6 +64,8 @@ cfg_if::cfg_if! {
                     .field("stdin_is_script", &self.stdin_is_script)
                     .field("allowed_backends", &self.allowed_backends)
                     .field("no_exec", &self.no_exec)
+                    .field("no_ipc", &self.no_ipc)
+                    .field("allowed_ipc", &self.allowed_ipc)
                     .field("code", &self.code)
                     .field("pdf_backend", &self.pdf_backend)
                     .field("watch", &self.watch)
@@ -83,6 +87,8 @@ cfg_if::cfg_if! {
                     stdin_is_script: self.stdin_is_script,
                     allowed_backends: self.allowed_backends.clone(),
                     no_exec: self.no_exec,
+                    no_ipc: self.no_ipc,
+                    allowed_ipc: self.allowed_ipc.clone(),
                     code: self.code.clone(),
                     pdf_backend: self.pdf_backend,
                     watch: self.watch.clone(),
@@ -103,6 +109,8 @@ cfg_if::cfg_if! {
                     && self.stdin_is_script == other.stdin_is_script
                     && self.allowed_backends == other.allowed_backends
                     && self.no_exec == other.no_exec
+                    && self.no_ipc == other.no_ipc
+                    && self.allowed_ipc == other.allowed_ipc
                     && self.code == other.code
                     && self.pdf_backend == other.pdf_backend
                     && self.watch == other.watch
@@ -121,6 +129,8 @@ cfg_if::cfg_if! {
             pub stdin_is_script: bool,
             pub allowed_backends: Option<Vec<String>>,
             pub no_exec: bool,
+            pub no_ipc: bool,
+            pub allowed_ipc: Option<Vec<String>>,
             pub code: Option<String>,
             pub pdf_backend: Option<PdfBackendKind>,
         }
@@ -139,6 +149,8 @@ cfg_if::cfg_if! {
                     .field("stdin_is_script", &self.stdin_is_script)
                     .field("allowed_backends", &self.allowed_backends)
                     .field("no_exec", &self.no_exec)
+                    .field("no_ipc", &self.no_ipc)
+                    .field("allowed_ipc", &self.allowed_ipc)
                     .field("code", &self.code)
                     .field("pdf_backend", &self.pdf_backend)
                     .finish()
@@ -159,6 +171,8 @@ cfg_if::cfg_if! {
                     stdin_is_script: self.stdin_is_script,
                     allowed_backends: self.allowed_backends.clone(),
                     no_exec: self.no_exec,
+                    no_ipc: self.no_ipc,
+                    allowed_ipc: self.allowed_ipc.clone(),
                     code: self.code.clone(),
                     pdf_backend: self.pdf_backend,
                 }
@@ -178,6 +192,8 @@ cfg_if::cfg_if! {
                     && self.stdin_is_script == other.stdin_is_script
                     && self.allowed_backends == other.allowed_backends
                     && self.no_exec == other.no_exec
+                    && self.no_ipc == other.no_ipc
+                    && self.allowed_ipc == other.allowed_ipc
                     && self.code == other.code
                     && self.pdf_backend == other.pdf_backend
             }
@@ -213,6 +229,7 @@ impl ParsedCli {
             format: self.format.clone(),
             plain: None,
             allowed_backends: self.allowed_backends.clone(),
+            allowed_ipc: self.allowed_ipc.clone(),
             pdf_backend: self.pdf_backend.map(|k| match k {
                 PdfBackendKind::System => "system".to_string(),
                 PdfBackendKind::Bundled => "bundled".to_string(),
@@ -257,6 +274,8 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     let mut test = false;
     let mut allowed_backends: Option<Vec<String>> = None;
     let mut no_exec = false;
+    let mut no_ipc = false;
+    let mut allowed_ipc: Option<Vec<String>> = None;
     let mut code: Option<String> = None;
     let mut pdf_backend: Option<PdfBackendKind> = None;
     #[cfg(feature = "watch")]
@@ -311,6 +330,17 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
                 allowed_backends = Some(list);
             }
             "--no-exec" => no_exec = true,
+            "--no-ipc" => no_ipc = true,
+            "--allowed-ipc" => {
+                let raw = take_value(args, &mut i, "--allowed-ipc")?;
+                let list: Vec<String> = raw.split(',').map(|s| s.trim().to_string()).collect();
+                if list.is_empty() || list.iter().any(|s| s.is_empty()) {
+                    return Err(ParseError {
+                        message: "--allowed-ipc: list must not contain empty entries".to_string(),
+                    });
+                }
+                allowed_ipc = Some(list);
+            }
             "--pdf-backend" => {
                 let raw = take_value(args, &mut i, "--pdf-backend")?;
                 pdf_backend = Some(match raw.as_str() {
@@ -455,6 +485,8 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         stdin_is_script,
         allowed_backends,
         no_exec,
+        no_ipc,
+        allowed_ipc,
         code,
         pdf_backend,
         watch,
@@ -472,6 +504,8 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         stdin_is_script,
         allowed_backends,
         no_exec,
+        no_ipc,
+        allowed_ipc,
         code,
         pdf_backend,
     };
