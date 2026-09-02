@@ -33,10 +33,11 @@ pub enum Segment {
         args: String,
         span: Span,
     },
-    /// A `$<backend>{<command>}` executor call (rule 19).
-    Exec {
-        backend: String,
-        command: String,
+    /// A `$name{...}` brace call (rule 22): `name` is the effective identifier,
+    /// `payload_src` is the raw text between the braces (balanced, quote-aware).
+    BraceCall {
+        name: String,
+        payload_src: String,
         span: Span,
     },
 }
@@ -168,31 +169,40 @@ fn scan_impl(src: &str, base: Span, shell_calls: bool) -> Result<Vec<Segment>, D
                                 }
                             }
                         }
-                        // Check for `$<backend>{<command>}` executor call.
+                        // Check for `$name{...}` brace call (rule 22).
                         if chars.peek().map(|(_, c)| *c) == Some('{') {
                             chars.next(); // consume '{'
-                            let mut cmd = String::new();
-                            let mut closed = false;
-                            for (_, mc) in chars.by_ref() {
-                                if mc == '}' {
-                                    closed = true;
-                                    break;
+                            let span_start = start;
+                            // Compute the remaining string after the opening '{' using byte indices
+                            let after_open = start + name.len() + 2; // start + len(name) + 1('$') + 1('{')
+                            let rest = &src[after_open..];
+                            match find_matching_brace(rest) {
+                                Some((payload, _)) => {
+                                    // The closing brace is at after_open + payload.len() + 1 (the '}')
+                                    // Skip chars iterator to the position after the closing '}'
+                                    let closing_pos = after_open + payload.len() + 1;
+                                    while let Some((next_idx, _)) = chars.peek() {
+                                        if *next_idx < closing_pos {
+                                            chars.next();
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    segments.push(Segment::BraceCall {
+                                        name,
+                                        payload_src: payload.to_string(),
+                                        span: span_at(base, src, span_start),
+                                    });
                                 }
-                                cmd.push(mc);
+                                None => {
+                                    return Err(e010(
+                                        span_at(base, src, start),
+                                        format!(
+                                            "unterminated `${{{name}{{...}}}}` brace call in string"
+                                        ),
+                                    ));
+                                }
                             }
-                            if !closed {
-                                return Err(e010(
-                                    span_at(base, src, start),
-                                    format!(
-                                        "unterminated `${{{name}{{...}}}}` executor call in string"
-                                    ),
-                                ));
-                            }
-                            segments.push(Segment::Exec {
-                                backend: name,
-                                command: cmd,
-                                span: span_at(base, src, start),
-                            });
                         } else {
                             segments.push(Segment::Arg {
                                 name,
@@ -280,11 +290,11 @@ pub fn resolve(
         [Segment::Call { name, args, span }] => {
             Ok(Value::string(resolve_shell_call(name, args, *span, scope)?))
         }
-        [Segment::Exec {
-            backend,
-            command,
+        [Segment::BraceCall {
+            name,
+            payload_src,
             span,
-        }] => resolve_exec_marker(backend, command, *span, scope, engine),
+        }] => resolve_exec_marker(name, payload_src, *span, scope, engine),
         _ => {
             let mut out = String::new();
             for seg in segments {
@@ -304,12 +314,12 @@ pub fn resolve(
                     Segment::Call { name, args, span } => {
                         out.push_str(&resolve_shell_call(name, args, *span, scope)?);
                     }
-                    Segment::Exec {
-                        backend,
-                        command,
+                    Segment::BraceCall {
+                        name,
+                        payload_src,
                         span,
                     } => {
-                        let marker = resolve_exec_marker(backend, command, *span, scope, engine)?;
+                        let marker = resolve_exec_marker(name, payload_src, *span, scope, engine)?;
                         out.push_str(&render_into_text(&marker, scope, *span)?);
                     }
                 }
@@ -354,12 +364,12 @@ pub fn resolve_shell(
             Segment::Call { name, args, span } => {
                 out.push_str(&resolve_shell_call(name, args, *span, scope)?);
             }
-            Segment::Exec {
-                backend,
-                command,
+            Segment::BraceCall {
+                name,
+                payload_src,
                 span,
             } => {
-                let marker = resolve_exec_marker(backend, command, *span, scope, engine)?;
+                let marker = resolve_exec_marker(name, payload_src, *span, scope, engine)?;
                 out.push_str(&render_into_text(&marker, scope, *span)?);
             }
         }
@@ -367,15 +377,16 @@ pub fn resolve_shell(
     Ok(Value::string(out))
 }
 
-/// Resolve a `$<backend>{...}` executor call to an exec marker object.
+/// Resolve a `$name{...}` brace call to an exec marker object.
+/// In Task 4 this will be rewired to normal component resolution.
 fn resolve_exec_marker(
-    backend: &str,
-    command: &str,
+    name: &str,
+    payload_src: &str,
     span: Span,
     scope: &Scope<'_>,
     engine: &dyn MathEngine,
 ) -> Result<Value, Diagnostic> {
-    let cmd_segments = scan_shell(command, span)?;
+    let cmd_segments = scan_shell(payload_src, span)?;
     let cmd_value = resolve_shell(&cmd_segments, scope, engine)?;
     let cmd_string = match &cmd_value {
         Value::String(s) => s.clone(),
@@ -402,7 +413,7 @@ fn resolve_exec_marker(
     Ok(Value::object(IndexMap::from([
         (
             "__exec_backend".to_string(),
-            Value::string(backend.to_string()),
+            Value::string(name.to_string()),
         ),
         ("__exec_command".to_string(), Value::string(cmd_string)),
     ])))
@@ -540,6 +551,57 @@ fn resolve_named_arg_math(
     }
 
     engine.eval(&result, scope)
+}
+
+/// Find the closing `}` for an opening `{` at the start of `s`,
+/// tracking nested `{}` and respecting `'"/"` quotes (with backslash escapes).
+/// Returns `Some((payload, remaining))` where `payload` is the text between the
+/// braces (balanced, quote-aware) and `remaining` is the text after the closing `}`.
+/// `None` if unterminated.
+fn find_matching_brace(s: &str) -> Option<(String, String)> {
+    let mut depth = 1usize;
+    let mut payload = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = s.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if let Some(q) = quote {
+            if c == '\\' {
+                payload.push(c);
+                if let Some(nc) = chars.next() {
+                    payload.push(nc);
+                }
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            payload.push(c);
+        } else {
+            match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    payload.push(c);
+                }
+                '{' => {
+                    depth += 1;
+                    payload.push(c);
+                }
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let remaining: String = chars.collect();
+                        return Some((payload, remaining));
+                    }
+                    payload.push(c);
+                }
+                _ => {
+                    payload.push(c);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// A syntax-error diagnostic (`E010`) for a scan failure.
@@ -1044,53 +1106,53 @@ mod tests {
     }
 
     #[test]
-    fn executor_call_scans_correctly() {
+    fn brace_call_scans_correctly() {
         let segs = scan("$sh{echo hi}", SPAN).unwrap();
         assert_eq!(
             segs,
-            vec![Segment::Exec {
-                backend: "sh".to_string(),
-                command: "echo hi".to_string(),
+            vec![Segment::BraceCall {
+                name: "sh".to_string(),
+                payload_src: "echo hi".to_string(),
                 span: SPAN,
             }]
         );
     }
 
     #[test]
-    fn executor_call_pw_scans_correctly() {
+    fn brace_call_pw_scans_correctly() {
         let segs = scan("$pw{Get-Content x}", SPAN).unwrap();
         assert_eq!(
             segs,
-            vec![Segment::Exec {
-                backend: "pw".to_string(),
-                command: "Get-Content x".to_string(),
+            vec![Segment::BraceCall {
+                name: "pw".to_string(),
+                payload_src: "Get-Content x".to_string(),
                 span: SPAN,
             }]
         );
     }
 
     #[test]
-    fn executor_call_with_interpolation_in_command() {
+    fn brace_call_with_interpolation_in_payload() {
         let segs = scan("$sh{echo $name}", SPAN).unwrap();
         assert_eq!(
             segs,
-            vec![Segment::Exec {
-                backend: "sh".to_string(),
-                command: "echo $name".to_string(),
+            vec![Segment::BraceCall {
+                name: "sh".to_string(),
+                payload_src: "echo $name".to_string(),
                 span: SPAN,
             }]
         );
     }
 
     #[test]
-    fn executor_call_with_surrounding_text() {
+    fn brace_call_with_surrounding_text() {
         let segs = scan("v=$sh{echo hi}!", SPAN).unwrap();
         assert_eq!(segs[0], Segment::Text("v=".to_string()));
         assert_eq!(
             segs[1],
-            Segment::Exec {
-                backend: "sh".to_string(),
-                command: "echo hi".to_string(),
+            Segment::BraceCall {
+                name: "sh".to_string(),
+                payload_src: "echo hi".to_string(),
                 span: Span { line: 1, col: 3 },
             }
         );
@@ -1098,8 +1160,8 @@ mod tests {
     }
 
     #[test]
-    fn math_takes_precedence_over_executor() {
-        // `${sh{...}}` — math containing executor call — is NOT confused
+    fn math_takes_precedence_over_brace_call() {
+        // `${sh{...}}` — math containing brace call — is NOT confused
         // with `$sh{...}`. The `${` takes precedence: the scanner enters
         // math mode and reads until the first `}`, so `${sh{echo hi}}`
         // produces Math{src:"sh{echo hi"} + Text("}").
@@ -1117,33 +1179,75 @@ mod tests {
     }
 
     #[test]
-    fn executor_call_with_underscore_backend() {
+    fn brace_call_with_underscore_name() {
         let segs = scan("$_sh{echo hi}", SPAN).unwrap();
         assert_eq!(
             segs,
-            vec![Segment::Exec {
-                backend: "_sh".to_string(),
-                command: "echo hi".to_string(),
+            vec![Segment::BraceCall {
+                name: "_sh".to_string(),
+                payload_src: "echo hi".to_string(),
                 span: SPAN,
             }]
         );
     }
 
     #[test]
-    fn executor_call_unterminated_is_e010() {
+    fn brace_call_unterminated_is_e010() {
         let err = scan("$sh{echo hi", SPAN).unwrap_err();
         assert_eq!(err.code, E010);
         assert!(err.message.contains("unterminated"), "{}", err.message);
     }
 
     #[test]
-    fn executor_call_empty_command() {
+    fn brace_call_empty_payload() {
         let segs = scan("$sh{}", SPAN).unwrap();
         assert_eq!(
             segs,
-            vec![Segment::Exec {
-                backend: "sh".to_string(),
-                command: "".to_string(),
+            vec![Segment::BraceCall {
+                name: "sh".to_string(),
+                payload_src: "".to_string(),
+                span: SPAN,
+            }]
+        );
+    }
+
+    #[test]
+    fn brace_call_balanced_payload() {
+        // Balanced, quote-aware payload: `{$a: 1, b: $c}` captures the full object
+        let segs = scan("$b{{c: 1, d: 2}}", SPAN).unwrap();
+        assert_eq!(
+            segs,
+            vec![Segment::BraceCall {
+                name: "b".to_string(),
+                payload_src: "{c: 1, d: 2}".to_string(),
+                span: SPAN,
+            }]
+        );
+    }
+
+    #[test]
+    fn brace_call_preserves_quoted_braces_in_payload() {
+        // `$sh{awk '{print $1}'}` should capture the full command including quotes
+        let segs = scan(r#"$sh{awk '{print $1}'}"#, SPAN).unwrap();
+        assert_eq!(
+            segs,
+            vec![Segment::BraceCall {
+                name: "sh".to_string(),
+                payload_src: "awk '{print $1}'".to_string(),
+                span: SPAN,
+            }]
+        );
+    }
+
+    #[test]
+    fn brace_call_nested_braces_in_payload() {
+        // A brace call with nested braces: `$x{{a: 1}, {b: 2}}`
+        let segs = scan("$x{{a: 1}, {b: 2}}", SPAN).unwrap();
+        assert_eq!(
+            segs,
+            vec![Segment::BraceCall {
+                name: "x".to_string(),
+                payload_src: "{a: 1}, {b: 2}".to_string(),
                 span: SPAN,
             }]
         );
