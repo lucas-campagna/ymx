@@ -27,6 +27,8 @@ use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use regex::Regex;
+
 use indexmap::IndexMap;
 
 use crate::builtin::{
@@ -39,9 +41,12 @@ use crate::builtin::{
     UpperBuiltin, ValuesBuiltin, WhenBuiltin,
 };
 use crate::callsite;
-use crate::diag::{Diagnostic, FileId, Span, E002, E003, E005, E006, E008, E009, E010, E011, E016};
+use crate::diag::{
+    Diagnostic, FileId, Span, E002, E003, E005, E006, E008, E009, E010, E011, E016, E018,
+};
 use crate::interp;
-use crate::ir::{render_value, Args, Value};
+use crate::ipc::{IpcEnvelope, IpcError, IpcMode, IpcParse, IpcRequest, IpcResponse, IpcSpec};
+use crate::ir::{render_f64, render_value, Args, Value};
 use crate::math::{BraceCallHook, CallHook, MathEngine, Scope, ShellCallHook, V1Engine};
 use crate::namespace::{classify, DefClass, Definition};
 use crate::parse::{key_to_string, node_to_value, Node};
@@ -2200,6 +2205,299 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// Resolve an IPC alias call: build the request, call the host, handle response.
+    ///
+    /// 3.1: Detect IPC alias during property resolution (in call_by_name).
+    /// 3.2–3.5: Render args, build IpcRequest, check Options.ipc/allowed_ipc,
+    ///           call host.call().
+    /// 3.6–3.8: Apply response mapping (trim, parse, error_pattern, envelope)
+    ///           and hooks (on_request, on_response, on_error).
+    fn resolve_ipc_call(
+        &self,
+        name: &str,
+        spec: &IpcSpec,
+        args: &Args,
+        span: Span,
+        file: FileId,
+    ) -> Result<Value, Diagnostic> {
+        // 3.2: Render call arguments per mode.
+        let rendered_args = self.render_ipc_args(args, spec, span, name, file)?;
+
+        // 3.4: Check Options.ipc and allowed_ipc.
+        let host = self.opts.ipc.as_ref().ok_or_else(|| Diagnostic {
+            file: Some(self.project.files[file.0 as usize].clone()),
+            line: span.line,
+            col: span.col,
+            component: Some(name.to_string()),
+            code: E018,
+            message: IpcError::NoHost.to_string(),
+        })?;
+
+        // Check if the transport is allowed.
+        let transport_name = match spec.transport {
+            crate::ipc::IpcTransport::Pipe => "pipe",
+            crate::ipc::IpcTransport::Socket => "socket",
+            crate::ipc::IpcTransport::Http => "http",
+        };
+        if let Some(ref allowed) = self.opts.allowed_ipc {
+            if !allowed.iter().any(|a| a == transport_name) {
+                return Err(Diagnostic {
+                    file: Some(self.project.files[file.0 as usize].clone()),
+                    line: span.line,
+                    col: span.col,
+                    component: Some(name.to_string()),
+                    code: E018,
+                    message: IpcError::DisallowedTransport(transport_name.to_string()).to_string(),
+                });
+            }
+        }
+
+        // 3.3: Build IpcRequest.
+        let request = IpcRequest {
+            args: rendered_args,
+        };
+
+        // 3.8: Lifecycle hooks — before_start.
+        if let Some(ref cmd) = spec.before_start {
+            self.run_lifecycle_hook(cmd, "before_start", span, file, name)?;
+        }
+
+        // 3.5: Call host.call().
+        let response = host.call(name, spec, request).map_err(|e| {
+            // 3.8: Lifecycle hooks — after_start on failure (best effort).
+            let _ = spec.after_start.as_ref().and_then(|cmd| {
+                self.run_lifecycle_hook(cmd, "after_start", span, file, name)
+                    .ok()
+            });
+            Diagnostic {
+                file: Some(self.project.files[file.0 as usize].clone()),
+                line: span.line,
+                col: span.col,
+                component: Some(name.to_string()),
+                code: E018,
+                message: e.to_string(),
+            }
+        });
+
+        // 3.8: Lifecycle hooks — after_start on success.
+        if let Some(ref cmd) = spec.after_start {
+            if response.is_ok() {
+                self.run_lifecycle_hook(cmd, "after_start", span, file, name)?;
+            }
+        }
+
+        let response = response?;
+
+        // 3.6: Apply response mapping.
+        self.handle_ipc_response(&response, spec, span, file, name)
+    }
+
+    /// Render IPC call arguments per the spec's `mode`.
+    ///
+    /// `mode: text` (default): render `$0` as a string. Array/Object → E011.
+    /// Missing `$0` → E003.
+    /// `mode: json`: serialize all args as `{0: v0, 1: v1, ..., name: value}` object.
+    fn render_ipc_args(
+        &self,
+        args: &Args,
+        spec: &IpcSpec,
+        span: Span,
+        name: &str,
+        file: FileId,
+    ) -> Result<IndexMap<String, Value>, Diagnostic> {
+        match spec.mode {
+            IpcMode::Text => {
+                // text mode: use $0 as the string argument.
+                let positional = args.positional_vec();
+                let v0 = positional.first().ok_or_else(|| Diagnostic {
+                    file: Some(self.project.files[file.0 as usize].clone()),
+                    line: span.line,
+                    col: span.col,
+                    component: Some(name.to_string()),
+                    code: E003,
+                    message: "IPC text-mode call requires a positional argument".to_string(),
+                })?;
+                let s = self.render_scalar(v0)?;
+                let mut m = IndexMap::new();
+                m.insert("0".to_string(), Value::String(s));
+                Ok(m)
+            }
+            IpcMode::Json => {
+                // json mode: serialize all args as {0: v0, 1: v1, ..., name: value}.
+                let mut m = IndexMap::new();
+                let positional = args.positional_vec();
+                for (i, v) in positional.iter().enumerate() {
+                    m.insert(i.to_string(), v.clone());
+                }
+                for (k, v) in args.named_vec() {
+                    m.insert(k, v);
+                }
+                Ok(m)
+            }
+        }
+    }
+
+    /// Render a scalar value as a string for text mode.
+    fn render_scalar(&self, v: &Value) -> Result<String, Diagnostic> {
+        match v {
+            Value::String(s) => Ok(s.clone()),
+            Value::Int(i) => Ok(i.to_string()),
+            Value::Float(f) => Ok(render_f64(*f)),
+            Value::Bool(b) => Ok(b.to_string()),
+            Value::Null => Ok("null".to_string()),
+            Value::Array(_) | Value::Object(_) => Err(Diagnostic {
+                file: None,
+                line: 1,
+                col: 1,
+                component: None,
+                code: E011,
+                message: "IPC text-mode argument must be a scalar (array/object not allowed)"
+                    .to_string(),
+            }),
+        }
+    }
+
+    /// Handle IPC response: trim, parse, error_pattern, envelope.
+    fn handle_ipc_response(
+        &self,
+        response: &IpcResponse,
+        spec: &IpcSpec,
+        span: Span,
+        file: FileId,
+        name: &str,
+    ) -> Result<Value, Diagnostic> {
+        let mut raw = response.stdout.clone();
+
+        // trim: strip trailing whitespace.
+        if spec.trim {
+            raw = raw.trim_end().to_string();
+        }
+
+        // error_pattern check on raw reply.
+        if let Some(ref pattern) = spec.error_pattern {
+            if Self::match_error_pattern(&raw, pattern) {
+                return Err(Diagnostic {
+                    file: Some(self.project.files[file.0 as usize].clone()),
+                    line: span.line,
+                    col: span.col,
+                    component: Some(name.to_string()),
+                    code: E018,
+                    message: format!("IPC error pattern matched: {pattern}"),
+                });
+            }
+        }
+
+        // on_response hook: if set, call the named component with $0 = raw reply.
+        if let Some(ref on_response) = spec.on_response {
+            let hook_result = self.call_ipc_response_hook(on_response, &raw, span, file)?;
+            // Skip parse when hook is present.
+            if let Some(result) = hook_result {
+                return Ok(result);
+            }
+        }
+
+        // parse the reply.
+        let parsed = match spec.parse {
+            IpcParse::None => Value::String(raw),
+            IpcParse::Yaml => {
+                // Parse as YAML.
+                match yaml_rust2::YamlLoader::load_from_str(&raw) {
+                    Ok(docs) => {
+                        // Use the first document; convert Yaml to Value.
+                        docs.first().map(yaml_to_value).unwrap_or(Value::Null)
+                    }
+                    Err(_) => Value::String(raw),
+                }
+            }
+            IpcParse::Json => {
+                // Parse as JSON.
+                match serde_json::from_str::<serde_json::Value>(&raw) {
+                    Ok(v) => json_to_value(&v),
+                    Err(_) => Value::String(raw),
+                }
+            }
+        };
+
+        // error_pattern check on parsed reply (if it was parsed).
+        if let Some(ref pattern) = spec.error_pattern {
+            if let Value::String(s) = &parsed {
+                if Self::match_error_pattern(s, pattern) {
+                    return Err(Diagnostic {
+                        file: Some(self.project.files[file.0 as usize].clone()),
+                        line: span.line,
+                        col: span.col,
+                        component: Some(name.to_string()),
+                        code: E018,
+                        message: format!("IPC error pattern matched: {pattern}"),
+                    });
+                }
+            }
+        }
+
+        // envelope: full → return {stdout, stderr} instead of just payload.
+        match spec.envelope {
+            IpcEnvelope::Payload => Ok(parsed),
+            IpcEnvelope::Full => {
+                let mut m = IndexMap::new();
+                m.insert("stdout".to_string(), Value::String(response.stdout.clone()));
+                m.insert("stderr".to_string(), Value::String(response.stderr.clone()));
+                Ok(Value::Object(m))
+            }
+        }
+    }
+
+    /// Call the on_response hook component with the raw reply.
+    /// Returns Ok(Some(Value)) if the hook returned a value, Ok(None) if the hook
+    /// failed/threw (in which case we continue with normal parse).
+    fn call_ipc_response_hook(
+        &self,
+        component: &str,
+        raw: &str,
+        _span: Span,
+        file: FileId,
+    ) -> Result<Option<Value>, Diagnostic> {
+        let def = match resolve_ref(self.project, component, file, self.opts.plain.clone()) {
+            Ok(def) => def,
+            Err(_) => return Ok(None),
+        };
+        let args = Args::Positional(vec![Value::String(raw.to_string())]);
+        match self.call(def, &args, None) {
+            Ok(v) => Ok(Some(v)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Run a lifecycle hook (before_start, after_start, before_stop, after_stop).
+    /// Uses CommandExecutor via execute_command. Failure → E018(HookFailed).
+    fn run_lifecycle_hook(
+        &self,
+        cmd: &str,
+        hook_name: &str,
+        span: Span,
+        file: FileId,
+        ipc_name: &str,
+    ) -> Result<(), Diagnostic> {
+        self.execute_command("sh", cmd, span, file)
+            .map_err(|e| Diagnostic {
+                file: Some(self.project.files[file.0 as usize].clone()),
+                line: span.line,
+                col: span.col,
+                component: Some(ipc_name.to_string()),
+                code: E018,
+                message: format!("IPC {} hook failed: {}", hook_name, e.message),
+            })?;
+        Ok(())
+    }
+
+    /// Check if a string matches an error pattern (regex).
+    fn match_error_pattern(s: &str, pattern: &str) -> bool {
+        if let Ok(re) = Regex::new(pattern) {
+            re.is_match(s)
+        } else {
+            false
+        }
+    }
+
     /// Resolve a parsed inline call-site: evaluate its arguments against the
     /// caller's scope (nested call-sites recurse), then call the target
     /// component. `$name(...)` unconditionally calls the component and
@@ -2659,6 +2957,10 @@ impl<'a> Resolver<'a> {
             };
             return self.execute_command(name, &cmd, span, file);
         }
+        // Check if this is an IPC alias.
+        if let Some(spec) = self.project.ipc.get(name) {
+            return self.resolve_ipc_call(name, spec, args, span, file);
+        }
         match resolve_ref(self.project, name, file, self.opts.plain.clone()) {
             Ok(def) => self.call(def, args, None),
             Err(LookupMiss::NotFound) => Err(Diagnostic {
@@ -2703,6 +3005,78 @@ impl<'a> Resolver<'a> {
                     v
                 ),
             }),
+        }
+    }
+}
+
+/// Convert a yaml-rust2 `Yaml` value to a YMX `Value`.
+fn yaml_to_value(yaml: &yaml_rust2::Yaml) -> Value {
+    use yaml_rust2::Yaml;
+    match yaml {
+        Yaml::Null => Value::Null,
+        Yaml::Boolean(b) => Value::Bool(*b),
+        Yaml::Integer(i) => Value::Int(*i),
+        Yaml::Real(f) => {
+            // Try to parse as i64 first, then f64.
+            if let Ok(i) = f.parse::<i64>() {
+                Value::Int(i)
+            } else if let Ok(fl) = f.parse::<f64>() {
+                Value::Float(fl)
+            } else {
+                Value::String(f.clone())
+            }
+        }
+        Yaml::String(s) => Value::String(s.clone()),
+        Yaml::Array(arr) => Value::Array(arr.iter().map(yaml_to_value).collect()),
+        Yaml::Hash(map) => {
+            let mut m = IndexMap::new();
+            for (k, v) in map {
+                let key = match k {
+                    Yaml::String(s) => s.clone(),
+                    Yaml::Integer(i) => i.to_string(),
+                    Yaml::Real(f) => f.clone(),
+                    Yaml::Boolean(b) => b.to_string(),
+                    Yaml::Null => "null".to_string(),
+                    Yaml::BadValue => "_".to_string(),
+                    Yaml::Alias(_) | Yaml::Array(_) | Yaml::Hash(_) => {
+                        format!("{:?}", k)
+                    }
+                };
+                m.insert(key, yaml_to_value(v));
+            }
+            Value::Object(m)
+        }
+        Yaml::BadValue => Value::Null,
+        Yaml::Alias(_) => {
+            // These types don't have a direct Value equivalent; use String representation.
+            Value::String(format!("{:?}", yaml))
+        }
+    }
+}
+
+/// Convert a serde_json `Value` to a YMX `Value`.
+fn json_to_value(json: &serde_json::Value) -> Value {
+    use serde_json::Value as JsonValue;
+    match json {
+        JsonValue::Null => Value::Null,
+        JsonValue::Bool(b) => Value::Bool(*b),
+        JsonValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else if let Some(f) = n.as_f64() {
+                Value::Float(f)
+            } else {
+                Value::String(n.to_string())
+            }
+        }
+        JsonValue::String(s) => Value::String(s.clone()),
+        JsonValue::Array(arr) => Value::Array(arr.iter().map(json_to_value).collect()),
+        JsonValue::Object(obj) => {
+            let mut m = IndexMap::new();
+            for (k, v) in obj {
+                m.insert(k.clone(), json_to_value(v));
+            }
+            Value::Object(m)
         }
     }
 }

@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 yaml-rust2.workspace = true
 serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
 indexmap = { workspace = true, features = ["serde"] }
 ryu.workspace = true
+regex.workspace = true
