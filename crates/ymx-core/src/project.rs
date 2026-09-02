@@ -141,6 +141,10 @@ pub struct Project {
     /// Raw parsed values of the `_test` meta key, one per document that
     /// declared it, in lexicographic load order. Uninterpreted at this layer.
     pub raw_meta_test: Vec<(FileId, Value)>,
+    /// Virtual builtin component definitions for `sh` and `pw`. These are
+    /// always present in the global namespace (task 1.1).
+    pub sh_def: Definition,
+    pub pw_def: Definition,
 }
 
 /// The effective global namespace under a [`PlainMode`].
@@ -169,7 +173,19 @@ pub struct EffectiveNamespace<'a> {
 impl Project {
     /// Empty project (no files, no definitions).
     pub fn new() -> Self {
-        Self::default()
+        Project {
+            sh_def: Definition {
+                full_name: "sh".to_string(),
+                exec_backend: Some("sh".to_string()),
+                ..Definition::default()
+            },
+            pw_def: Definition {
+                full_name: "pw".to_string(),
+                exec_backend: Some("pw".to_string()),
+                ..Definition::default()
+            },
+            ..Project::default()
+        }
     }
 
     /// `true` iff no document declared `_ymx`.
@@ -180,6 +196,15 @@ impl Project {
     /// `true` iff no document declared `_test`.
     pub fn has_no_test(&self) -> bool {
         self.raw_meta_test.is_empty()
+    }
+
+    /// Get the virtual builtin component definition for `sh` or `pw`.
+    pub fn sh_pw_def(&self, name: &str) -> Option<&Definition> {
+        match name {
+            "sh" => Some(&self.sh_def),
+            "pw" => Some(&self.pw_def),
+            _ => None,
+        }
     }
 
     /// The effective global namespace under `plain` (see

@@ -41,7 +41,7 @@ pub enum MetaKey {
 }
 
 /// A registered top-level component/template definition.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Definition {
     /// The hosting document.
     pub file: FileId,
@@ -281,7 +281,9 @@ pub fn classify(full_name: &str, span: Span) -> DefClass {
         // Math aggregate builtins
         | "sum" | "avg" | "min" | "max"
         // Conditional builtins
-        | "if" | "when" => DefClass::BuiltinReserved(meta),
+        | "if" | "when"
+        // Exec builtins
+        | "sh" | "pw" => DefClass::BuiltinReserved(meta),
         "_ymx" if dollar_count == 0 && !trailing_dollar => DefClass::MetaBare(MetaKey::Ymx, span),
         "_test" if dollar_count == 0 && !trailing_dollar => DefClass::MetaBare(MetaKey::Test, span),
         "_use" if dollar_count == 0 && !trailing_dollar => DefClass::MetaBare(MetaKey::Use, span),

@@ -51,11 +51,11 @@ pub const E016: &str = "E016";
 pub const E017: &str = "E017";
 
 /// Index into [`Project::files`](crate::project::Project::files).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct FileId(pub u32);
 
 /// 1-based source span anchor (line, column) for a diagnostic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Span {
     pub line: u32,
     pub col: u32,

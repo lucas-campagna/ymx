@@ -831,10 +831,63 @@ impl<'a> Resolver<'a> {
                     .collect();
                 self.call(def, &args_from(named, Vec::new()), None)
             }
-            None => match self.shortcut(m, &[], file, component)? {
-                Some(result) => Ok(result),
-                None => Ok(value.clone()),
-            },
+            None => {
+                // Check if from: sh or from: pw (builtin executors).
+                // resolve_from_target returns None when resolve_ref returns NotFound
+                // (e.g., for builtin names sh/pw after removing sh_pw_def check).
+                if let Some(Value::String(backend)) = m.get(&self.opts.from_keyword) {
+                    if backend == "sh" || backend == "pw" {
+                        // Extract command from positional args (key "0", "1", etc.)
+                        let mut slots: Vec<Value> = Vec::new();
+                        for (k, v) in m.iter() {
+                            if let Ok(idx) = k.parse::<usize>() {
+                                if idx >= slots.len() {
+                                    slots.resize(idx + 1, Value::Null);
+                                }
+                                slots[idx] = v.clone();
+                            }
+                        }
+                        let cmd = slots.first().ok_or_else(|| Diagnostic {
+                            file: Some(self.project.files[file.0 as usize].clone()),
+                            line: 1,
+                            col: 1,
+                            component: component.map(str::to_string),
+                            code: E003,
+                            message: format!("{} requires a command argument", backend),
+                        })?;
+                        let cmd_str = match cmd {
+                            Value::String(s) => s.clone(),
+                            _ => {
+                                return Err(Diagnostic {
+                                    file: Some(self.project.files[file.0 as usize].clone()),
+                                    line: 1,
+                                    col: 1,
+                                    component: component.map(str::to_string),
+                                    code: E011,
+                                    message: format!(
+                                        "{} command must be a string, got {}",
+                                        backend,
+                                        match cmd {
+                                            Value::Null => "null",
+                                            Value::Bool(_) => "bool",
+                                            Value::Int(_) => "int",
+                                            Value::Float(_) => "float",
+                                            Value::String(_) => "string",
+                                            Value::Object(_) => "object",
+                                            Value::Array(_) => "array",
+                                        }
+                                    ),
+                                });
+                            }
+                        };
+                        return self.execute_command(backend, &cmd_str, Span { line: 1, col: 1 }, file);
+                    }
+                }
+                match self.shortcut(m, &[], file, component)? {
+                    Some(result) => Ok(result),
+                    None => Ok(value.clone()),
+                }
+            }
         }
     }
 
@@ -855,6 +908,8 @@ impl<'a> Resolver<'a> {
         component: Option<&str>,
     ) -> Result<Option<Value>, Diagnostic> {
         let mut matches: Vec<(&str, &'a Definition, &Value)> = Vec::new();
+        // Track builtin executor shortcuts separately (sh/pw).
+        let mut builtin_match: Option<(&str, &Value)> = None;
         for (k, v) in named.iter().filter(|(k, _)| *k != &self.opts.from_keyword) {
             match resolve_ref(self.project, k, file, self.opts.plain.clone()) {
                 Ok(def) if def.full_name.starts_with('$') => {
@@ -871,8 +926,43 @@ impl<'a> Resolver<'a> {
                     });
                 }
                 Ok(def) => matches.push((k.as_str(), def, v)),
+                Err(LookupMiss::NotFound) => {
+                    // Check if it's a builtin executor (sh/pw).
+                    if (k == "sh" || k == "pw") && builtin_match.is_none() {
+                        builtin_match = Some((k.as_str(), v));
+                    }
+                }
                 _ => {}
             }
+        }
+        // Handle builtin executor shortcuts (sh/pw).
+        if let Some((builtin, value)) = builtin_match {
+            let cmd_str = match value {
+                Value::String(s) => s.clone(),
+                _ => {
+                    return Err(Diagnostic {
+                        file: Some(self.project.files[file.0 as usize].clone()),
+                        line: 1,
+                        col: 1,
+                        component: component.map(str::to_string),
+                        code: E011,
+                        message: format!(
+                            "{} command must be a string, got {}",
+                            builtin,
+                            match value {
+                                Value::Null => "null",
+                                Value::Bool(_) => "bool",
+                                Value::Int(_) => "int",
+                                Value::Float(_) => "float",
+                                Value::String(_) => "string",
+                                Value::Object(_) => "object",
+                                Value::Array(_) => "array",
+                            }
+                        ),
+                    });
+                }
+            };
+            return self.execute_command(builtin, &cmd_str, Span { line: 1, col: 1 }, file).map(Some);
         }
         match matches.len() {
             0 => Ok(None),
@@ -1942,13 +2032,55 @@ impl<'a> Resolver<'a> {
                 let args = self.props_to_args(props);
                 self.call(def, &args, None)
             }
-            None => match self.shortcut(&props.named, &props.slots, file, component)? {
-                Some(result) => Ok(result),
-                None => {
-                    let output = props.to_object();
-                    self.exec_markers(output, Span { line: 0, col: 0 }, file)
+            None => {
+                // Check if from: sh or from: pw (builtin executors).
+                if let Some(Value::String(backend)) = props.named.get(&self.opts.from_keyword) {
+                    if backend == "sh" || backend == "pw" {
+                        // Extract command from positional args (key "0", "1", etc.)
+                        let cmd = props.slots.first().ok_or_else(|| Diagnostic {
+                            file: Some(self.project.files[file.0 as usize].clone()),
+                            line: 1,
+                            col: 1,
+                            component: component.map(str::to_string),
+                            code: E003,
+                            message: format!("{} requires a command argument", backend),
+                        })?;
+                        let cmd_str = match cmd {
+                            Value::String(s) => s.clone(),
+                            _ => {
+                                return Err(Diagnostic {
+                                    file: Some(self.project.files[file.0 as usize].clone()),
+                                    line: 1,
+                                    col: 1,
+                                    component: component.map(str::to_string),
+                                    code: E011,
+                                    message: format!(
+                                        "{} command must be a string, got {}",
+                                        backend,
+                                        match cmd {
+                                            Value::Null => "null",
+                                            Value::Bool(_) => "bool",
+                                            Value::Int(_) => "int",
+                                            Value::Float(_) => "float",
+                                            Value::String(_) => "string",
+                                            Value::Object(_) => "object",
+                                            Value::Array(_) => "array",
+                                        }
+                                    ),
+                                });
+                            }
+                        };
+                        return self.execute_command(backend, &cmd_str, Span { line: 1, col: 1 }, file);
+                    }
                 }
-            },
+                match self.shortcut(&props.named, &props.slots, file, component)? {
+                    Some(result) => Ok(result),
+                    None => {
+                        let output = props.to_object();
+                        self.exec_markers(output, Span { line: 0, col: 0 }, file)
+                    }
+                }
+            }
         }
     }
 
@@ -2353,8 +2485,119 @@ impl<'a> Resolver<'a> {
                 ),
             });
         }
-            // Build args from payload, resolving scalar arg references ($0, $1, …).
+        // sh/pw are exec builtins: create an exec marker directly.
+        if name == "sh" || name == "pw" {
+            // Build args from payload.
             let args = match payload {
+                callsite::BracePayload::Object(entries) => {
+                    let named: Vec<(String, Value)> = entries
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    Args::Named(named)
+                }
+                callsite::BracePayload::Array(items) => {
+                    let positional: Vec<Value> = items.to_vec();
+                    Args::Positional(positional)
+                }
+                callsite::BracePayload::Scalar(value) => {
+                    // Resolve the scalar as a template in the caller's scope.
+                    // Use scan_shell so that $name(args) patterns in shell commands
+                    // are treated as Call segments, not Arg references.
+                    let resolved = match value {
+                        Value::String(s) => {
+                            let segments = interp::scan_shell(s, span)?;
+                            interp::resolve(&segments, scope, &V1Engine)?
+                        }
+                        _ => value.clone(),
+                    };
+                    // If the resolved value is exactly "$N" (a positional reference),
+                    // extract positional[N] from the caller's scope.
+                    let positional = match resolved {
+                        Value::String(ref s) if s.starts_with('$') && s[1..].bytes().all(|b| b.is_ascii_digit()) => {
+                            let idx = s[1..].parse::<usize>().unwrap();
+                            if let Some(v) = scope.positional_at(idx) {
+                                vec![v.clone()]
+                            } else {
+                                return Err(Diagnostic {
+                                    file: Some(self.project.files[file.0 as usize].clone()),
+                                    line: span.line,
+                                    col: span.col,
+                                    component: Some(s.clone()),
+                                    code: E003,
+                                    message: format!("missing positional argument `{s}`"),
+                                });
+                            }
+                        }
+                        _ => vec![resolved],
+                    };
+                    Args::Positional(positional)
+                }
+            };
+            // Extract the command string from args.
+            let cmd = match &args {
+                Args::None => {
+                    return Err(Diagnostic {
+                        file: Some(self.project.files[file.0 as usize].clone()),
+                        line: span.line,
+                        col: span.col,
+                        component: Some(name.to_string()),
+                        code: E003,
+                        message: format!("{name} requires a command argument"),
+                    });
+                }
+                Args::Named(named) => {
+                    // For named args, use the first positional if available, else E003.
+                    // sh/pw take a single positional arg (the command).
+                    if let Some((_, v)) = named.iter().find(|(k, _)| k.bytes().all(|b| b.is_ascii_digit())) {
+                        Self::value_to_cmd_string(v, name, span)?
+                    } else {
+                        return Err(Diagnostic {
+                            file: Some(self.project.files[file.0 as usize].clone()),
+                            line: span.line,
+                            col: span.col,
+                            component: Some(name.to_string()),
+                            code: E003,
+                            message: format!("{name} requires a command argument"),
+                        });
+                    }
+                }
+                Args::Positional(positional) => {
+                    if positional.is_empty() {
+                        return Err(Diagnostic {
+                            file: Some(self.project.files[file.0 as usize].clone()),
+                            line: span.line,
+                            col: span.col,
+                            component: Some(name.to_string()),
+                            code: E003,
+                            message: format!("{name} requires a command argument"),
+                        });
+                    }
+                    Self::value_to_cmd_string(&positional[0], name, span)?
+                }
+                Args::Mixed { named, positional } => {
+                    // Mixed: try positional first.
+                    if let Some(v) = positional.first() {
+                        Self::value_to_cmd_string(v, name, span)?
+                    } else if let Some((_, v)) = named.iter().find(|(k, _)| k.bytes().all(|b| b.is_ascii_digit())) {
+                        Self::value_to_cmd_string(v, name, span)?
+                    } else {
+                        return Err(Diagnostic {
+                            file: Some(self.project.files[file.0 as usize].clone()),
+                            line: span.line,
+                            col: span.col,
+                            component: Some(name.to_string()),
+                            code: E003,
+                            message: format!("{name} requires a command argument"),
+                        });
+                    }
+                }
+            };
+            // Execute the command directly.
+            return self.execute_command(name, &cmd, span, file);
+        }
+        // Build args from payload, resolving scalar arg references ($0, $1, …).
+        let args = match payload {
             callsite::BracePayload::Object(entries) => {
                 let named: Vec<(String, Value)> = entries
                     .iter()
@@ -2363,7 +2606,7 @@ impl<'a> Resolver<'a> {
                 Args::Named(named)
             }
             callsite::BracePayload::Array(items) => {
-                let positional: Vec<Value> = items.iter().map(|v| v.clone()).collect();
+                let positional: Vec<Value> = items.to_vec();
                 Args::Positional(positional)
             }
             callsite::BracePayload::Scalar(value) => {
@@ -2468,8 +2711,75 @@ impl<'a> Resolver<'a> {
         args: &Args,
         span: Span,
     ) -> Result<Value, Diagnostic> {
+        // sh/pw are exec builtins: extract command from args and execute directly.
+        if name == "sh" || name == "pw" {
+            // Extract the command string from args.
+            let cmd = match args {
+                Args::None => {
+                    return Err(Diagnostic {
+                        file: Some(self.project.files[file.0 as usize].clone()),
+                        line: span.line,
+                        col: span.col,
+                        component: Some(name.to_string()),
+                        code: E003,
+                        message: format!("{name} requires a command argument"),
+                    });
+                }
+                Args::Named(named) => {
+                    // sh/pw take a single positional arg (the command).
+                    // If named args are provided, try to find a positional one.
+                    if let Some((_, v)) = named.iter().find(|(k, _)| {
+                        k.bytes().all(|b| b.is_ascii_digit())
+                    }) {
+                        Self::value_to_cmd_string(v, name, span)?
+                    } else {
+                        return Err(Diagnostic {
+                            file: Some(self.project.files[file.0 as usize].clone()),
+                            line: span.line,
+                            col: span.col,
+                            component: Some(name.to_string()),
+                            code: E003,
+                            message: format!("{name} requires a command argument"),
+                        });
+                    }
+                }
+                Args::Positional(positional) => {
+                    if positional.is_empty() {
+                        return Err(Diagnostic {
+                            file: Some(self.project.files[file.0 as usize].clone()),
+                            line: span.line,
+                            col: span.col,
+                            component: Some(name.to_string()),
+                            code: E003,
+                            message: format!("{name} requires a command argument"),
+                        });
+                    }
+                    Self::value_to_cmd_string(&positional[0], name, span)?
+                }
+                Args::Mixed { named, positional } => {
+                    // Mixed: try positional first.
+                    if let Some(v) = positional.first() {
+                        Self::value_to_cmd_string(v, name, span)?
+                    } else if let Some((_, v)) = named.iter().find(|(k, _)| {
+                        k.bytes().all(|b| b.is_ascii_digit())
+                    }) {
+                        Self::value_to_cmd_string(v, name, span)?
+                    } else {
+                        return Err(Diagnostic {
+                            file: Some(self.project.files[file.0 as usize].clone()),
+                            line: span.line,
+                            col: span.col,
+                            component: Some(name.to_string()),
+                            code: E003,
+                            message: format!("{name} requires a command argument"),
+                        });
+                    }
+                }
+            };
+            return self.execute_command(name, &cmd, span, file);
+        }
         match resolve_ref(self.project, name, file, self.opts.plain.clone()) {
-            Ok(def) => self.call(&def, args, None),
+            Ok(def) => self.call(def, args, None),
             Err(LookupMiss::NotFound) => Err(Diagnostic {
                 file: Some(self.project.files[file.0 as usize].clone()),
                 line: span.line,
@@ -2487,6 +2797,33 @@ impl<'a> Resolver<'a> {
                 message: format!(
                     "file-scope violation: `{name}` is defined only in `{}`",
                     self.project.files[owner.0 as usize].display()
+                ),
+            }),
+        }
+    }
+
+    /// Extract a command string from a value for sh/pw execution.
+    /// Returns E011 if the value cannot be rendered as a string.
+    fn value_to_cmd_string(
+        v: &Value,
+        name: &str,
+        span: Span,
+    ) -> Result<String, Diagnostic> {
+        match v {
+            Value::String(s) => Ok(s.clone()),
+            Value::Int(i) => Ok(i.to_string()),
+            Value::Float(f) => Ok(crate::ir::render_f64(*f)),
+            Value::Bool(b) => Ok(b.to_string()),
+            Value::Null => Ok("null".to_string()),
+            Value::Object(_) | Value::Array(_) => Err(Diagnostic {
+                file: None,
+                line: span.line,
+                col: span.col,
+                component: Some(name.to_string()),
+                code: E011,
+                message: format!(
+                    "{name} command argument must be a scalar value, got {:?}",
+                    v
                 ),
             }),
         }

@@ -63,6 +63,12 @@ pub enum Node {
     Object(Vec<Entry>, Span),
 }
 
+impl Default for Node {
+    fn default() -> Self {
+        Node::Null(Span::default())
+    }
+}
+
 impl Node {
     /// The source span of this node (the location where it begins).
     pub fn span(&self) -> Span {
