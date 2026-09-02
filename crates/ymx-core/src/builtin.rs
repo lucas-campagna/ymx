@@ -2085,6 +2085,7 @@ fn build_caller_scope<'a>(ctx: &'a BuiltinCtx<'a>) -> Scope<'a> {
         last: None,
         call: Some(ctx.call.clone()),
         shell_call: None,
+        brace_call: None,
     }
 }
 
@@ -2103,6 +2104,7 @@ fn build_scope_for_call<'a>(
         last: last.cloned(),
         call: Some(ctx.call.clone()),
         shell_call: None,
+        brace_call: None,
     }
 }
 

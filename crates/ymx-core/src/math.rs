@@ -47,6 +47,11 @@ pub type CallHook<'a> = Rc<dyn Fn(&str, &[Value]) -> Result<Value, Diagnostic> +
 pub type ShellCallHook<'a> =
     Rc<dyn Fn(&callsite::ParsedCall, &Scope<'a>, Span) -> Result<Value, Diagnostic> + 'a>;
 
+/// Component-call dispatch hook for brace-call `$name{...}` interpolation segments.
+pub type BraceCallHook<'a> = Rc<
+    dyn Fn(&str, &callsite::BracePayload, &Scope<'a>, Span) -> Result<Value, Diagnostic> + 'a,
+>;
+
 /// Evaluation scope for `${...}` math and string interpolation.
 ///
 /// Carries the named arguments (rule 2), the positional arguments (rule 4),
@@ -78,6 +83,8 @@ pub struct Scope<'a> {
     pub call: Option<CallHook<'a>>,
     /// Component-call dispatch hook for shell interpolation `$name(args)`.
     pub shell_call: Option<ShellCallHook<'a>>,
+    /// Component-call dispatch hook for brace-call `$name{...}` segments.
+    pub brace_call: Option<BraceCallHook<'a>>,
 }
 
 impl<'a> Default for Scope<'a> {
@@ -98,6 +105,7 @@ impl<'a> Scope<'a> {
             last: None,
             call: None,
             shell_call: None,
+            brace_call: None,
         }
     }
 
@@ -186,6 +194,28 @@ impl<'a> Scope<'a> {
                 message: format!(
                     "unknown component reference `{}` (no shell component-call hook registered)",
                     call.name
+                ),
+            }),
+        }
+    }
+
+    /// Dispatch a brace-call `$name{...}` segment through the registered hook.
+    pub fn invoke_brace_call(
+        &self,
+        name: &str,
+        payload: &callsite::BracePayload,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match &self.brace_call {
+            Some(f) => f(name, payload, self, span),
+            None => Err(Diagnostic {
+                file: self.file.clone(),
+                line: span.line,
+                col: span.col,
+                component: self.component.clone(),
+                code: E002,
+                message: format!(
+                    "unknown component reference `{name}` (no brace-call hook registered)"
                 ),
             }),
         }

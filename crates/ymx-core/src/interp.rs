@@ -16,8 +16,6 @@ use crate::diag::{Diagnostic, Span, E003, E010, E011};
 use crate::ir::{render_value, NoStringRender, Value};
 use crate::math::{MathEngine, Scope};
 
-use indexmap::IndexMap;
-
 /// One piece of an interpolated string.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Segment {
@@ -294,7 +292,18 @@ pub fn resolve(
             name,
             payload_src,
             span,
-        }] => resolve_exec_marker(name, payload_src, *span, scope, engine),
+        }] => {
+            let payload = callsite::parse_brace_payload(payload_src)
+                .map_err(|(code, msg)| Diagnostic {
+                    file: scope.file.clone(),
+                    line: span.line,
+                    col: span.col,
+                    component: scope.component.clone(),
+                    code,
+                    message: msg,
+                })?;
+            scope.invoke_brace_call(name, &payload, *span)
+        }
         _ => {
             let mut out = String::new();
             for seg in segments {
@@ -319,8 +328,17 @@ pub fn resolve(
                         payload_src,
                         span,
                     } => {
-                        let marker = resolve_exec_marker(name, payload_src, *span, scope, engine)?;
-                        out.push_str(&render_into_text(&marker, scope, *span)?);
+                        let payload = callsite::parse_brace_payload(payload_src)
+                            .map_err(|(code, msg)| Diagnostic {
+                                file: scope.file.clone(),
+                                line: span.line,
+                                col: span.col,
+                                component: scope.component.clone(),
+                                code,
+                                message: msg,
+                            })?;
+                        let v = scope.invoke_brace_call(name, &payload, *span)?;
+                        out.push_str(&render_into_text(&v, scope, *span)?);
                     }
                 }
             }
@@ -369,54 +387,21 @@ pub fn resolve_shell(
                 payload_src,
                 span,
             } => {
-                let marker = resolve_exec_marker(name, payload_src, *span, scope, engine)?;
-                out.push_str(&render_into_text(&marker, scope, *span)?);
+                let payload = callsite::parse_brace_payload(payload_src)
+                    .map_err(|(code, msg)| Diagnostic {
+                        file: scope.file.clone(),
+                        line: span.line,
+                        col: span.col,
+                        component: scope.component.clone(),
+                        code,
+                        message: msg,
+                    })?;
+                let v = scope.invoke_brace_call(name, &payload, *span)?;
+                out.push_str(&render_into_text(&v, scope, *span)?);
             }
         }
     }
     Ok(Value::string(out))
-}
-
-/// Resolve a `$name{...}` brace call to an exec marker object.
-/// In Task 4 this will be rewired to normal component resolution.
-fn resolve_exec_marker(
-    name: &str,
-    payload_src: &str,
-    span: Span,
-    scope: &Scope<'_>,
-    engine: &dyn MathEngine,
-) -> Result<Value, Diagnostic> {
-    let cmd_segments = scan_shell(payload_src, span)?;
-    let cmd_value = resolve_shell(&cmd_segments, scope, engine)?;
-    let cmd_string = match &cmd_value {
-        Value::String(s) => s.clone(),
-        other => {
-            return Err(ctx_err(
-                scope,
-                span,
-                E011,
-                format!(
-                    "executor command must resolve to a string, got {}",
-                    match other {
-                        Value::Null => "null",
-                        Value::Bool(_) => "bool",
-                        Value::Int(_) => "int",
-                        Value::Float(_) => "float",
-                        Value::String(_) => "string",
-                        Value::Array(_) => "array",
-                        Value::Object(_) => "object",
-                    }
-                ),
-            ));
-        }
-    };
-    Ok(Value::object(IndexMap::from([
-        (
-            "__exec_backend".to_string(),
-            Value::string(name.to_string()),
-        ),
-        ("__exec_command".to_string(), Value::string(cmd_string)),
-    ])))
 }
 
 /// Resolve a shell call segment (`$name(args)`) to rendered text.

@@ -190,6 +190,8 @@ pub fn classify(full_name: &str, span: Span) -> DefClass {
 
     // Check for executor suffix `$<backend>` BEFORE trailing modifier stripping.
     // `main$sh` → base="main", backend="sh"; `main$` → no exec suffix (empty backend).
+    // Only `sh` and `pw` are executor backends; other `$<name>` suffixes are
+    // key-suffix component calls (`a$b: v` ≡ `a: $b{v}`).
     let has_exec_suffix = {
         let dollar_pos_opt = after_leading.rfind('$');
         match dollar_pos_opt {
@@ -197,15 +199,26 @@ pub fn classify(full_name: &str, span: Span) -> DefClass {
             Some(0) => false,
             Some(dollar_pos) => {
                 let backend = &after_leading[dollar_pos + 1..];
-                if backend.is_empty() {
-                    false
-                } else {
-                    let mut chars = backend.chars();
-                    matches!(
-                        chars.next(),
-                        Some(c) if c.is_ascii_alphabetic() || c == '_'
-                    ) && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-                }
+                // Only `sh` and `pw` are executor backends.
+                backend == "sh" || backend == "pw"
+            }
+        }
+    };
+
+    // Check for key-suffix pattern `key$name` where key and name are valid identifiers.
+    // This is a key-suffix component call (`a$b: v` ≡ `a: $b{v}`).
+    // Only `sh`/`pw` use the exec_backend path above; other names are key-suffix.
+    let has_key_suffix = {
+        let dollar_pos_opt = after_leading.rfind('$');
+        match dollar_pos_opt {
+            None => false,
+            Some(0) => false, // leading $ — template or builtin
+            Some(dollar_pos) => {
+                let key = &after_leading[..dollar_pos];
+                let name = &after_leading[dollar_pos + 1..];
+                !name.is_empty()
+                    && is_valid_effective_id(key)
+                    && is_valid_effective_id(name)
             }
         }
     };
@@ -218,6 +231,13 @@ pub fn classify(full_name: &str, span: Span) -> DefClass {
         let base = &after_leading[..dollar_pos];
         let backend = &after_leading[dollar_pos + 1..];
         (base, false, false, Some(backend.to_string()))
+    } else if has_key_suffix {
+        // `key$name` — key-suffix component call. Store with exec_backend so
+        // compile-time resolution can route it correctly.
+        let dollar_pos = after_leading.rfind('$').unwrap();
+        let base = &after_leading[..dollar_pos];
+        let name = &after_leading[dollar_pos + 1..];
+        (base, false, false, Some(name.to_string()))
     } else if let Some(stripped) = after_leading.strip_suffix("?$") {
         (stripped, true, true, None)
     } else if let Some(stripped) = after_leading.strip_suffix("$?") {
