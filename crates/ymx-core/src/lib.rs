@@ -32,6 +32,7 @@ pub(crate) mod callsite;
 pub mod diag;
 pub mod exec;
 pub mod interp;
+pub mod ipc;
 pub mod ir;
 pub mod math;
 pub mod render;

@@ -154,6 +154,8 @@ impl Ymx {
             allowed_backends: None,
             pdf_backend: "docker".to_string(),
             executor: Some(executor.clone()),
+            allowed_ipc: None,
+            ipc: None,
         };
 
         Ymx {

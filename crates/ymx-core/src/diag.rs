@@ -27,6 +27,7 @@
 //! | `E015` | load    | Meta-key reserved name |
 //! | `E016` | compile | Shell execution error |
 //! | `E017` | compile | No array/object as direct tag content |
+//! | `E018` | compile | IPC error (no host / spawn / timeout / protocol / hook) |
 //!
 //! `E014` is intentionally absent — `E003` (missing required argument) covers
 //! that case.
@@ -49,6 +50,7 @@ pub const E013: &str = "E013";
 pub const E015: &str = "E015";
 pub const E016: &str = "E016";
 pub const E017: &str = "E017";
+pub const E018: &str = "E018";
 
 /// Index into [`Project::files`](crate::project::Project::files).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -155,5 +157,6 @@ mod tests {
         assert_eq!(E015, "E015");
         assert_eq!(E016, "E016");
         assert_eq!(E017, "E017");
+        assert_eq!(E018, "E018");
     }
 }

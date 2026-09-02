@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::diag::FileId;
 use crate::exec::CommandExecutor;
+use crate::ipc::IpcHost;
 use crate::ir::Value;
 use crate::namespace::{Definition, FileScopeStore, NamespaceStore};
 
@@ -69,6 +70,12 @@ pub struct Options {
     /// Pluggable command executor. `None` means shell execution is
     /// disabled (`$<backend>{...}` raises E016).
     pub executor: Option<Arc<dyn CommandExecutor>>,
+    /// Restrict which IPC transports are allowed.
+    /// `None` means all transports are allowed.
+    pub allowed_ipc: Option<Vec<String>>,
+    /// Pluggable IPC host for external component calls.
+    /// `None` means IPC is disabled (IPC calls raise E018).
+    pub ipc: Option<Arc<dyn IpcHost>>,
 }
 
 impl PartialEq for Options {
@@ -82,7 +89,8 @@ impl PartialEq for Options {
             && self.plain == other.plain
             && self.allowed_backends == other.allowed_backends
             && self.pdf_backend == other.pdf_backend
-        // `executor` is intentionally excluded: dyn CommandExecutor is not PartialEq.
+            && self.allowed_ipc == other.allowed_ipc
+        // `executor` and `ipc` are intentionally excluded: dyn traits are not PartialEq.
     }
 }
 
@@ -99,6 +107,8 @@ impl Default for Options {
             allowed_backends: None,
             pdf_backend: "docker".to_string(),
             executor: None,
+            allowed_ipc: None,
+            ipc: None,
         }
     }
 }
