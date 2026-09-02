@@ -1,0 +1,14 @@
+# Rule 22: malformed object payload — non-identifier key a-b → E010.
+# Target b exists, so the failure is the payload, not the target.
+# Unterminated brace inside a quoted string → E010 at string-scan time.
+b$: $0
+comp:
+  out: "$b{{a-b: 1}}"
+unterm:
+  x: "$b{{c: 1}"
+
+_test:
+  comp:
+    error: E010
+  unterm:
+    error: E010

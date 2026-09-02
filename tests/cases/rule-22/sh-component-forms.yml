@@ -1,0 +1,18 @@
+# Rule 22: sh is a builtin component callable via every call shape —
+# from: sh with integer key 0 (positional slot $0), rule-8 shortcut,
+# $sh(...) parens, $sh{...} braces, and the $sh key suffix. All equivalent.
+a:
+  from: sh
+  0: echo one
+b:
+  sh: echo two
+c: $sh{echo three}
+d$sh: echo four
+e: $sh(echo five)
+
+_test:
+  a: {exit_code: 0, stdout: "one\n", stderr: ""}
+  b: {exit_code: 0, stdout: "two\n", stderr: ""}
+  c: {exit_code: 0, stdout: "three\n", stderr: ""}
+  d: {exit_code: 0, stdout: "four\n", stderr: ""}
+  e: {exit_code: 0, stdout: "five\n", stderr: ""}

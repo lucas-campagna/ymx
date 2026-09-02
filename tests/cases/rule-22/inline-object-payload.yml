@@ -1,0 +1,8 @@
+# Rule 22: inline object payload — $b{{c: 1, d: 2}} spreads to named args c=1, d=2.
+# The payload text is scanned by the compiler at string-scan time (quoted here
+# because ": " inside the flow mapping would otherwise be read as YAML syntax).
+b$: c + d
+main: "$b{{c: 1, d: 2}}"
+
+_test:
+  main: 3

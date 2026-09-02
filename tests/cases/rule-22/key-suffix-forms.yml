@@ -1,0 +1,10 @@
+# Rule 22: key suffix works on nested properties (n$abc: 21 ≡ n: $abc{21})
+# and on top-level component names (top$abc: 5 ≡ top: $abc{5}).
+abc$: $0 * 2
+main:
+  n$abc: 21
+top$abc: 5
+
+_test:
+  main: {n: 42}
+  top: 10

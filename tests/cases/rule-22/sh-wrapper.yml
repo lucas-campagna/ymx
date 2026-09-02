@@ -1,0 +1,7 @@
+# Rule 22: wrapping the sh builtin in a component — the $0 inside exc's
+# payload resolves in exc's scope against its own $0 argument.
+exc: $sh{echo hello $0}
+main: $exc{world}
+
+_test:
+  main: {exit_code: 0, stdout: "hello world\n", stderr: ""}

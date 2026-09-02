@@ -1,0 +1,14 @@
+# Rule 22: a brace call embedded in text renders its result to a string;
+# Object and Array results have no string rendering → E011.
+obj:
+  a: 1
+  b: 2
+arr: [1, 2]
+bad_obj: value is $obj{} here
+bad_arr: value is $arr{} here
+
+_test:
+  bad_obj:
+    error: E011
+  bad_arr:
+    error: E011

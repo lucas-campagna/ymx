@@ -1,0 +1,9 @@
+# Rule 22: brace call with a scalar payload binds it to $0.
+# As the entire property value the callee's native type (Int) is kept.
+a$: $0 + 1
+main: $a{40}
+n: $a{2}
+
+_test:
+  main: 41
+  n: 3

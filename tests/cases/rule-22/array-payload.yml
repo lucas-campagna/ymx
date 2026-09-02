@@ -1,0 +1,6 @@
+# Rule 22: array payload binds positionally — $add{[1, 2]} → $0=1, $1=2.
+add$: $0 + $1
+main: $add{[1, 2]}
+
+_test:
+  main: 3

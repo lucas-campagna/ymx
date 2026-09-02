@@ -1,0 +1,10 @@
+# Rule 22: a brace call consumes a depth slot — $loop{$0} recursing through
+# the math-shorthand body hits max_depth → E008.
+_ymx:
+  max_depth: 4
+loop$: $loop{$0}
+main: $loop{1}
+
+_test:
+  main:
+    error: E008

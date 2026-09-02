@@ -1,0 +1,13 @@
+# Rule 22: brace-call targets must be declared/imported components or the
+# sh/pw builtins. typo is no component → E002; map is a builtin special form,
+# not a component → E002 (brace form does not reach special forms).
+comp:
+  out: $typo{1}
+special:
+  out: $map{1}
+
+_test:
+  comp:
+    error: E002
+  special:
+    error: E002

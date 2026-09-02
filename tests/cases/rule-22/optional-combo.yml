@@ -1,0 +1,23 @@
+# Rule 22: ?$abc combines optional with a brace-call default, lazily evaluated.
+# opt (no args): omitted x uses the default $abc{10} → 20.
+# lazy (v supplied): caller value wins and the default payload ($missing_arg)
+# is never evaluated — no error, proving defaults are lazy.
+# lazy_no_v (from dispatch, no args): the default IS evaluated → $missing_arg
+# is unbound in lazy's scope → E003.
+abc$: $0 * 2
+opt:
+  x?$abc: 10
+lazy:
+  v?$abc: $missing_arg
+lazy_no_v:
+  from: lazy
+
+_test:
+  opt: {x: 20}
+  lazy:
+    args:
+      v: 7
+    result:
+      v: 7
+  lazy_no_v:
+    error: E003

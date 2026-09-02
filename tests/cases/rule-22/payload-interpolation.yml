@@ -1,0 +1,15 @@
+# Rule 22: payload values resolve in the enclosing component's scope before
+# binding — $who and ${x + 1} resolve against main's args, then bind $0 of greet.
+greet$: $0
+main:
+  msg: $greet{hello $who}
+  n: $greet{${x + 1}}
+
+_test:
+  main:
+    args:
+      who: world
+      x: 4
+    result:
+      msg: "hello world"
+      n: 5

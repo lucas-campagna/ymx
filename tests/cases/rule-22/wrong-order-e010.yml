@@ -1,0 +1,9 @@
+# Rule 22: key-suffix modifiers combine in the fixed order ?$name;
+# the reverse order $name? on a property key is invalid syntax → E010.
+abc$: $0 * 2
+comp:
+  x$abc?: 10
+
+_test:
+  comp:
+    error: E010

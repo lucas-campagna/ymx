@@ -1,0 +1,10 @@
+# Rule 22: embedded in text a brace call renders to a string;
+# as the entire value it keeps the callee's native type (Int).
+excl$: $0
+double$: $0 * 2
+main: hello $excl{world}!
+n: $double{21}
+
+_test:
+  main: "hello world!"
+  n: 42

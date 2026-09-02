@@ -1,0 +1,11 @@
+# Rule 22: empty payload {} binds no args — a callee referencing $0 → E003.
+# Covers a user component (a) and the sh builtin (its body is the $0 command).
+a$: $0 + 1
+main: $a{}
+s: $sh{}
+
+_test:
+  main:
+    error: E003
+  s:
+    error: E003
