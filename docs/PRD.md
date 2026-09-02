@@ -57,7 +57,7 @@ ymx/
         └── rule-NN/<scenario>.yml   # one file per scenario (see Testing)
 ```
 
-- **Crate boundaries**: `ymx-core` is the pure compiler — parsing, the rule-1–16 resolver, the math engine, and builtins, with no filesystem or network I/O. `ymx-config` owns the `_ymx` front-matter logic (parsing the meta key, applying the *CLI > entry-file* precedence, producing `Options`). `ymx-test` owns the `_test` meta-key logic (parsing tests, running them, `TestResult`). `ymx-lib` is intentionally small: it re-exports `ymx-core`'s public surface and adds only a thin `load_project` I/O helper that walks a directory and builds a `Project` (collecting raw `_ymx`/`_test` meta values without interpreting them). The `_ymx`/`_test` *logic* lives in `ymx-config`/`ymx-test`, never in `ymx-lib`. `ymx-cli` depends on `ymx-lib` (for `load_project` + core types), `ymx-config`, and `ymx-test`, and orchestrates `load_project` → `extract_options` → `compile` → emit (and `run_tests` under a `--test` flag).
+- **Crate boundaries**: `ymx-core` is the pure compiler — parsing, the rule-1–16 resolver, the math engine, and builtins, with no filesystem or network I/O. `ymx-config` owns the `_ymx` front-matter logic (parsing the meta key, applying the *CLI > entry-file* precedence, producing `Options`). `ymx-test` owns the `_test` meta-key logic (parsing tests, running them, `TestResult`). `ymx-lib` is intentionally small: it re-exports `ymx-core`'s public surface and adds only a thin `load_project` I/O helper that walks a directory and builds a `Project` (collecting raw `_ymx`/`_test` meta values without interpreting them). The `_ymx`/`_test` *logic* lives in `ymx-config`/`ymx-test`, never in `ymx-lib`. `ymx-cli` depends on `ymx-lib` (for `load_project` + core types), `ymx-config`, and `ymx-test`, and orchestrates `load_project` → `extract_options` → `compile` → emit (and `run_tests` under a `--test` flag). External IPC components (rule 21) use the `IpcHost`/`IpcSpec` types provided by the caller; `ymx-core` stays I/O-free.
 - **YAML parsing**: `yaml-rust2` is used directly (inside `ymx-core`) so source spans (line/column) are preserved on every scalar for diagnostics.
 - **Output**: YAML → intermediate `Value` IR → serialize to JSON (v1). The IR is `Null | Bool | String | Int(i64) | Float(f64) | Array | Object`; object keys preserve YAML insertion order. HTML/PDF renderers consume the same IR in later versions.
 - **Math**: a `MathEngine` trait evaluates `${...}`. v1 uses dynamic operand resolution — a String-valued operand is re-scanned as a math expression when it parses as one (see rule 7), numerically coerced when possible, and `+` falls back to string concatenation otherwise. The trait is the boundary for swapping to a Lua/Python/JavaScript engine in the future.
@@ -87,6 +87,7 @@ Every diagnostic renders to stderr as `[code] file:line:col (component): message
 | `E015` | load | Meta-key reserved name used as a component or template. A top-level key that is a leading-`$` variant of `_ymx` or `_test`. | `$_ymx:\n  v: 1` or `$$_test: 2` → leading-`$` variants of meta keys are rejected as reserved. |
 | `E016` | compile | Shell execution error (unknown backend, disallowed backend, spawn failure, or executor not provided). | `$sh{echo hi}` with no executor → E016. `$pw{...}` when `allowed_backends: [sh]` → E016. |
 | `E017` | render | Array/object children without a `from` component wrapper. | `$mycomp: {a: 1, b: 2}` with no `from` in children → E017. |
+| `E018` | compile | IPC call failure: no host provided, disallowed transport, spawn failure, process crash, protocol violation, timeout, error_pattern match, or non-2xx HTTP response. Also raised when a lifecycle hook (`before_start`, etc.) fails. | `$py{print(1)}` with `Options.ipc = None` → E018. |
 
 ## Multi-file projects
 
@@ -268,6 +269,8 @@ pub struct Options {            // consumed by `compile`
     pub plain: PlainMode,       // default False
     pub allowed_backends: Option<Vec<String>>,  // None = all backends allowed
     pub executor: Option<Arc<dyn CommandExecutor>>,  // None = shell execution disabled (E016)
+    pub allowed_ipc: Option<Vec<String>>,         // None = all transports allowed; IPC components (rule 21) use the separate `IpcHost` trait below.
+    pub ipc: Option<Arc<dyn IpcHost>>,           // None = IPC calls fail with E018
 }
 
 /// A loaded project: the merged component namespace (global + sub-namespaces),
@@ -312,6 +315,84 @@ pub enum ExecError {
 pub trait CommandExecutor: Send + Sync {
     fn execute(&self, backend: &str, command: &str) -> Result<ExecOutput, ExecError>;
 }
+
+/// IPC components (rule 21) use the separate `IpcHost` trait below.
+pub trait IpcHost: Send + Sync {
+    fn call(&self, name: &str, spec: &IpcSpec, request: IpcRequest) -> Result<IpcResponse, IpcError>;
+    fn shutdown(&self);
+}
+
+pub struct IpcRequest { pub args: Args }
+
+pub struct IpcResponse {
+    pub stdout: String,
+    pub stderr: String,
+    pub status: Option<u16>,
+}
+
+pub enum IpcError {
+    NoHost,
+    DisallowedTransport(String),
+    SpawnFailed(String),
+    Crashed,
+    Timeout,
+    FramingError(String),
+    StatusCode(u16, String),
+    HookFailed(String),
+    Custom(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct IpcSpec {
+    pub runner: IpcRunner,
+    pub transport: IpcTransport,
+    pub protocol: IpcProtocol,
+    pub request_template: String,
+    pub reply_until: Option<String>,
+    pub mode: IpcMode,
+    pub on_request: Option<String>,
+    pub parse: IpcParse,
+    pub trim: bool,
+    pub error_pattern: Option<String>,
+    pub envelope: IpcEnvelope,
+    pub stderr: IpcStderr,
+    pub on_response: Option<String>,
+    pub on_error: Option<String>,
+    pub startup_timeout: u32,
+    pub ready: Option<String>,
+    pub request_timeout: u32,
+    pub stop_signal: String,
+    pub stop_message: Option<String>,
+    pub stop_timeout: u32,
+    pub before_start: Option<String>,
+    pub after_start: Option<String>,
+    pub before_stop: Option<String>,
+    pub after_stop: Option<String>,
+    pub prelude: Option<String>,
+    pub url: Option<String>,
+    pub method: Option<String>,
+    pub headers: Option<indexmap::IndexMap<String, String>>,
+    pub query: Vec<String>,
+    pub body: IpcHttpBody,
+    pub ok_status: Vec<u16>,
+    pub addr: Option<String>,
+    pub path: Option<String>,
+    pub env: Option<indexmap::IndexMap<String, String>>,
+    pub cwd: Option<String>,
+    pub restart: IpcRestart,
+    pub max_restarts: u32,
+    pub lazy: bool,
+}
+
+pub enum IpcRunner { Process, External }
+pub enum IpcTransport { Pipe, Socket, Http }
+pub enum IpcProtocol { Line, Sentinel, Raw, Json, JsonRpc }
+pub enum IpcMode { Text, Json }
+pub enum IpcParse { None, Yaml, Json }
+pub enum IpcEnvelope { Payload, Full }
+pub enum IpcStderr { Ignore, Capture, Fail }
+pub enum IpcHttpBody { All, Arg0, Arg(String), Off }
+pub enum IpcRestart { Never, OnFailure }
 ```
 
 ### `ymx-lib` — thin façade
@@ -413,6 +494,7 @@ pub struct ParsedCli {
 - Usable as a CLI tool and as a Rust library (`ymx-lib`).
 - Inline `_test` blocks (see *Project metadata*) drive a tests-first development flow via `ymx-test`.
 - Shell execution builtins (`$sh`, `$pw`) with extensible backend registry and `_ymx.allowed_backends` restriction (rule 19).
+- External components via `_use` IPC declarations — persistent subprocess sessions (pipe/socket/http transports), text/json modes, request/response hooks, lifecycle hooks, and `_ymx.allowed_ipc` restriction (rule 21).
 
 **Later**
 
@@ -442,6 +524,7 @@ tests/cases/rule-NN/<scenario>.yml   # one file = one scenario = one project roo
 - `_ymx` in a scenario's entry document sets non-default flags the rule needs (e.g. `max_depth` for an `E008` case, a custom `from_keyword` for rule 6 keyword-override scenarios, or `plain: template` / `plain: true` for namespace-promotion scenarios).
 - Multi-file / namespace / file-scope scenarios are no longer supported in the flat layout; scenarios that require multiple documents use `_use` within the single file or are tested via crate `#[test]` unit tests with inline YAML.
 - Scenarios that exercise `_use` transitive re-export use the subdirectory layout (e.g. `use/transitive/`) with an entry file, intermediate file, and leaf file — the entry's `_use` names an intermediate file's `_use`-imported component, verifying the re-export chain.
+- Rule-21 (IPC) scenarios use `cat` or coreutils as the backend process (always available, deterministic). Python or other interpreter scenarios should be gated on availability and must not be required for a green CI run. IPC scenarios must provide an `IpcHost` implementation via `Options.ipc`; scenarios without a host skip with `E018`.
 
 ## Compiling Rules
 
@@ -1229,3 +1312,171 @@ mycomp:
     from: li
     $0: item
 ```
+
+### 21. External components via `_use` IPC declarations
+
+A new form of `_use` RHS allows declaring an **external component** backed by a long-running subprocess or remote service. When the RHS is a **mapping** (not a string), it is an IPC declaration — the alias becomes a regular component whose call sends a request to the external endpoint and whose output is the response.
+
+**Design philosophy.** The config decomposes into three orthogonal axes plus a lifecycle layer:
+
+- **Runner** — how a live endpoint comes into existence: `process` (spawn argv), `docker` (not first-class in v1; use `cmd: [docker, run, ...]` recipe), `external` (attach to an already-running service, no spawn).
+- **Transport** — how bytes move once alive: `pipe` (child stdin/stdout), `socket` (unix path or tcp addr), `http` (request/response over a URL).
+- **Protocol / framing** — how a request/response pair is delimited on the transport: `line` (newline-delimited text), `sentinel` (read until a regex marker), `raw` (read to EOF), `json` (newline-delimited JSON), `jsonrpc` (JSON-RPC with id matching).
+
+These three axes are independent: any runner works with any transport, and the protocol sits on top. The `external` runner implies no spawn and applies only to socket/http transports.
+
+**Wire format.** An IPC alias is a regular YMX component. Calling conventions follow the same rules (rule 3 `$alias(...)`, rule 8 shortcut, `from: alias`). The **call arguments** are rendered into an outgoing message according to `mode`:
+
+- `mode: text` (default): the component's `$0` is rendered as a string and sent. Array/Object → `E011`. If `$0` is absent → `E003`.
+- `mode: json`: all call arguments are serialized as a single JSON object — positional arguments become integer keys (`{0: v0, 1: v1, …}`) and named arguments keep their string keys. This mirrors rule 4's "integer property keys are positional slots" convention.
+
+The serialized message is sent over the configured transport using the configured protocol. The response is read back, trimmed, and parsed as a `Value` according to `parse`:
+
+- `parse: yaml` (default): the reply string is parsed as YAML, falling back to string. JSON responses parse correctly under this default (JSON is a subset of YAML).
+- `parse: none`: the reply is returned as a String.
+- `parse: json`: the reply is parsed as JSON.
+
+A `mode: json` example:
+
+```yml
+_use:
+  py:
+    cmd: [python, -u, driver.py]   # driver: read lines, eval, print JSON
+    transport: pipe
+    protocol: line
+    mode: json
+
+main:
+  py: print(1 + 2)
+# → py called with $0="print(1 + 2)" → driver returns "3\n" → parse: yaml → 3
+```
+
+A `bash` coproc example (persistent shell session):
+
+```yml
+_use:
+  sh:
+    cmd: [bash]
+    transport: pipe
+    protocol: sentinel
+    request_template: "{$0}\n__DONE__\n"
+    reply_until: '^__DONE__$'
+
+main:
+  sh: echo session state persists
+# → first call spawns bash; subsequent calls reuse the same process
+```
+
+An HTTP/REST example:
+
+```yml
+_use:
+  user:
+    transport: http
+    method: GET
+    url: http://api.example.com/users/{$0}   # $0 fills the path segment
+    query: [verbose]                         # `verbose` arg → ?verbose=…
+    headers: {Accept: application/json}
+
+main:
+  user: 42
+# → GET /users/42?verbose=… → {"id":42,"name":"…"} → parse: yaml → object
+```
+
+**Config reference.**
+
+All fields are optional unless noted.
+
+*Runner (getting a live endpoint)*
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `cmd` | string \| list | — | **Required** unless `external: true`. List = direct argv (no shell). String = whitespace-split unless `shell: true`. |
+| `shell` | bool | `false` | Run string cmd via `sh -c`. |
+| `cwd` | string | inherit | Working directory. |
+| `env` | map | inherit | Merged over parent env. |
+| `external` | bool | `false` | `true` = don't spawn; connect only (for socket/http). |
+| `restart` | `never` \| `on-failure` | `never` | `on-failure`: session is marked dead after a call failure; next call respawns transparently. |
+| `max_restarts` | int | `3` | Cap for `on-failure`. |
+| `lazy` | bool | `true` | `false` = spawn at compile start. |
+| `stop_signal` | `term` \| `kill` | `term` | Signal sent on session teardown. |
+| `stop_message` | string | — | If set, send this on stdin before signaling. |
+| `stop_timeout` | ms | `2000` | Wait after `stop_message` before signaling. |
+
+*Transport (moving bytes)*
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `transport` | `pipe` \| `socket` \| `http` | `pipe` | `pipe` = child's stdin/stdout; `socket` = unix path or tcp addr; `http` = request/response. |
+| `addr` / `path` | string | — | For `socket`: unix socket path or `host:port`. |
+| `url` | string | — | For `http`: the URL; interpolated with `$0`/`$name` for path params. |
+| `method` | string | `POST` | For `http`. |
+| `headers` | map | — | For `http`. |
+| `read_from` | `stdout` \| `stderr` | `stdout` | Which stream to read the reply from (pipe transport only). |
+
+*Protocol / framing (delimiting request/response pairs)*
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `protocol` | `line` \| `sentinel` \| `raw` \| `json` \| `jsonrpc` | `line` | `line` = one newline-delimited line per message; `sentinel` = read until `reply_until` regex; `raw` = read to EOF (one-shot); `json` = newline-delimited JSON; `jsonrpc` = JSON-RPC with id matching. |
+| `request_template` | string | `"{$0}\n"` | Outgoing message wrapper; `$0`/`$name` interpolated. |
+| `reply_until` | regex | — | For `sentinel`: read lines until this matches; everything before the matching line is the reply. |
+
+*Request shaping*
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `mode` | `text` \| `json` | `text` | `text`: send `$0` as string. `json`: serialize all args as one object (positional → integer keys). |
+| `on_request` | component name | — | Override: call this component with the full arg set; its result is sent instead of `mode` rendering. |
+
+*Response mapping*
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `parse` | `none` \| `yaml` \| `json` | `yaml` | How the reply string becomes a `Value`. |
+| `trim` | bool | `true` | Strip trailing newline/whitespace before parsing. |
+| `error_pattern` | regex | — | Reply matching this → `E018`. |
+| `envelope` | `payload` \| `full` | `payload` | `full` → `{stdout, stderr}` (rule 19 symmetry). |
+| `stderr` | `ignore` \| `capture` \| `fail` | `ignore` | For `pipe` transport. |
+| `on_response` | component name | — | Call this component with `$0` = raw reply; its result replaces the reply. |
+| `on_error` | component name | — | Call this component on failure; may return a fallback `Value`. |
+
+*HTTP/REST shaping (http transport only)*
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `query` | list of arg names | — | These named args are placed in the query string, not the body. |
+| `body` | `all` \| `$0` \| arg name | `all` | Which arg(s) fill the request body. `off` for GET (no body). |
+| `ok` | status spec | `2xx` | Status codes that count as success. Non-matching → `E018` with response body as message. |
+
+*Timeouts*
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `startup_timeout` | ms | `10000` | Max wait for `ready` after spawn. |
+| `ready` | string/regex | — | Must appear on stdout/stderr before the first request. |
+| `request_timeout` | ms | `30000` | Per call; `0` = unlimited. |
+
+*Lifecycle hooks*
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `before_start` | shell command | — | Run via `CommandExecutor` before spawn (e.g. `docker build`). Failure → `E018`. |
+| `after_start` | shell command | — | Run after spawn + `ready` satisfied. |
+| `before_stop` | shell command | — | Run before session teardown. |
+| `after_stop` | shell command | — | Run after session teardown. |
+| `prelude` | string | — | Sent to the process immediately after spawn, before `ready` wait. |
+
+**Session lifetime and `--watch`.** A session's lifetime equals the `IpcHost` instance's lifetime, not a single compile's. In `--watch` mode the host persists across recompiles, so sessions survive too (stateful processes like a Python REPL keep their state while the YAML is iterated). Sessions are keyed by **(project root, alias, full spec)** — collisions across projects (e.g. recursive `--test` mode) are prevented. If the config changes between passes, the key changes → old session torn down, new one spawned lazily. Any transport or framing error marks the session **dead**; the next call respawns transparently (same semantics as `restart: on-failure`).
+
+**Transitive re-export.** An IPC alias is a namespace entry. The 1.38 re-export rules apply: if `utils.yml` declares `_use: {py: {...}}` and the entry imports from `utils.yml` via `_use: {"*": utils}` or `_use: {myp: "utils.py"}`, the `py` alias (and its full spec) is re-exported into the entry's namespace under the imported name. Collision checks (`E004`/`E007`/`E015`) fire at each hop as usual.
+
+**E018 — IPC call failure.** `E018` is emitted when an IPC call fails at runtime. Situations: no `IpcHost` provided (`Options.ipc` is `None`), disallowed transport (not in `_ymx.allowed_ipc`), spawn failure, process crash, protocol violation (unexpected EOF, framing error), timeout, `error_pattern` match, `on_error` hook failure, or non-2xx HTTP response. The diagnostic carries the call-site span.
+
+**E010 — invalid IPC config.** Load-time validation of `_use` mapping RHS entries (unknown field, invalid type, invalid transport/protocol name, missing required `cmd` when not `external`) raises `E010` — the same catch-all that covers unknown `_ymx` fields. This fires during `load_project`, making invalid IPC configs load-time failures (not call-time).
+
+**E004 collision.** If an IPC alias name collides with an existing component name in the same namespace → `E004` at load.
+
+**E007 / E015 reserved names.** IPC aliases follow the same reserved-name rules as regular components: `map`/`reduce`/`merge` → `E007`; `$_ymx`-style variants → `E015`.
+
+**Note on `$`-interpolation in config.** Fields inside a `_use` IPC declaration are **meta** (like `_ymx` fields) — they are not YMX component bodies and **do not undergo `$name` / `${...}` interpolation**. Engine-provided variables (like `{$project}`) are not supported in v1. Use `env` for environment data; use shell hooks for side effects.
