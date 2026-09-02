@@ -3,7 +3,7 @@ version: "2.x"
 title: "YMX v2 implementation plan"
 short: "Index of versioned implementation milestones (1.1 – 1.38, 2.1)"
 description: |
-  Tracks the build of YMX v2 per docs/PRD.md: the rules-1–18 resolver, JSON
+  Tracks the build of YMX v2 per docs/PRD/README.md: the rules-1–18 resolver, JSON
   output, CLI + library, inline `_test`, file-path entry addressing, and
   namespace promotion via `_ymx.plain`. v2 adds the TypeScript/WASM library
   (ymx-web). Each milestone is a separate file with frontmatter (version, title,
