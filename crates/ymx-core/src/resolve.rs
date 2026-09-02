@@ -1442,6 +1442,7 @@ impl<'a> Resolver<'a> {
         // - None: value is NOT a math expression (just optional, use as-is)
         // - Some((true, None)): value is a math expression to be evaluated (for `?$`)
         // - Some((false, Some(component))): value is argument for key-suffix call to `component`
+        #[allow(clippy::type_complexity)]
         let mut optional_named: Vec<(
             String,
             &crate::parse::Entry,
@@ -5218,6 +5219,7 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
     /// unless the command is "fail" (returns exit 1) or "error" (returns
     /// SpawnFailed).
     #[derive(Debug)]
+    #[allow(dead_code)]
     struct MockExecutor;
 
     impl crate::exec::CommandExecutor for MockExecutor {
@@ -5238,6 +5240,7 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
         }
     }
 
+    #[allow(dead_code)]
     fn opts_with_exec() -> Options {
         Options {
             executor: Some(Arc::new(MockExecutor)),

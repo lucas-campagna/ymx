@@ -1424,8 +1424,8 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
 
     // Run initial compile
     let start = Instant::now();
-    print!(
-        "\x1b[2J\x1b[H{}: Compiling...\n",
+    println!(
+        "\x1b[2J\x1b[H{}: Compiling...",
         watch_msg_path(watch_path, cli)
     );
     std::io::stdout().flush().ok();
@@ -1484,8 +1484,8 @@ pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
             last_mtimes = current_mtimes;
 
             let start = Instant::now();
-            print!(
-                "\x1b[2J\x1b[H{}: Compiling...\n",
+            println!(
+                "\x1b[2J\x1b[H{}: Compiling...",
                 watch_msg_path(watch_path, cli)
             );
             std::io::stdout().flush().ok();
