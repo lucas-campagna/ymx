@@ -1,1 +1,3 @@
 _use: {y: "transitive-cycle.x"}
+_test:
+  _build_error: E001
