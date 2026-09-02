@@ -1505,14 +1505,6 @@ impl<'a> Resolver<'a> {
 
         for entry in entries {
             match &entry.key {
-                // Wrong modifier order `$?` (math first, optional second) is E010.
-                crate::parse::Key::String(s) if s.ends_with("$?") => {
-                    return Err(ctx_err(
-                        scope,
-                        E010,
-                        "wrong modifier order `$?` (should be `?$`)".to_string(),
-                    ));
-                }
                 crate::parse::Key::Int(i) if *i >= 0 => {
                     let idx = *i as usize;
                     if idx > MAX_SLOTS {
@@ -1533,171 +1525,121 @@ impl<'a> Resolver<'a> {
                     set.slots[idx] = value;
                     set.order.push(PropKey::Slot(idx));
                 }
-                crate::parse::Key::String(s) if s.ends_with('?') && !s.ends_with("?$") => {
-                    // `x?` optional named property or `0?` optional slot.
-                    // Strip the `?` suffix to get the base key.
-                    let base = &s[..s.len() - 1];
-                    if let Ok(idx) = base.parse::<usize>() {
-                        // `0?`, `1?`, etc. — optional positional slot.
-                        if idx > MAX_SLOTS {
-                            return Err(ctx_err(
-                                scope,
-                                E010,
-                                format!("slot key `{s}` is too large (max {MAX_SLOTS})"),
+                crate::parse::Key::String(s) => {
+                    let pk = parse_property_key(s)?;
+                    match (&pk.suffix, pk.optional) {
+                        (Suffix::None, false) => {
+                            set.order.push(PropKey::Named(pk.base));
+                        }
+                        (Suffix::None, true) => {
+                            if let Ok(idx) = pk.base.parse::<usize>() {
+                                if idx > MAX_SLOTS {
+                                    return Err(ctx_err(
+                                        scope,
+                                        E010,
+                                        format!("slot key `{s}` is too large (max {MAX_SLOTS})"),
+                                    ));
+                                }
+                                optional_slots.push((idx, entry, false));
+                                if set.slots.len() <= idx {
+                                    set.slots.resize(idx + 1, Value::Null);
+                                }
+                                set.order.push(PropKey::Slot(idx));
+                            } else {
+                                optional_named.push((pk.base.clone(), entry, None));
+                                set.order.push(PropKey::Named(pk.base));
+                            }
+                        }
+                        (Suffix::Math, false) => {
+                            if let Ok(idx) = pk.base.parse::<usize>() {
+                                if idx > MAX_SLOTS {
+                                    return Err(ctx_err(
+                                        scope,
+                                        E010,
+                                        format!("slot key `{s}` is too large (max {MAX_SLOTS})"),
+                                    ));
+                                }
+                                let (math_src, span) =
+                                    self.math_source_string(&entry.value, scope, s)?;
+                                let segments = interp::scan(&format!("${{{math_src}}}"), span)?;
+                                let value = interp::resolve(&segments, scope, &V1Engine)?;
+                                if set.slots.len() <= idx {
+                                    set.slots.resize(idx + 1, Value::Null);
+                                }
+                                set.slots[idx] = value;
+                                set.order.push(PropKey::Slot(idx));
+                            } else {
+                                let (math_src, span) =
+                                    self.math_source_string(&entry.value, scope, s)?;
+                                let segments = interp::scan(&format!("${{{math_src}}}"), span)?;
+                                let value = interp::resolve(&segments, scope, &V1Engine)?;
+                                set.named.insert(pk.base.clone(), value);
+                                set.order.push(PropKey::Named(pk.base));
+                            }
+                        }
+                        (Suffix::Math, true) => {
+                            if let Ok(idx) = pk.base.parse::<usize>() {
+                                if idx > MAX_SLOTS {
+                                    return Err(ctx_err(
+                                        scope,
+                                        E010,
+                                        format!("slot key `{s}` is too large (max {MAX_SLOTS})"),
+                                    ));
+                                }
+                                optional_slots.push((idx, entry, true));
+                                if set.slots.len() <= idx {
+                                    set.slots.resize(idx + 1, Value::Null);
+                                }
+                                set.order.push(PropKey::Slot(idx));
+                            } else {
+                                optional_named.push((pk.base.clone(), entry, Some((true, None))));
+                                set.order.push(PropKey::Named(pk.base));
+                            }
+                        }
+                        (Suffix::Call(name), false) => {
+                            if name == "sh" || name == "pw" {
+                                let raw = self.raw_value_string(&entry.value, scope)?;
+                                let span = entry.value.span();
+                                let segments = interp::scan_shell(&raw, span)?;
+                                let interpolated =
+                                    interp::resolve_shell(&segments, scope, &V1Engine)?;
+                                let cmd_str = match interpolated {
+                                    Value::String(s) => s,
+                                    other => render_value(&other).map_err(|_| {
+                                        ctx_err(
+                                            scope,
+                                            E011,
+                                            "executor command must resolve to a string".to_string(),
+                                        )
+                                    })?,
+                                };
+                                let mut m = IndexMap::new();
+                                m.insert("__exec_backend".to_string(), Value::string(name.clone()));
+                                m.insert("__exec_command".to_string(), Value::string(cmd_str));
+                                set.named.insert(pk.base.clone(), Value::Object(m));
+                                set.order.push(PropKey::Named(pk.base));
+                            } else {
+                                let value = self.resolve_node(&entry.value, scope, file)?;
+                                let args_value = match value {
+                                    Value::Array(_) | Value::Object(_) => value,
+                                    other => Value::Array(vec![other]),
+                                };
+                                let mut m = IndexMap::new();
+                                m.insert("__brace_call".to_string(), Value::string(name.clone()));
+                                m.insert("__brace_args".to_string(), args_value);
+                                set.named.insert(pk.base.clone(), Value::Object(m));
+                                set.order.push(PropKey::Named(pk.base));
+                            }
+                        }
+                        (Suffix::Call(name), true) => {
+                            optional_named.push((
+                                pk.base.clone(),
+                                entry,
+                                Some((false, Some(name.clone()))),
                             ));
+                            set.order.push(PropKey::Named(pk.base));
                         }
-                        // Record for lazy evaluation: only use default if caller
-                        // did not supply positional at this index.
-                        optional_slots.push((idx, entry, false));
-                        // Add to order but don't insert into slots yet.
-                        if set.slots.len() <= idx {
-                            set.slots.resize(idx + 1, Value::Null);
-                        }
-                        set.order.push(PropKey::Slot(idx));
-                    } else {
-                        // `x?` — optional named property (not math default).
-                        optional_named.push((base.to_string(), entry, None));
-                        set.order.push(PropKey::Named(base.to_string()));
                     }
-                }
-                crate::parse::Key::String(s) if s.ends_with("?$") => {
-                    // `x?$` optional named property with math-evaluated default, or
-                    // `0?$` optional positional slot with math-evaluated default.
-                    // `<name>?$: <src>` ≡ `<name>?: ${<src>}` — lazy evaluation:
-                    // only evaluated when caller does NOT supply <name>.
-                    let base = &s[..s.len() - 2]; // strip `?$`
-                    if let Ok(idx) = base.parse::<usize>() {
-                        // `0?$`, `1?$`, etc. — optional positional slot with math default.
-                        if idx > MAX_SLOTS {
-                            return Err(ctx_err(
-                                scope,
-                                E010,
-                                format!("slot key `{s}` is too large (max {MAX_SLOTS})"),
-                            ));
-                        }
-                        optional_slots.push((idx, entry, true));
-                        if set.slots.len() <= idx {
-                            set.slots.resize(idx + 1, Value::Null);
-                        }
-                        set.order.push(PropKey::Slot(idx));
-                    } else {
-                        // `x?$` — optional named property with math default.
-                        optional_named.push((base.to_string(), entry, Some((true, None))));
-                        set.order.push(PropKey::Named(base.to_string()));
-                    }
-                }
-                crate::parse::Key::String(s) if s.ends_with('$') && !s.ends_with("?$") => {
-                    // `x$` or `0$` — rule 18 `$` math shorthand property-key modifier.
-                    // Strip the `$` suffix to get the base key.
-                    let base = &s[..s.len() - 1];
-                    if let Ok(idx) = base.parse::<usize>() {
-                        // `0$`, `1$`, etc. — slot math shorthand: evaluate value as
-                        // math source and store the result in the slot.
-                        if idx > MAX_SLOTS {
-                            return Err(ctx_err(
-                                scope,
-                                E010,
-                                format!("slot key `{s}` is too large (max {MAX_SLOTS})"),
-                            ));
-                        }
-                        let (math_src, span) = self.math_source_string(&entry.value, scope, s)?;
-                        let segments = interp::scan(&format!("${{{math_src}}}"), span)?;
-                        let value = interp::resolve(&segments, scope, &V1Engine)?;
-                        if set.slots.len() <= idx {
-                            set.slots.resize(idx + 1, Value::Null);
-                        }
-                        set.slots[idx] = value;
-                        set.order.push(PropKey::Slot(idx));
-                    } else {
-                        // `x$` — named property with math shorthand value.
-                        // Value must be a string; wrap it in `${...}` and resolve.
-                        let (math_src, span) = self.math_source_string(&entry.value, scope, s)?;
-                        let segments = interp::scan(&format!("${{{math_src}}}"), span)?;
-                        let value = interp::resolve(&segments, scope, &V1Engine)?;
-                        set.named.insert(base.to_string(), value);
-                        set.order.push(PropKey::Named(base.to_string()));
-                    }
-                }
-                crate::parse::Key::String(s) if s.ends_with("?$") => {
-                    // `?$` combination (rule 17+18) is v2-only — E010 in v1.
-                    return Err(ctx_err(
-                        scope,
-                        E010,
-                        "property-key modifier `?$` is not supported in v1 \
-                         (rule 17+18 combination is v2)"
-                            .to_string(),
-                    ));
-                }
-                crate::parse::Key::String(s) if has_executor_suffix(s) => {
-                    // `$<backend>` property-key shorthand (rule 19):
-                    // `key$sh: <cmd>` ≡ `key: $sh{<cmd>}` — strip the
-                    // `$<backend>` suffix and create an exec marker directly.
-                    let (base, backend) = split_executor_suffix(s);
-                    let raw = self.raw_value_string(&entry.value, scope)?;
-                    let span = entry.value.span();
-                    // Interpolate the command string so `$name` etc. resolve.
-                    let segments = interp::scan_shell(&raw, span)?;
-                    let interpolated = interp::resolve_shell(&segments, scope, &V1Engine)?;
-                    let cmd_str = match interpolated {
-                        Value::String(s) => s,
-                        other => render_value(&other).map_err(|_| {
-                            ctx_err(
-                                scope,
-                                E011,
-                                "executor command must resolve to a string".to_string(),
-                            )
-                        })?,
-                    };
-                    let mut m = IndexMap::new();
-                    m.insert(
-                        "__exec_backend".to_string(),
-                        Value::string(backend.to_string()),
-                    );
-                    m.insert("__exec_command".to_string(), Value::string(cmd_str));
-                    set.named.insert(base.to_string(), Value::Object(m));
-                    set.order.push(PropKey::Named(base.to_string()));
-                }
-                crate::parse::Key::String(s) if has_key_suffix(s) => {
-                    // `key$name: value` ≡ `key: $name{value}` (key-suffix component call)
-                    let (base, name) = split_key_suffix(s);
-                    let value = self.resolve_node(&entry.value, scope, file)?;
-                    // Wrap scalar values in an array so value_to_args treats them as positional.
-                    let args_value = match value {
-                        Value::Array(_) | Value::Object(_) => value,
-                        other => Value::Array(vec![other]),
-                    };
-                    let mut m = IndexMap::new();
-                    m.insert("__brace_call".to_string(), Value::string(name.to_string()));
-                    m.insert("__brace_args".to_string(), args_value);
-                    set.named.insert(base.to_string(), Value::Object(m));
-                    set.order.push(PropKey::Named(base.to_string()));
-                }
-                crate::parse::Key::String(s) if s.contains("?$") => {
-                    // `key?$name: value` — optional property + key-suffix component call.
-                    // `x?$abc: 10` ≡ `x: $abc{10}` (optional, lazy evaluated).
-                    // First, validate that `?` comes BEFORE `$` (wrong order `$?` is E010).
-                    // For `x$?`: `?` is at index 1, `$` is at index 1. But `$` comes BEFORE `?`.
-                    // We need to check if there's a `$` BEFORE the `?` that starts the `?$`.
-                    let qdollar_pos = s.find("?$").unwrap();
-                    let before_q = &s[..qdollar_pos];
-                    // If there's a `$` before the `?$`, that's wrong order.
-                    if before_q.contains('$') {
-                        return Err(ctx_err(
-                            scope,
-                            E010,
-                            "wrong modifier order `$?` (should be `?$`)".to_string(),
-                        ));
-                    }
-                    let base = &s[..qdollar_pos]; // "x?$abc" → "x"
-                    let component = &s[qdollar_pos + 2..]; // after "?$"
-                                                           // Store for lazy evaluation via optional_named mechanism.
-                                                           // The entry will be evaluated only if caller doesn't supply `base`.
-                    optional_named.push((
-                        base.to_string(),
-                        entry,
-                        Some((false, Some(component.to_string()))),
-                    ));
-                    set.order.push(PropKey::Named(base.to_string()));
                 }
                 _ => {
                     let name = key_to_string(&entry.key);
@@ -1802,37 +1744,14 @@ impl<'a> Resolver<'a> {
         for entry in entries {
             match &entry.key {
                 crate::parse::Key::String(name) => {
-                    // Skip entries handled in the first match arms above:
-                    // - `?`, `?$`, `$` — lazy/math shortcuts
-                    // - `x?$abc` — optional + key-suffix (contains "?$")
-                    // - `x$sh`/`x$pw` — executor shorthand (has_executor_suffix)
-                    // - `x$abc` — key-suffix component call (has_key_suffix)
-                    if name.ends_with('?')
-                        || name.ends_with("?$")
-                        || name.ends_with('$')
-                        || name.contains("?$")
-                        || has_executor_suffix(name)
-                        || has_key_suffix(name)
-                    {
+                    let pk = parse_property_key(name)?;
+                    // Only process plain (non-modifier) keys here.
+                    // Modifier keys (optional, math, call) were handled above.
+                    if pk.optional || pk.suffix != Suffix::None {
                         continue;
                     }
-                    let is_math_key = name.ends_with('$');
-                    let actual_name = name.strip_suffix('$').unwrap_or(name);
-                    let value = if is_math_key {
-                        match &entry.value {
-                            Node::String(s, _span) => V1Engine.eval(s, &padded),
-                            _ => {
-                                return Err(ctx_err(
-                                    scope,
-                                    E010,
-                                    "math key `$` suffix requires a string value".to_string(),
-                                ));
-                            }
-                        }
-                    } else {
-                        Ok(self.resolve_node(&entry.value, &padded, file)?)
-                    }?;
-                    set.named.insert(actual_name.to_string(), value);
+                    let value = self.resolve_node(&entry.value, &padded, file)?;
+                    set.named.insert(pk.base, value);
                 }
                 crate::parse::Key::Int(i) if *i < 0 => {
                     let name = i.to_string();
@@ -1958,53 +1877,29 @@ impl<'a> Resolver<'a> {
     ) -> Result<(), Diagnostic> {
         for entry in entries {
             if let crate::parse::Key::String(s) = &entry.key {
-                // `?$` combination (rules 17+18) checks.
-                if s.ends_with("?$") {
-                    let base = &s[..s.len() - 2]; // strip `?$`
-                                                  // `?$` on meta fields `_ymx`/`_test` is E010.
-                    if base == "_ymx" || base == "_test" {
-                        return Err(ctx_err(
-                            scope,
-                            E010,
-                            format!(
-                                "property-key modifier `?$` on meta field `{s}` is not allowed"
-                            ),
-                        ));
-                    }
-                }
-                // `?` modifier (rule 17) checks.
-                if let Some(base) = s.strip_suffix('?') {
+                let pk = parse_property_key(s)?;
+                if pk.optional {
                     // `?` on meta fields `_ymx`/`_test` is E010.
-                    if base == "_ymx" || base == "_test" {
+                    if pk.base == "_ymx" || pk.base == "_test" {
                         return Err(ctx_err(
                             scope,
                             E010,
                             format!("property-key modifier `?` on meta field `{s}` is not allowed"),
                         ));
                     }
-                    // Wrong modifier order `x$?` (math first, optional second) is E010.
-                    // `x$?` ends with `?` but has `$` before the trailing `?`.
-                    if base.ends_with('$') {
-                        return Err(ctx_err(
-                            scope,
-                            E010,
-                            format!(
-                                "wrong property-key modifier order `{s}`: \
-                                 `$` (math) must come after `?` (optional), not before"
-                            ),
-                        ));
-                    }
                     // `?` on invalid identifier keys is E010.
                     // Valid identifiers: `[A-Za-z_][A-Za-z0-9_]*`.
                     // Numeric strings like `0`, `1` are slot references (accepted).
-                    let is_valid_ident = !base.is_empty()
-                        && base
+                    let is_valid_ident = pk
+                        .base
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                        && pk
+                            .base
                             .chars()
-                            .next()
-                            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-                        && base.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-                    if !is_valid_ident && base.parse::<usize>().is_err() {
-                        // Not a valid identifier and not a numeric slot reference → E010.
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_');
+                    if !is_valid_ident && pk.base.parse::<usize>().is_err() {
                         return Err(ctx_err(
                             scope,
                             E010,
@@ -2984,13 +2879,20 @@ pub fn parse_property_key(raw: &str) -> Result<ParsedKey, Diagnostic> {
         }
     } else {
         // No `?`, check for `$` suffix in the raw string.
+        // A `$` at position 0 means it's part of the name (e.g. `$box`),
+        // not a modifier — consistent with has_executor_suffix/has_key_suffix.
         if let Some(dollar_idx) = raw.find('$') {
-            let base = &raw[..dollar_idx];
-            let name_part = &raw[dollar_idx + 1..];
-            if name_part.is_empty() {
-                (base, Suffix::Math)
+            if dollar_idx == 0 {
+                // `$name` — bare dollar prefix, treat as plain key.
+                (raw, Suffix::None)
             } else {
-                (base, Suffix::Call(name_part.to_string()))
+                let base = &raw[..dollar_idx];
+                let name_part = &raw[dollar_idx + 1..];
+                if name_part.is_empty() {
+                    (base, Suffix::Math)
+                } else {
+                    (base, Suffix::Call(name_part.to_string()))
+                }
             }
         } else {
             (raw, Suffix::None)
@@ -3062,61 +2964,6 @@ fn ctx_err(scope: &Scope<'_>, code: &'static str, message: String) -> Diagnostic
         code,
         message,
     }
-}
-
-/// True when `s` ends with `$<valid_identifier>` (rule 19 executor shorthand).
-/// The part before the `$` must be non-empty.
-fn has_executor_suffix(s: &str) -> bool {
-    let Some(dollar_pos) = s.rfind('$') else {
-        return false;
-    };
-    if dollar_pos == 0 {
-        return false; // bare `$backend` — no property name
-    }
-    let backend = &s[dollar_pos + 1..];
-    // Only `sh` and `pw` are executor backends; other suffixes are
-    // key-suffix component calls (Task 4.7).
-    backend == "sh" || backend == "pw"
-}
-
-/// Split `key$backend` into `(key, backend)`.
-fn split_executor_suffix(s: &str) -> (&str, &str) {
-    let dollar_pos = s.rfind('$').expect("has_executor_suffix guarantees $");
-    (&s[..dollar_pos], &s[dollar_pos + 1..])
-}
-
-/// `true` iff `s` has a trailing `$` suffix that forms a key-suffix
-/// component call (`key$name: value` ≡ `key: $name{value}`).
-/// This is distinct from executor suffix (`key$sh: cmd`) which is handled
-/// by `has_executor_suffix`.
-/// Does NOT match `key?$name` (optional + key-suffix, handled separately).
-fn has_key_suffix(s: &str) -> bool {
-    let Some(dollar_pos) = s.rfind('$') else {
-        return false;
-    };
-    if dollar_pos == 0 {
-        return false; // bare `$name` — no property name
-    }
-    // Don't match `key?$name` — that's optional + key-suffix, handled separately.
-    if s[..dollar_pos].contains('?') {
-        return false;
-    }
-    let name = &s[dollar_pos + 1..];
-    if name.is_empty() {
-        return false; // `key$` is math shorthand, not key suffix
-    }
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
-        _ => return false,
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
-/// Split `key$name` into `(key, name)` for key-suffix component calls.
-fn split_key_suffix(s: &str) -> (&str, &str) {
-    let dollar_pos = s.rfind('$').expect("has_key_suffix guarantees $");
-    (&s[..dollar_pos], &s[dollar_pos + 1..])
 }
 
 /// Build [`Args`] from (named, positional) parts, choosing the minimal
@@ -5722,14 +5569,19 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
     }
 
     #[test]
-    fn empty_base_after_stripping_modifiers_is_e010() {
-        let err = parse_property_key("$").unwrap_err();
-        assert_eq!(err.code, E010);
-        assert!(
-            err.message.contains("empty property key"),
-            "{}",
-            err.message
-        );
+    fn bare_dollar_is_plain_key() {
+        let pk = parse_property_key("$").unwrap();
+        assert_eq!(pk.base, "$");
+        assert!(!pk.optional);
+        assert_eq!(pk.suffix, Suffix::None);
+    }
+
+    #[test]
+    fn dollar_prefixed_name_is_plain_key() {
+        let pk = parse_property_key("$box").unwrap();
+        assert_eq!(pk.base, "$box");
+        assert!(!pk.optional);
+        assert_eq!(pk.suffix, Suffix::None);
     }
 
     #[test]
