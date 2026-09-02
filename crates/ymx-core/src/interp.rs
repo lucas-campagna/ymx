@@ -293,8 +293,8 @@ pub fn resolve(
             payload_src,
             span,
         }] => {
-            let payload = callsite::parse_brace_payload(payload_src)
-                .map_err(|(code, msg)| Diagnostic {
+            let payload =
+                callsite::parse_brace_payload(payload_src).map_err(|(code, msg)| Diagnostic {
                     file: scope.file.clone(),
                     line: span.line,
                     col: span.col,
@@ -328,14 +328,16 @@ pub fn resolve(
                         payload_src,
                         span,
                     } => {
-                        let payload = callsite::parse_brace_payload(payload_src)
-                            .map_err(|(code, msg)| Diagnostic {
-                                file: scope.file.clone(),
-                                line: span.line,
-                                col: span.col,
-                                component: scope.component.clone(),
-                                code,
-                                message: msg,
+                        let payload =
+                            callsite::parse_brace_payload(payload_src).map_err(|(code, msg)| {
+                                Diagnostic {
+                                    file: scope.file.clone(),
+                                    line: span.line,
+                                    col: span.col,
+                                    component: scope.component.clone(),
+                                    code,
+                                    message: msg,
+                                }
                             })?;
                         let v = scope.invoke_brace_call(name, &payload, *span)?;
                         out.push_str(&render_into_text(&v, scope, *span)?);
@@ -387,14 +389,16 @@ pub fn resolve_shell(
                 payload_src,
                 span,
             } => {
-                let payload = callsite::parse_brace_payload(payload_src)
-                    .map_err(|(code, msg)| Diagnostic {
-                        file: scope.file.clone(),
-                        line: span.line,
-                        col: span.col,
-                        component: scope.component.clone(),
-                        code,
-                        message: msg,
+                let payload =
+                    callsite::parse_brace_payload(payload_src).map_err(|(code, msg)| {
+                        Diagnostic {
+                            file: scope.file.clone(),
+                            line: span.line,
+                            col: span.col,
+                            component: scope.component.clone(),
+                            code,
+                            message: msg,
+                        }
                     })?;
                 let v = scope.invoke_brace_call(name, &payload, *span)?;
                 out.push_str(&render_into_text(&v, scope, *span)?);

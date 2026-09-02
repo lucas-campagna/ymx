@@ -2891,6 +2891,131 @@ pub enum PropKey {
     Slot(usize),
 }
 
+/// The `$`-suffix portion of a parsed property key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Suffix {
+    /// No `$` suffix — plain property or plain optional.
+    None,
+    /// `$` alone — math shorthand (rule 18). `<key>$: <src>` ≡ `<key>: ${<src>}`.
+    Math,
+    /// `$<name>` — brace-call / key-suffix component call (rule 22).
+    /// The String is the component name (e.g., "abc", "sh", "pw").
+    Call(String),
+}
+
+/// A parsed property key, decomposed into base name and modifiers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedKey {
+    /// The base property name (e.g., "x" from "x?$abc", "0" from "0?$").
+    pub base: String,
+    /// Whether the `?` optional modifier is present.
+    pub optional: bool,
+    /// The `$`-suffix variant (None, Math, or Call(name)).
+    pub suffix: Suffix,
+}
+
+/// Parse a raw property key string into a structured [`ParsedKey`].
+///
+/// The canonical format is `<base>[?][$[<name>]]`:
+/// - `x` → Plain
+/// - `x?` → Optional
+/// - `x$` → Math shorthand
+/// - `x?$` → Optional + Math
+/// - `x$abc` → Brace call (key-suffix)
+/// - `x?$abc` → Optional + Brace call
+///
+/// Rejects:
+/// - `$?` wrong order (E010)
+/// - `?` not at end or before `$` (E010)
+/// - empty base name (E010)
+pub fn parse_property_key(raw: &str) -> Result<ParsedKey, Diagnostic> {
+    // Step 1: detect wrong-order `$?` (E010).
+    if raw.contains("$?") {
+        return Err(Diagnostic {
+            file: None,
+            line: 0,
+            col: 0,
+            component: None,
+            code: E010,
+            message: format!(
+                "wrong property-key modifier order `{raw}`: \
+                 `$` (math) must come after `?` (optional), not before"
+            ),
+        });
+    }
+
+    // Step 2: find optional `?` modifier and validate its placement.
+    // `?` must be either at the end of the string or immediately before `$`.
+    let q_idx = raw.find('?');
+    if let Some(q_idx) = q_idx {
+        let after_q = &raw[q_idx + 1..];
+        if !after_q.is_empty() && !after_q.starts_with('$') {
+            return Err(Diagnostic {
+                file: None,
+                line: 0,
+                col: 0,
+                component: None,
+                code: E010,
+                message: format!(
+                    "property-key modifier `?` in `{raw}` must come before `$` or at the end"
+                ),
+            });
+        }
+    }
+
+    let optional = q_idx.is_some();
+
+    // Step 3: extract base and suffix.
+    let (base, suffix) = if let Some(q_idx) = q_idx {
+        // Base is everything before `?`.
+        let base = &raw[..q_idx];
+        // Suffix is everything after `?` (empty or `$...`).
+        let after_q = &raw[q_idx + 1..];
+        if after_q.is_empty() {
+            (base, Suffix::None)
+        } else {
+            // `after_q` starts with `$` — strip it to get the call name.
+            let name_part = &after_q[1..];
+            if name_part.is_empty() {
+                (base, Suffix::Math)
+            } else {
+                (base, Suffix::Call(name_part.to_string()))
+            }
+        }
+    } else {
+        // No `?`, check for `$` suffix in the raw string.
+        if let Some(dollar_idx) = raw.find('$') {
+            let base = &raw[..dollar_idx];
+            let name_part = &raw[dollar_idx + 1..];
+            if name_part.is_empty() {
+                (base, Suffix::Math)
+            } else {
+                (base, Suffix::Call(name_part.to_string()))
+            }
+        } else {
+            (raw, Suffix::None)
+        }
+    };
+
+    // Step 4: validate base name is not empty.
+    if base.is_empty() {
+        return Err(Diagnostic {
+            file: None,
+            line: 0,
+            col: 0,
+            component: None,
+            code: E010,
+            message: format!("empty property key (all modifiers stripped from `{raw}`)"),
+        });
+    }
+
+    Ok(ParsedKey {
+        base: base.to_string(),
+        optional,
+        suffix,
+    })
+}
+
 /// The result of rule-11 step 1: a plain value or an object property set.
 enum ResolvedBody {
     Value(Value),
@@ -5466,4 +5591,155 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
     //     expected.insert("x".to_string(), Value::Object(exec_result));
     //     assert_eq!(val, Value::Object(expected));
     // }
+
+    // ---- Task 1.43: parse_property_key ----
+
+    #[test]
+    fn parse_plain_name() {
+        let pk = parse_property_key("x").unwrap();
+        assert_eq!(pk.base, "x");
+        assert!(!pk.optional);
+        assert_eq!(pk.suffix, Suffix::None);
+    }
+
+    #[test]
+    fn parse_optional_name() {
+        let pk = parse_property_key("x?").unwrap();
+        assert_eq!(pk.base, "x");
+        assert!(pk.optional);
+        assert_eq!(pk.suffix, Suffix::None);
+    }
+
+    #[test]
+    fn parse_math_shorthand() {
+        let pk = parse_property_key("x$").unwrap();
+        assert_eq!(pk.base, "x");
+        assert!(!pk.optional);
+        assert_eq!(pk.suffix, Suffix::Math);
+    }
+
+    #[test]
+    fn parse_optional_math() {
+        let pk = parse_property_key("x?$").unwrap();
+        assert_eq!(pk.base, "x");
+        assert!(pk.optional);
+        assert_eq!(pk.suffix, Suffix::Math);
+    }
+
+    #[test]
+    fn parse_call_suffix() {
+        let pk = parse_property_key("x$abc").unwrap();
+        assert_eq!(pk.base, "x");
+        assert!(!pk.optional);
+        assert_eq!(pk.suffix, Suffix::Call("abc".into()));
+    }
+
+    #[test]
+    fn parse_optional_call_suffix() {
+        let pk = parse_property_key("x?$abc").unwrap();
+        assert_eq!(pk.base, "x");
+        assert!(pk.optional);
+        assert_eq!(pk.suffix, Suffix::Call("abc".into()));
+    }
+
+    #[test]
+    fn parse_exec_sh() {
+        let pk = parse_property_key("x$sh").unwrap();
+        assert_eq!(pk.base, "x");
+        assert_eq!(pk.suffix, Suffix::Call("sh".into()));
+    }
+
+    #[test]
+    fn parse_exec_pw() {
+        let pk = parse_property_key("x$pw").unwrap();
+        assert_eq!(pk.base, "x");
+        assert_eq!(pk.suffix, Suffix::Call("pw".into()));
+    }
+
+    #[test]
+    fn parse_numeric_slot_plain() {
+        let pk = parse_property_key("0").unwrap();
+        assert_eq!(pk.base, "0");
+        assert!(!pk.optional);
+        assert_eq!(pk.suffix, Suffix::None);
+    }
+
+    #[test]
+    fn parse_numeric_slot_optional() {
+        let pk = parse_property_key("0?").unwrap();
+        assert_eq!(pk.base, "0");
+        assert!(pk.optional);
+        assert_eq!(pk.suffix, Suffix::None);
+    }
+
+    #[test]
+    fn parse_numeric_slot_math() {
+        let pk = parse_property_key("0$").unwrap();
+        assert_eq!(pk.base, "0");
+        assert!(!pk.optional);
+        assert_eq!(pk.suffix, Suffix::Math);
+    }
+
+    #[test]
+    fn parse_numeric_slot_optional_math() {
+        let pk = parse_property_key("0?$").unwrap();
+        assert_eq!(pk.base, "0");
+        assert!(pk.optional);
+        assert_eq!(pk.suffix, Suffix::Math);
+    }
+
+    #[test]
+    fn parse_underscore_name() {
+        let pk = parse_property_key("_ymx").unwrap();
+        assert_eq!(pk.base, "_ymx");
+        assert!(!pk.optional);
+        assert_eq!(pk.suffix, Suffix::None);
+    }
+
+    #[test]
+    fn parse_optional_underscore_name() {
+        let pk = parse_property_key("_ymx?").unwrap();
+        assert_eq!(pk.base, "_ymx");
+        assert!(pk.optional);
+        assert_eq!(pk.suffix, Suffix::None);
+    }
+
+    #[test]
+    fn wrong_order_dollar_before_question_is_e010() {
+        let err = parse_property_key("x$?").unwrap_err();
+        assert_eq!(err.code, E010);
+        assert!(
+            err.message.contains("wrong property-key modifier order"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn wrong_order_bare_dollar_question_is_e010() {
+        let err = parse_property_key("$?").unwrap_err();
+        assert_eq!(err.code, E010);
+    }
+
+    #[test]
+    fn empty_base_after_stripping_modifiers_is_e010() {
+        let err = parse_property_key("$").unwrap_err();
+        assert_eq!(err.code, E010);
+        assert!(
+            err.message.contains("empty property key"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn empty_base_with_question_mark_is_e010() {
+        let err = parse_property_key("?").unwrap_err();
+        assert_eq!(err.code, E010);
+        assert!(
+            err.message.contains("empty property key"),
+            "{}",
+            err.message
+        );
+    }
 }

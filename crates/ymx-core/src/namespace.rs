@@ -216,9 +216,7 @@ pub fn classify(full_name: &str, span: Span) -> DefClass {
             Some(dollar_pos) => {
                 let key = &after_leading[..dollar_pos];
                 let name = &after_leading[dollar_pos + 1..];
-                !name.is_empty()
-                    && is_valid_effective_id(key)
-                    && is_valid_effective_id(name)
+                !name.is_empty() && is_valid_effective_id(key) && is_valid_effective_id(name)
             }
         }
     };

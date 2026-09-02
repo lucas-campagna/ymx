@@ -48,9 +48,8 @@ pub type ShellCallHook<'a> =
     Rc<dyn Fn(&callsite::ParsedCall, &Scope<'a>, Span) -> Result<Value, Diagnostic> + 'a>;
 
 /// Component-call dispatch hook for brace-call `$name{...}` interpolation segments.
-pub type BraceCallHook<'a> = Rc<
-    dyn Fn(&str, &callsite::BracePayload, &Scope<'a>, Span) -> Result<Value, Diagnostic> + 'a,
->;
+pub type BraceCallHook<'a> =
+    Rc<dyn Fn(&str, &callsite::BracePayload, &Scope<'a>, Span) -> Result<Value, Diagnostic> + 'a>;
 
 /// Evaluation scope for `${...}` math and string interpolation.
 ///
