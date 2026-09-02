@@ -11,9 +11,17 @@
 //!
 //! `ymx-lib` deliberately contains no `_ymx` / `_test` / `_use` logic.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use indexmap::IndexMap;
+use regex::Regex;
 
 use ymx_core::diag::{FileId, E001, E002, E004, E005, E007, E009, E015};
 use ymx_core::namespace::{extract_document, DefClass};
@@ -22,10 +30,9 @@ use ymx_core::parse::parse_document;
 pub use ymx_core;
 pub use ymx_core::diag::Diagnostic;
 pub use ymx_core::exec::{CommandExecutor, ExecError, ExecOutput};
+use ymx_core::ipc::{IpcError, IpcHost, IpcProtocol, IpcRequest, IpcResponse, IpcRestart, IpcSpec};
 pub use ymx_core::ir::Value;
 pub use ymx_core::project::{Format, Options, Project};
-
-use std::process::{Command, Stdio};
 
 /// Default command executor that shells out to the platform's shell.
 ///
@@ -71,6 +78,680 @@ impl CommandExecutor for StdExecutor {
             stdout,
             stderr,
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// StdIpcHost (Task 1.39-4)
+// ---------------------------------------------------------------------------
+
+/// Session key for caching IPC processes.
+///
+/// Key = (project_root, alias, spec_hash). `spec_hash` is a hash of the
+/// serialized IpcSpec so that spec changes trigger a new session.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SessionKey {
+    project_root: PathBuf,
+    alias: String,
+    spec_hash: String,
+}
+
+/// Active subprocess session.
+#[derive(Debug)]
+struct Session {
+    child: Child,
+    spec: IpcSpec,
+    dead: bool,
+}
+
+/// Standard stdio-based IPC host for rule-21 external components.
+///
+/// Manages a cache of subprocess sessions keyed by `(project_root, alias, spec_hash)`.
+/// Sessions are restarted on failure when `spec.restart == IpcRestart::OnFailure`.
+#[derive(Debug)]
+pub struct StdIpcHost {
+    sessions: Mutex<HashMap<SessionKey, Session>>,
+    executor: Arc<dyn CommandExecutor>,
+}
+
+impl StdIpcHost {
+    /// Construct a new `StdIpcHost` with the given command executor.
+    pub fn new(executor: Arc<dyn CommandExecutor>) -> Self {
+        StdIpcHost {
+            sessions: Mutex::new(HashMap::new()),
+            executor,
+        }
+    }
+
+    /// Compute a simple hash of the IpcSpec for session-cache keying.
+    /// Uses JSON serialization of the cmd field as the primary hash input,
+    /// supplemented with other session-affecting fields.
+    fn spec_hash(spec: &IpcSpec) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+
+        // Hash the cmd value (the primary session identity factor)
+        if let Some(ref cmd) = spec.cmd {
+            let cmd_json = serde_json::to_string(cmd).unwrap_or_default();
+            cmd_json.hash(&mut h);
+        }
+
+        // Supplement with other session-affecting fields
+        spec.shell.hash(&mut h);
+        if let Some(ref cwd) = spec.cwd {
+            cwd.hash(&mut h);
+        }
+        // Hash env as a simple representation (key count and first few keys)
+        if let Some(ref env) = spec.env {
+            env.len().hash(&mut h);
+            for (i, (k, _)) in env.iter().take(5).enumerate() {
+                k.hash(&mut h);
+                i.hash(&mut h);
+            }
+        }
+        format!("{:?}", spec.protocol).hash(&mut h);
+        spec.request_template.hash(&mut h);
+        spec.reply_until.hash(&mut h);
+        spec.startup_timeout.hash(&mut h);
+        spec.ready.hash(&mut h);
+        spec.request_timeout.hash(&mut h);
+        spec.stop_message.hash(&mut h);
+        spec.stop_timeout.hash(&mut h);
+        spec.stop_signal.hash(&mut h);
+
+        format!("{:x}", h.finish())
+    }
+
+    /// Build a `Command` from `spec.cmd` (list or string form).
+    fn build_command(spec: &IpcSpec, project_root: &Path) -> Result<Command, IpcError> {
+        let cmd = spec
+            .cmd
+            .as_ref()
+            .ok_or_else(|| IpcError::Custom("missing cmd in IpcSpec".to_string()))?;
+
+        let mut cmd_obj = if spec.shell {
+            let mut c = Command::new("sh");
+            c.arg("-c");
+            match cmd {
+                Value::String(s) => {
+                    c.arg(s);
+                }
+                Value::Array(arr) => {
+                    let shell_cmd = arr
+                        .iter()
+                        .map(|v| match v {
+                            Value::String(s) => s.as_str(),
+                            _ => "",
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    c.arg(shell_cmd);
+                }
+                _ => {
+                    return Err(IpcError::Custom(
+                        "cmd must be a string or array when shell: true".to_string(),
+                    ))
+                }
+            };
+            c
+        } else {
+            match cmd {
+                Value::Array(arr) => {
+                    if arr.is_empty() {
+                        return Err(IpcError::Custom("cmd array cannot be empty".to_string()));
+                    }
+                    let args: Vec<&str> = arr
+                        .iter()
+                        .filter_map(|v| match v {
+                            Value::String(s) => Some(s.as_str()),
+                            _ => None,
+                        })
+                        .collect();
+                    if args.is_empty() {
+                        return Err(IpcError::Custom(
+                            "cmd array must contain only strings".to_string(),
+                        ));
+                    }
+                    let mut c = Command::new(args[0]);
+                    for arg in &args[1..] {
+                        c.arg(arg);
+                    }
+                    c
+                }
+                Value::String(s) => {
+                    let mut c = Command::new("sh");
+                    c.arg("-c").arg(s);
+                    c
+                }
+                _ => {
+                    return Err(IpcError::Custom(
+                        "cmd must be a string or array".to_string(),
+                    ))
+                }
+            }
+        };
+
+        // Set cwd
+        if let Some(ref cwd) = spec.cwd {
+            let full_cwd = if Path::new(cwd).is_absolute() {
+                PathBuf::from(cwd)
+            } else {
+                project_root.join(cwd)
+            };
+            cmd_obj.current_dir(full_cwd);
+        } else {
+            cmd_obj.current_dir(project_root);
+        }
+
+        // Merge env vars
+        if let Some(ref env_map) = spec.env {
+            for (key, val) in env_map {
+                let val_str = match val {
+                    Value::String(s) => s.as_str(),
+                    _ => continue,
+                };
+                cmd_obj.env(key, val_str);
+            }
+        }
+
+        // Set up stdin/stdout/stderr pipes
+        cmd_obj.stdin(Stdio::piped());
+        cmd_obj.stdout(Stdio::piped());
+        match spec.stderr {
+            ymx_core::ipc::IpcStderr::Ignore => {
+                cmd_obj.stderr(Stdio::null());
+            }
+            ymx_core::ipc::IpcStderr::Capture => {
+                cmd_obj.stderr(Stdio::piped());
+            }
+            ymx_core::ipc::IpcStderr::Fail => {
+                cmd_obj.stderr(Stdio::piped());
+            }
+        }
+
+        Ok(cmd_obj)
+    }
+
+    /// Execute a lifecycle hook via the CommandExecutor.
+    fn run_hook(&self, hook: &Option<String>) -> Result<(), IpcError> {
+        if let Some(ref cmd) = hook {
+            self.executor
+                .execute("sh", cmd)
+                .map_err(|e| IpcError::HookFailed(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Spawn a new subprocess session.
+    fn spawn_session(
+        &self,
+        project_root: &Path,
+        _alias: &str,
+        spec: &IpcSpec,
+    ) -> Result<Session, IpcError> {
+        // Run before_start hook
+        self.run_hook(&spec.before_start)?;
+
+        let mut cmd = Self::build_command(spec, project_root)?;
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| IpcError::SpawnFailed(e.to_string()))?;
+
+        // Wait for startup (ready pattern)
+        if let Some(timeout_ms) = spec.startup_timeout {
+            let timeout = Duration::from_millis(timeout_ms);
+            if let Some(ref ready_pattern) = spec.ready {
+                let ready_re = Regex::new(ready_pattern)
+                    .map_err(|e| IpcError::FramingError(format!("invalid ready regex: {}", e)))?;
+
+                let mut stdout = child.stdout.take().map(BufReader::new);
+                let mut stderr = child.stderr.take().map(BufReader::new);
+
+                let deadline = std::time::Instant::now() + timeout;
+
+                // Poll stdout/stderr for the ready pattern
+                let mut stdout_buf = String::new();
+                let mut stderr_buf = String::new();
+
+                loop {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = child.kill();
+                        return Err(IpcError::Timeout);
+                    }
+
+                    // Check if process exited
+                    if let Ok(Some(status)) = child.try_wait() {
+                        if !status.success() {
+                            return Err(IpcError::Crashed);
+                        }
+                    }
+
+                    // Check stdout
+                    if let Some(ref mut reader) = stdout {
+                        let mut line = String::new();
+                        match reader.read_line(&mut line) {
+                            Ok(0) => {}
+                            Ok(_) => {
+                                stdout_buf.push_str(&line);
+                                if ready_re.is_match(&stdout_buf) {
+                                    break;
+                                }
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                            Err(_) => {}
+                        }
+                    }
+
+                    // Check stderr
+                    if let Some(ref mut reader) = stderr {
+                        let mut line = String::new();
+                        match reader.read_line(&mut line) {
+                            Ok(0) => {}
+                            Ok(_) => {
+                                stderr_buf.push_str(&line);
+                                if ready_re.is_match(&stderr_buf) {
+                                    break;
+                                }
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                            Err(_) => {}
+                        }
+                    }
+
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        } else if let Some(ref ready_pattern) = spec.ready {
+            // No timeout but has ready pattern - wait indefinitely
+            let ready_re = Regex::new(ready_pattern)
+                .map_err(|e| IpcError::FramingError(format!("invalid ready regex: {}", e)))?;
+
+            let mut stdout = child.stdout.take().map(BufReader::new);
+            let mut stderr = child.stderr.take().map(BufReader::new);
+
+            let mut stdout_buf = String::new();
+            let mut stderr_buf = String::new();
+
+            loop {
+                // Check if process exited
+                if let Ok(Some(status)) = child.try_wait() {
+                    if !status.success() {
+                        return Err(IpcError::Crashed);
+                    }
+                }
+
+                // Check stdout
+                if let Some(ref mut reader) = stdout {
+                    let mut line = String::new();
+                    match reader.read_line(&mut line) {
+                        Ok(0) => {}
+                        Ok(_) => {
+                            stdout_buf.push_str(&line);
+                            if ready_re.is_match(&stdout_buf) {
+                                break;
+                            }
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(_) => {}
+                    }
+                }
+
+                // Check stderr
+                if let Some(ref mut reader) = stderr {
+                    let mut line = String::new();
+                    match reader.read_line(&mut line) {
+                        Ok(0) => {}
+                        Ok(_) => {
+                            stderr_buf.push_str(&line);
+                            if ready_re.is_match(&stderr_buf) {
+                                break;
+                            }
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(_) => {}
+                    }
+                }
+
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        // Run after_start hook
+        self.run_hook(&spec.after_start)?;
+
+        Ok(Session {
+            child,
+            spec: spec.clone(),
+            dead: false,
+        })
+    }
+
+    /// Stop a session gracefully.
+    fn stop_session(&self, session: &mut Session) -> Result<(), IpcError> {
+        // Run before_stop hook
+        self.run_hook(&session.spec.before_stop)?;
+
+        // Send stop_message if provided
+        if let Some(ref msg) = session.spec.stop_message {
+            if let Some(ref mut stdin) = session.child.stdin {
+                let _ = stdin.write_all(msg.as_bytes());
+                let _ = stdin.flush();
+            }
+        }
+
+        // Wait for stop_timeout
+        let timeout = session
+            .spec
+            .stop_timeout
+            .map(Duration::from_millis)
+            .unwrap_or(Duration::from_secs(5));
+
+        let deadline = std::time::Instant::now() + timeout;
+
+        // Try to wait gracefully
+        loop {
+            if std::time::Instant::now() >= deadline {
+                // Send SIGTERM
+                #[cfg(unix)]
+                {
+                    let _ = session.child.kill();
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = session.child.kill();
+                }
+                break;
+            }
+
+            if let Ok(Some(_)) = session.child.try_wait() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        // Run after_stop hook
+        self.run_hook(&session.spec.after_stop)?;
+
+        Ok(())
+    }
+
+    /// Interpolate placeholders in a template string.
+    ///
+    /// `$0` → positional args joined, `$name` → named arg value.
+    fn interpolate_template(template: &str, args: &IndexMap<String, Value>) -> String {
+        let mut result = template.to_string();
+
+        // Replace $0 with positional args
+        let positional: Vec<String> = args
+            .values()
+            .map(|v| match v {
+                Value::String(s) => s.clone(),
+                Value::Int(n) => n.to_string(),
+                Value::Float(f) => f.to_string(),
+                Value::Bool(b) => b.to_string(),
+                Value::Null => "null".to_string(),
+                _ => serde_json::to_string(v).unwrap_or_default(),
+            })
+            .collect();
+        result = result.replace("$0", &positional.join(" "));
+
+        // Replace $name for each named arg
+        for (key, val) in args {
+            let placeholder = format!("${}", key);
+            let replacement = match val {
+                Value::String(s) => s.clone(),
+                Value::Int(n) => n.to_string(),
+                Value::Float(f) => f.to_string(),
+                Value::Bool(b) => b.to_string(),
+                Value::Null => "null".to_string(),
+                _ => serde_json::to_string(val).unwrap_or_default(),
+            };
+            result = result.replace(&placeholder, &replacement);
+        }
+
+        result
+    }
+
+    /// Send a request and read a response using the specified protocol.
+    fn do_protocol(&self, session: &mut Session, request: &IpcRequest) -> Result<String, IpcError> {
+        let spec = &session.spec;
+        let child = &mut session.child;
+
+        match spec.protocol {
+            IpcProtocol::Line => {
+                // Line protocol: write request to stdin, read one line from stdout
+                let template = spec.request_template.as_deref().unwrap_or("{}\n");
+                let request_str = Self::interpolate_template(template, &request.args);
+
+                if let Some(ref mut stdin) = child.stdin {
+                    stdin
+                        .write_all(request_str.as_bytes())
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    stdin
+                        .flush()
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                }
+
+                let timeout = spec
+                    .request_timeout
+                    .map(Duration::from_millis)
+                    .unwrap_or(Duration::from_secs(30));
+
+                let deadline = std::time::Instant::now() + timeout;
+
+                if let Some(ref mut stdout) = child.stdout {
+                    let mut reader = BufReader::new(stdout);
+                    let mut line = String::new();
+
+                    loop {
+                        if std::time::Instant::now() >= deadline {
+                            return Err(IpcError::Timeout);
+                        }
+
+                        match reader.read_line(&mut line) {
+                            Ok(0) => return Err(IpcError::Crashed),
+                            Ok(_) => {
+                                let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+                                return Ok(trimmed.to_string());
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                std::thread::sleep(Duration::from_millis(10));
+                                continue;
+                            }
+                            Err(e) => return Err(IpcError::FramingError(e.to_string())),
+                        }
+                    }
+                }
+
+                Err(IpcError::FramingError("no stdout pipe".to_string()))
+            }
+            IpcProtocol::Sentinel => {
+                // Sentinel protocol: write request_template to stdin,
+                // read lines until reply_until regex matches
+                let template = spec.request_template.as_deref().unwrap_or("{}\n");
+                let request_str = Self::interpolate_template(template, &request.args);
+
+                if let Some(ref mut stdin) = child.stdin {
+                    stdin
+                        .write_all(request_str.as_bytes())
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    stdin
+                        .flush()
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                }
+
+                let reply_re = spec.reply_until.as_ref().ok_or_else(|| {
+                    IpcError::FramingError("reply_until required for sentinel protocol".to_string())
+                })?;
+                let re = Regex::new(reply_re).map_err(|e| {
+                    IpcError::FramingError(format!("invalid reply_until regex: {}", e))
+                })?;
+
+                let timeout = spec
+                    .request_timeout
+                    .map(Duration::from_millis)
+                    .unwrap_or(Duration::from_secs(30));
+
+                let deadline = std::time::Instant::now() + timeout;
+
+                if let Some(ref mut stdout) = child.stdout {
+                    let reader = BufReader::new(stdout);
+                    let mut lines: Vec<String> = Vec::new();
+
+                    for line in reader.lines() {
+                        if std::time::Instant::now() >= deadline {
+                            return Err(IpcError::Timeout);
+                        }
+
+                        let line = line.map_err(|e| IpcError::FramingError(e.to_string()))?;
+                        if re.is_match(&line) {
+                            return Ok(lines.join("\n"));
+                        }
+                        lines.push(line);
+                    }
+
+                    return Err(IpcError::Crashed);
+                }
+
+                Err(IpcError::FramingError("no stdout pipe".to_string()))
+            }
+            IpcProtocol::Raw => {
+                // Raw protocol: write to stdin, close it, read stdout to EOF
+                let template = spec.request_template.as_deref().unwrap_or("{}\n");
+                let request_str = Self::interpolate_template(template, &request.args);
+
+                if let Some(mut stdin) = child.stdin.take() {
+                    stdin
+                        .write_all(request_str.as_bytes())
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    drop(stdin); // Close stdin
+                }
+
+                let timeout = spec
+                    .request_timeout
+                    .map(Duration::from_millis)
+                    .unwrap_or(Duration::from_secs(30));
+
+                let deadline = std::time::Instant::now() + timeout;
+
+                if let Some(ref mut stdout) = child.stdout {
+                    let mut output = String::new();
+                    let mut buf = [0u8; 1024];
+
+                    loop {
+                        if std::time::Instant::now() >= deadline {
+                            return Err(IpcError::Timeout);
+                        }
+
+                        match stdout.read(&mut buf) {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                output.push_str(&String::from_utf8_lossy(&buf[..n]));
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                std::thread::sleep(Duration::from_millis(10));
+                                continue;
+                            }
+                            Err(e) => return Err(IpcError::FramingError(e.to_string())),
+                        }
+                    }
+
+                    return Ok(output);
+                }
+
+                Err(IpcError::FramingError("no stdout pipe".to_string()))
+            }
+            _ => Err(IpcError::DisallowedTransport(format!(
+                "protocol {:?} not supported by StdIpcHost",
+                spec.protocol
+            ))),
+        }
+    }
+}
+
+impl IpcHost for StdIpcHost {
+    fn call(
+        &self,
+        name: &str,
+        spec: &IpcSpec,
+        request: IpcRequest,
+    ) -> Result<IpcResponse, IpcError> {
+        // Only pipe transport is supported
+        match spec.transport {
+            ymx_core::ipc::IpcTransport::Pipe => {}
+            _ => {
+                return Err(IpcError::DisallowedTransport(format!(
+                    "{:?}",
+                    spec.transport
+                )))
+            }
+        }
+
+        // Get project root - we use "." as default since we don't have access to it here
+        // The actual project root would be passed during construction or via Options
+        let project_root = PathBuf::from(".");
+
+        let key = SessionKey {
+            project_root: project_root.clone(),
+            alias: name.to_string(),
+            spec_hash: Self::spec_hash(spec),
+        };
+
+        // Get or create session
+        let mut sessions = self.sessions.lock().unwrap();
+
+        // Try to use existing session
+        if let Some(ref mut s) = sessions.get_mut(&key).filter(|s| !s.dead) {
+            match self.do_protocol(s, &request) {
+                Ok(output) => {
+                    return Ok(IpcResponse {
+                        stdout: output,
+                        stderr: String::new(),
+                        status: None,
+                    });
+                }
+                Err(e) => {
+                    // Mark dead and respawn if OnFailure
+                    s.dead = true;
+                    if spec.restart != IpcRestart::OnFailure {
+                        return Err(e);
+                    }
+                    // Fall through to respawn
+                }
+            }
+        }
+
+        // No session or dead - respawn if OnFailure
+        if spec.restart == IpcRestart::OnFailure {
+            let mut new_session = self.spawn_session(&project_root, name, spec)?;
+            let output = self.do_protocol(&mut new_session, &request);
+
+            // Store the session (even if the call failed)
+            sessions.insert(key, new_session);
+
+            output.map(|stdout| IpcResponse {
+                stdout,
+                stderr: String::new(),
+                status: None,
+            })
+        } else {
+            Err(IpcError::Crashed)
+        }
+    }
+
+    fn shutdown(&self) {
+        let mut sessions = self.sessions.lock().unwrap();
+        for (_key, mut session) in sessions.drain() {
+            let _ = self.stop_session(&mut session);
+        }
+    }
+}
+
+impl Drop for StdIpcHost {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 

@@ -2172,6 +2172,9 @@ dependencies = [
 name = "ymx-lib"
 version = "0.1.0"
 dependencies = [
+ "indexmap",
+ "regex",
+ "serde_json",
  "ymx-core",
 ]
 
