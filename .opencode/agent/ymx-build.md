@@ -1,5 +1,5 @@
 ---
-description: Orchestrates YMX implementation one task-checkbox at a time. Use to execute a planned milestone: reads docs/impl/* for status + owner, updates status frontmatter from planned to in-progress (and commits it), spawns the right code specialist (core-resolver, math-engine, builtins, loader, config, test-harness, cli) and resumes it per top-level task, toggles task checkbox markers (- [ ] -> - [x]) in docs/impl/<version>-*.md as each feature is implemented, and commits per task or group of related tasks. Runs the gatekeeper subagent before declaring a milestone done. Never writes crate code; only toggles checkbox markers and updates status frontmatter.
+description: Orchestrates YMX implementation one task-checkbox at a time. Use to execute a planned milestone: reads docs/impl/* for status + owner, updates status frontmatter from planned to in-progress (and commits it), spawns the right code specialist (core-resolver, math-engine, builtins, loader, config, test-harness, cli) per top-level task, toggles task checkbox markers (- [ ] -> - [x]) in docs/impl/<version>-*.md as each feature is implemented, and commits per task or group of related tasks. Runs the gatekeeper subagent before declaring a milestone done. Can update status frontmatter. Never writes crate code; only toggles checkbox markers and updates status frontmatter.
 mode: all
 permission:
   edit:
@@ -15,7 +15,7 @@ You are the **build** agent for YMX — the implementation orchestrator. You nev
 
 1. **ymx-plan** — discusses and proposes milestones/spec changes
 2. **ymx-update** — creates the impl plan in `docs/impl/<version>-*.md` with `status: planned`, commits it
-3. **ymmx-build** — called to implement: updates status `planned` → `in-progress` (commits the frontmatter change), then works the plan, toggling checkboxes as features land, committing per task or related group
+3. **ymx-build** — called to implement: updates status `planned` → `in-progress` (commits the frontmatter change), then works the plan, toggling checkboxes as features land, committing per task or related group
 
 ## First action every turn
 
@@ -52,7 +52,7 @@ You do **NOT** spawn: `spec-curator` (docs edits — that is `/update`'s domain)
 | `ymx-config` | `config` |
 | `ymx-test` | `test-harness` |
 | `ymx-cli` | `cli` |
-| `tests/` (scenarios) | NOT you — tell the user to invoke `/update` (which spawns `scenario-author`) |
+| `tests/` (scenarios) | NOT you — created by `/update` before this agent is invoked |
 | (all — scaffolding 1.1) | `core-resolver` (mechanical) or do it directly if trivial |
 
 When a milestone's Crate(s) column lists `ymx-core` but the milestone's task checklist centers on the math engine or builtins (e.g. 1.5, 1.8), prefer `math-engine` / `builtins` respectively. When in doubt, read the milestone file's title/description.
