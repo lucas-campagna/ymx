@@ -2260,30 +2260,39 @@ impl<'a> Resolver<'a> {
         let request = self.build_ipc_request(name, spec, args, span, file)?;
 
         // 3.5: Call host.call().
-        let response = host.call(name, spec, request).map_err(|e| {
-            // 3.8: Lifecycle hooks — after_start on failure (best effort).
-            let _ = spec.after_start.as_ref().and_then(|cmd| {
-                self.run_lifecycle_hook(cmd, "after_start", span, file, name)
-                    .ok()
-            });
-            Diagnostic {
-                file: Some(self.project.files[file.0 as usize].clone()),
-                line: span.line,
-                col: span.col,
-                component: Some(name.to_string()),
-                code: E018,
-                message: e.to_string(),
-            }
-        });
+        let response = host.call(name, spec, request);
 
-        // 3.8: Lifecycle hooks — after_start on success.
+        // 3.8: Lifecycle hooks — after_start.
         if let Some(ref cmd) = spec.after_start {
             if response.is_ok() {
                 self.run_lifecycle_hook(cmd, "after_start", span, file, name)?;
+            } else {
+                // after_start on failure (best effort).
+                let _ = self.run_lifecycle_hook(cmd, "after_start", span, file, name).ok();
             }
         }
 
-        let response = response?;
+        // 3.8: on_error hook — on IpcError, call the named component with $0 = error message.
+        if let Err(ref e) = response {
+            if let Some(ref on_error) = spec.on_error {
+                let err_msg = e.to_string();
+                match self.call_ipc_error_hook(on_error, &err_msg, span, file, name) {
+                    Ok(Some(value)) => return Ok(value),
+                    Ok(None) | Err(_) => {
+                        // Hook failed or returned error, fall through to original error.
+                    }
+                }
+            }
+        }
+
+        let response = response.map_err(|e| Diagnostic {
+            file: Some(self.project.files[file.0 as usize].clone()),
+            line: span.line,
+            col: span.col,
+            component: Some(name.to_string()),
+            code: E018,
+            message: e.to_string(),
+        })?;
 
         // 3.6: Apply response mapping.
         self.handle_ipc_response(&response, spec, span, file, name)
@@ -2615,6 +2624,35 @@ impl<'a> Resolver<'a> {
             Err(_) => return Ok(None),
         };
         let args = Args::Positional(vec![Value::String(raw.to_string())]);
+        match self.call(def, &args, None) {
+            Ok(v) => Ok(Some(v)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Call the on_error hook component with the error message.
+    /// Returns Ok(Some(Value)) if the hook returned a value, Ok(None) if the hook
+    /// failed (in which case the original IpcError stands), or Err(E002) if the
+    /// hook component is not found.
+    fn call_ipc_error_hook(
+        &self,
+        component: &str,
+        error_msg: &str,
+        span: Span,
+        file: FileId,
+        ipc_name: &str,
+    ) -> Result<Option<Value>, Diagnostic> {
+        let def = resolve_ref(self.project, component, file, self.opts.plain.clone()).map_err(|_| {
+            Diagnostic {
+                file: Some(self.project.files[file.0 as usize].clone()),
+                line: span.line,
+                col: span.col,
+                component: Some(ipc_name.to_string()),
+                code: E002,
+                message: format!("on_error component `{component}` not found"),
+            }
+        })?;
+        let args = Args::Positional(vec![Value::String(error_msg.to_string())]);
         match self.call(def, &args, None) {
             Ok(v) => Ok(Some(v)),
             Err(_) => Ok(None),
