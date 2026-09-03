@@ -15,10 +15,14 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 
 use indexmap::IndexMap;
 use regex::Regex;
@@ -99,7 +103,10 @@ struct SessionKey {
 /// Active subprocess session.
 #[derive(Debug)]
 struct Session {
-    child: Child,
+    child: Option<Child>,
+    #[cfg(unix)]
+    unix_socket: Option<UnixStream>,
+    tcp_socket: Option<TcpStream>,
     spec: IpcSpec,
     dead: bool,
 }
@@ -131,7 +138,20 @@ impl StdIpcHost {
         use std::hash::{Hash, Hasher};
         let mut h = DefaultHasher::new();
 
-        // Hash the cmd value (the primary session identity factor)
+        // Hash transport type
+        format!("{:?}", spec.transport).hash(&mut h);
+
+        // Hash socket-specific fields (path/addr) for socket transport
+        if matches!(spec.transport, ymx_core::ipc::IpcTransport::Socket) {
+            if let Some(ref path) = spec.path {
+                path.hash(&mut h);
+            }
+            if let Some(ref addr) = spec.addr {
+                addr.hash(&mut h);
+            }
+        }
+
+        // Hash the cmd value (the primary session identity factor for pipe transport)
         if let Some(ref cmd) = spec.cmd {
             let cmd_json = serde_json::to_string(cmd).unwrap_or_default();
             cmd_json.hash(&mut h);
@@ -293,136 +313,195 @@ impl StdIpcHost {
         // Run before_start hook
         self.run_hook(&spec.before_start)?;
 
-        let mut cmd = Self::build_command(spec, project_root)?;
+        match spec.transport {
+            ymx_core::ipc::IpcTransport::Pipe => {
+                let mut cmd = Self::build_command(spec, project_root)?;
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| IpcError::SpawnFailed(e.to_string()))?;
+                let mut child = cmd
+                    .spawn()
+                    .map_err(|e| IpcError::SpawnFailed(e.to_string()))?;
 
-        // Wait for startup (ready pattern)
-        if let Some(timeout_ms) = spec.startup_timeout {
-            let timeout = Duration::from_millis(timeout_ms);
-            if let Some(ref ready_pattern) = spec.ready {
-                let ready_re = Regex::new(ready_pattern)
-                    .map_err(|e| IpcError::FramingError(format!("invalid ready regex: {}", e)))?;
+                // Wait for startup (ready pattern)
+                if let Some(timeout_ms) = spec.startup_timeout {
+                    let timeout = Duration::from_millis(timeout_ms);
+                    if let Some(ref ready_pattern) = spec.ready {
+                        let ready_re = Regex::new(ready_pattern)
+                            .map_err(|e| IpcError::FramingError(format!("invalid ready regex: {}", e)))?;
 
-                let mut stdout = child.stdout.take().map(BufReader::new);
-                let mut stderr = child.stderr.take().map(BufReader::new);
+                        let mut stdout = child.stdout.take().map(BufReader::new);
+                        let mut stderr = child.stderr.take().map(BufReader::new);
 
-                let deadline = std::time::Instant::now() + timeout;
+                        let deadline = std::time::Instant::now() + timeout;
 
-                // Poll stdout/stderr for the ready pattern
-                let mut stdout_buf = String::new();
-                let mut stderr_buf = String::new();
+                        // Poll stdout/stderr for the ready pattern
+                        let mut stdout_buf = String::new();
+                        let mut stderr_buf = String::new();
 
-                loop {
-                    if std::time::Instant::now() >= deadline {
-                        let _ = child.kill();
-                        return Err(IpcError::Timeout(timeout_ms));
-                    }
+                        loop {
+                            if std::time::Instant::now() >= deadline {
+                                let _ = child.kill();
+                                return Err(IpcError::Timeout(timeout_ms));
+                            }
 
-                    // Check if process exited
-                    if let Ok(Some(status)) = child.try_wait() {
-                        if !status.success() {
-                            return Err(IpcError::Crashed);
-                        }
-                    }
-
-                    // Check stdout
-                    if let Some(ref mut reader) = stdout {
-                        let mut line = String::new();
-                        match reader.read_line(&mut line) {
-                            Ok(0) => {}
-                            Ok(_) => {
-                                stdout_buf.push_str(&line);
-                                if ready_re.is_match(&stdout_buf) {
-                                    break;
+                            // Check if process exited
+                            if let Ok(Some(status)) = child.try_wait() {
+                                if !status.success() {
+                                    return Err(IpcError::Crashed);
                                 }
                             }
-                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                            Err(_) => {}
-                        }
-                    }
 
-                    // Check stderr
-                    if let Some(ref mut reader) = stderr {
-                        let mut line = String::new();
-                        match reader.read_line(&mut line) {
-                            Ok(0) => {}
-                            Ok(_) => {
-                                stderr_buf.push_str(&line);
-                                if ready_re.is_match(&stderr_buf) {
-                                    break;
+                            // Check stdout
+                            if let Some(ref mut reader) = stdout {
+                                let mut line = String::new();
+                                match reader.read_line(&mut line) {
+                                    Ok(0) => {}
+                                    Ok(_) => {
+                                        stdout_buf.push_str(&line);
+                                        if ready_re.is_match(&stdout_buf) {
+                                            break;
+                                        }
+                                    }
+                                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                                    Err(_) => {}
                                 }
                             }
-                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                            Err(_) => {}
+
+                            // Check stderr
+                            if let Some(ref mut reader) = stderr {
+                                let mut line = String::new();
+                                match reader.read_line(&mut line) {
+                                    Ok(0) => {}
+                                    Ok(_) => {
+                                        stderr_buf.push_str(&line);
+                                        if ready_re.is_match(&stderr_buf) {
+                                            break;
+                                        }
+                                    }
+                                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                                    Err(_) => {}
+                                }
+                            }
+
+                            std::thread::sleep(Duration::from_millis(10));
                         }
                     }
+                } else if let Some(ref ready_pattern) = spec.ready {
+                    // No timeout but has ready pattern - wait indefinitely
+                    let ready_re = Regex::new(ready_pattern)
+                        .map_err(|e| IpcError::FramingError(format!("invalid ready regex: {}", e)))?;
 
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-            }
-        } else if let Some(ref ready_pattern) = spec.ready {
-            // No timeout but has ready pattern - wait indefinitely
-            let ready_re = Regex::new(ready_pattern)
-                .map_err(|e| IpcError::FramingError(format!("invalid ready regex: {}", e)))?;
+                    let mut stdout = child.stdout.take().map(BufReader::new);
+                    let mut stderr = child.stderr.take().map(BufReader::new);
 
-            let mut stdout = child.stdout.take().map(BufReader::new);
-            let mut stderr = child.stderr.take().map(BufReader::new);
+                    let mut stdout_buf = String::new();
+                    let mut stderr_buf = String::new();
 
-            let mut stdout_buf = String::new();
-            let mut stderr_buf = String::new();
-
-            loop {
-                // Check if process exited
-                if let Ok(Some(status)) = child.try_wait() {
-                    if !status.success() {
-                        return Err(IpcError::Crashed);
-                    }
-                }
-
-                // Check stdout
-                if let Some(ref mut reader) = stdout {
-                    let mut line = String::new();
-                    match reader.read_line(&mut line) {
-                        Ok(0) => {}
-                        Ok(_) => {
-                            stdout_buf.push_str(&line);
-                            if ready_re.is_match(&stdout_buf) {
-                                break;
+                    loop {
+                        // Check if process exited
+                        if let Ok(Some(status)) = child.try_wait() {
+                            if !status.success() {
+                                return Err(IpcError::Crashed);
                             }
                         }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                        Err(_) => {}
-                    }
-                }
 
-                // Check stderr
-                if let Some(ref mut reader) = stderr {
-                    let mut line = String::new();
-                    match reader.read_line(&mut line) {
-                        Ok(0) => {}
-                        Ok(_) => {
-                            stderr_buf.push_str(&line);
-                            if ready_re.is_match(&stderr_buf) {
-                                break;
+                        // Check stdout
+                        if let Some(ref mut reader) = stdout {
+                            let mut line = String::new();
+                            match reader.read_line(&mut line) {
+                                Ok(0) => {}
+                                Ok(_) => {
+                                    stdout_buf.push_str(&line);
+                                    if ready_re.is_match(&stdout_buf) {
+                                        break;
+                                    }
+                                }
+                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                                Err(_) => {}
                             }
                         }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                        Err(_) => {}
+
+                        // Check stderr
+                        if let Some(ref mut reader) = stderr {
+                            let mut line = String::new();
+                            match reader.read_line(&mut line) {
+                                Ok(0) => {}
+                                Ok(_) => {
+                                    stderr_buf.push_str(&line);
+                                    if ready_re.is_match(&stderr_buf) {
+                                        break;
+                                    }
+                                }
+                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                                Err(_) => {}
+                            }
+                        }
+
+                        std::thread::sleep(Duration::from_millis(10));
                     }
                 }
 
-                std::thread::sleep(Duration::from_millis(10));
+                // Run after_start hook
+                self.run_hook(&spec.after_start)?;
+
+                Ok(Session {
+                    child: Some(child),
+                    #[cfg(unix)]
+                    unix_socket: None,
+                    tcp_socket: None,
+                    spec: spec.clone(),
+                    dead: false,
+                })
             }
+            ymx_core::ipc::IpcTransport::Socket => {
+                // Socket transport: connect to existing socket (external: true required)
+                // Run after_start hook after successful connection
+                self.run_hook(&spec.after_start)?;
+
+                Ok(Session {
+                    child: None,
+                    #[cfg(unix)]
+                    unix_socket: None,
+                    tcp_socket: None,
+                    spec: spec.clone(),
+                    dead: false,
+                })
+            }
+            _ => Err(IpcError::DisallowedTransport(format!(
+                "{:?}",
+                spec.transport
+            ))),
         }
+    }
 
-        // Run after_start hook
-        self.run_hook(&spec.after_start)?;
+    /// Connect to a socket (unix or tcp) for the given spec.
+    fn connect_socket(spec: &IpcSpec) -> Result<Session, IpcError> {
+        #[cfg(unix)]
+        let unix_socket = if spec.path.is_some() {
+            let path = spec.path.as_ref().unwrap();
+            let stream = UnixStream::connect(path)
+                .map_err(|e| IpcError::SpawnFailed(format!("unix socket connect failed: {}", e)))?;
+            Some(stream)
+        } else {
+            None
+        };
+
+        #[cfg(not(unix))]
+        let unix_socket: Option<UnixStream> = None;
+
+        let tcp_socket = if spec.addr.is_some() {
+            let addr = spec.addr.as_ref().unwrap();
+            let stream = TcpStream::connect(addr)
+                .map_err(|e| IpcError::SpawnFailed(format!("tcp socket connect failed: {}", e)))?;
+            Some(stream)
+        } else {
+            None
+        };
 
         Ok(Session {
-            child,
+            child: None,
+            #[cfg(unix)]
+            unix_socket,
+            tcp_socket,
             spec: spec.clone(),
             dead: false,
         })
@@ -433,11 +512,13 @@ impl StdIpcHost {
         // Run before_stop hook
         self.run_hook(&session.spec.before_stop)?;
 
-        // Send stop_message if provided
+        // Send stop_message if provided (only for pipe transport with child)
         if let Some(ref msg) = session.spec.stop_message {
-            if let Some(ref mut stdin) = session.child.stdin {
-                let _ = stdin.write_all(msg.as_bytes());
-                let _ = stdin.flush();
+            if let Some(ref mut child) = session.child {
+                if let Some(ref mut stdin) = child.stdin {
+                    let _ = stdin.write_all(msg.as_bytes());
+                    let _ = stdin.flush();
+                }
             }
         }
 
@@ -450,25 +531,38 @@ impl StdIpcHost {
 
         let deadline = std::time::Instant::now() + timeout;
 
-        // Try to wait gracefully
-        loop {
-            if std::time::Instant::now() >= deadline {
-                // Send SIGTERM
-                #[cfg(unix)]
-                {
-                    let _ = session.child.kill();
+        // For pipe transport, wait for child process
+        if let Some(ref mut child) = session.child {
+            loop {
+                if std::time::Instant::now() >= deadline {
+                    // Send SIGTERM
+                    #[cfg(unix)]
+                    {
+                        let _ = child.kill();
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = child.kill();
+                    }
+                    break;
                 }
-                #[cfg(not(unix))]
-                {
-                    let _ = session.child.kill();
-                }
-                break;
-            }
 
-            if let Ok(Some(_)) = session.child.try_wait() {
-                break;
+                if let Ok(Some(_)) = child.try_wait() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
             }
-            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        // For socket transport, close the socket connection
+        #[cfg(unix)]
+        {
+            if session.unix_socket.is_some() {
+                session.unix_socket = None;
+            }
+        }
+        if session.tcp_socket.is_some() {
+            session.tcp_socket = None;
         }
 
         // Run after_stop hook
@@ -517,22 +611,12 @@ impl StdIpcHost {
     /// Send a request and read a response using the specified protocol.
     fn do_protocol(&self, session: &mut Session, request: &IpcRequest) -> Result<String, IpcError> {
         let spec = &session.spec;
-        let child = &mut session.child;
 
         match spec.protocol {
             IpcProtocol::Line => {
-                // Line protocol: write request to stdin, read one line from stdout
+                // Line protocol: write request, read one line from response
                 let template = spec.request_template.as_deref().unwrap_or("{}\n");
                 let request_str = Self::interpolate_template(template, &request.args);
-
-                if let Some(ref mut stdin) = child.stdin {
-                    stdin
-                        .write_all(request_str.as_bytes())
-                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                    stdin
-                        .flush()
-                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                }
 
                 let timeout = spec
                     .request_timeout
@@ -541,8 +625,54 @@ impl StdIpcHost {
 
                 let deadline = std::time::Instant::now() + timeout;
 
-                if let Some(ref mut stdout) = child.stdout {
-                    let mut reader = BufReader::new(stdout);
+                // Pipe transport: use child stdin/stdout
+                if let Some(ref mut child) = session.child {
+                    if let Some(ref mut stdin) = child.stdin {
+                        stdin
+                            .write_all(request_str.as_bytes())
+                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                        stdin
+                            .flush()
+                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    }
+
+                    if let Some(ref mut stdout) = child.stdout {
+                        let mut reader = BufReader::new(stdout);
+                        let mut line = String::new();
+
+                        loop {
+                            if std::time::Instant::now() >= deadline {
+                                return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
+                            }
+
+                            match reader.read_line(&mut line) {
+                                Ok(0) => return Err(IpcError::Crashed),
+                                Ok(_) => {
+                                    let trimmed =
+                                        line.trim_end_matches('\n').trim_end_matches('\r');
+                                    return Ok(trimmed.to_string());
+                                }
+                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                    std::thread::sleep(Duration::from_millis(10));
+                                    continue;
+                                }
+                                Err(e) => return Err(IpcError::FramingError(e.to_string())),
+                            }
+                        }
+                    }
+
+                    return Err(IpcError::FramingError("no stdout pipe".to_string()));
+                }
+
+                // Socket transport: use unix socket
+                #[cfg(unix)]
+                if let Some(ref mut sock) = session.unix_socket {
+                    sock.write_all(request_str.as_bytes())
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    sock.flush()
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+
+                    let mut reader = BufReader::new(sock);
                     let mut line = String::new();
 
                     loop {
@@ -551,7 +681,7 @@ impl StdIpcHost {
                         }
 
                         match reader.read_line(&mut line) {
-                            Ok(0) => return Err(IpcError::Crashed),
+                            Ok(0) => return Err(IpcError::FramingError("socket closed".to_string())),
                             Ok(_) => {
                                 let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
                                 return Ok(trimmed.to_string());
@@ -565,22 +695,42 @@ impl StdIpcHost {
                     }
                 }
 
-                Err(IpcError::FramingError("no stdout pipe".to_string()))
+                // Socket transport: use tcp socket
+                if let Some(ref mut sock) = session.tcp_socket {
+                    sock.write_all(request_str.as_bytes())
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    sock.flush()
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+
+                    let mut reader = BufReader::new(sock);
+                    let mut line = String::new();
+
+                    loop {
+                        if std::time::Instant::now() >= deadline {
+                            return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
+                        }
+
+                        match reader.read_line(&mut line) {
+                            Ok(0) => return Err(IpcError::FramingError("socket closed".to_string())),
+                            Ok(_) => {
+                                let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+                                return Ok(trimmed.to_string());
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                std::thread::sleep(Duration::from_millis(10));
+                                continue;
+                            }
+                            Err(e) => return Err(IpcError::FramingError(e.to_string())),
+                        }
+                    }
+                }
+
+                Err(IpcError::FramingError("no transport available".to_string()))
             }
             IpcProtocol::Sentinel => {
-                // Sentinel protocol: write request_template to stdin,
-                // read lines until reply_until regex matches
+                // Sentinel protocol: write request, read lines until reply_until regex matches
                 let template = spec.request_template.as_deref().unwrap_or("{}\n");
                 let request_str = Self::interpolate_template(template, &request.args);
-
-                if let Some(ref mut stdin) = child.stdin {
-                    stdin
-                        .write_all(request_str.as_bytes())
-                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                    stdin
-                        .flush()
-                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                }
 
                 let reply_re = spec.reply_until.as_ref().ok_or_else(|| {
                     IpcError::FramingError("reply_until required for sentinel protocol".to_string())
@@ -596,38 +746,114 @@ impl StdIpcHost {
 
                 let deadline = std::time::Instant::now() + timeout;
 
-                if let Some(ref mut stdout) = child.stdout {
-                    let reader = BufReader::new(stdout);
+                // Pipe transport: use child stdin/stdout
+                if let Some(ref mut child) = session.child {
+                    if let Some(ref mut stdin) = child.stdin {
+                        stdin
+                            .write_all(request_str.as_bytes())
+                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                        stdin
+                            .flush()
+                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    }
+
+                    if let Some(ref mut stdout) = child.stdout {
+                        let reader = BufReader::new(stdout);
+                        let mut lines: Vec<String> = Vec::new();
+
+                        for line in reader.lines() {
+                            if std::time::Instant::now() >= deadline {
+                                return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
+                            }
+
+                            let line = line.map_err(|e| IpcError::FramingError(e.to_string()))?;
+                            if re.is_match(&line) {
+                                return Ok(lines.join("\n"));
+                            }
+                            lines.push(line);
+                        }
+
+                        return Err(IpcError::Crashed);
+                    }
+
+                    return Err(IpcError::FramingError("no stdout pipe".to_string()));
+                }
+
+                // Socket transport: use unix socket
+                #[cfg(unix)]
+                if let Some(ref mut sock) = session.unix_socket {
+                    sock.write_all(request_str.as_bytes())
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    sock.flush()
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+
+                    let mut reader = BufReader::new(sock);
                     let mut lines: Vec<String> = Vec::new();
 
-                    for line in reader.lines() {
+                    loop {
                         if std::time::Instant::now() >= deadline {
                             return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
                         }
 
-                        let line = line.map_err(|e| IpcError::FramingError(e.to_string()))?;
-                        if re.is_match(&line) {
-                            return Ok(lines.join("\n"));
+                        let mut line = String::new();
+                        match reader.read_line(&mut line) {
+                            Ok(0) => return Err(IpcError::FramingError("socket closed".to_string())),
+                            Ok(_) => {
+                                let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+                                if re.is_match(trimmed) {
+                                    return Ok(lines.join("\n"));
+                                }
+                                lines.push(trimmed.to_string());
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                std::thread::sleep(Duration::from_millis(10));
+                                continue;
+                            }
+                            Err(e) => return Err(IpcError::FramingError(e.to_string())),
                         }
-                        lines.push(line);
                     }
-
-                    return Err(IpcError::Crashed);
                 }
 
-                Err(IpcError::FramingError("no stdout pipe".to_string()))
+                // Socket transport: use tcp socket
+                if let Some(ref mut sock) = session.tcp_socket {
+                    sock.write_all(request_str.as_bytes())
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    sock.flush()
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+
+                    let mut reader = BufReader::new(sock);
+                    let mut lines: Vec<String> = Vec::new();
+
+                    loop {
+                        if std::time::Instant::now() >= deadline {
+                            return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
+                        }
+
+                        let mut line = String::new();
+                        match reader.read_line(&mut line) {
+                            Ok(0) => return Err(IpcError::FramingError("socket closed".to_string())),
+                            Ok(_) => {
+                                let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+                                if re.is_match(trimmed) {
+                                    return Ok(lines.join("\n"));
+                                }
+                                lines.push(trimmed.to_string());
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                std::thread::sleep(Duration::from_millis(10));
+                                continue;
+                            }
+                            Err(e) => return Err(IpcError::FramingError(e.to_string())),
+                        }
+                    }
+                }
+
+                Err(IpcError::FramingError("no transport available".to_string()))
             }
             IpcProtocol::Raw => {
-                // Raw protocol: write to stdin, close it, read stdout to EOF
+                // Raw protocol: write request, close writer, read to EOF
                 let template = spec.request_template.as_deref().unwrap_or("{}\n");
                 let request_str = Self::interpolate_template(template, &request.args);
-
-                if let Some(mut stdin) = child.stdin.take() {
-                    stdin
-                        .write_all(request_str.as_bytes())
-                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                    drop(stdin); // Close stdin
-                }
 
                 let timeout = spec
                     .request_timeout
@@ -636,7 +862,51 @@ impl StdIpcHost {
 
                 let deadline = std::time::Instant::now() + timeout;
 
-                if let Some(ref mut stdout) = child.stdout {
+                // Pipe transport: use child stdin/stdout
+                if let Some(ref mut child) = session.child {
+                    if let Some(mut stdin) = child.stdin.take() {
+                        stdin
+                            .write_all(request_str.as_bytes())
+                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                        drop(stdin); // Close stdin
+                    }
+
+                    if let Some(ref mut stdout) = child.stdout {
+                        let mut output = String::new();
+                        let mut buf = [0u8; 1024];
+
+                        loop {
+                            if std::time::Instant::now() >= deadline {
+                                return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
+                            }
+
+                            match stdout.read(&mut buf) {
+                                Ok(0) => break,
+                                Ok(n) => {
+                                    output.push_str(&String::from_utf8_lossy(&buf[..n]));
+                                }
+                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                    std::thread::sleep(Duration::from_millis(10));
+                                    continue;
+                                }
+                                Err(e) => return Err(IpcError::FramingError(e.to_string())),
+                            }
+                        }
+
+                        return Ok(output);
+                    }
+
+                    return Err(IpcError::FramingError("no stdout pipe".to_string()));
+                }
+
+                // Socket transport: use unix socket
+                #[cfg(unix)]
+                if let Some(ref mut sock) = session.unix_socket {
+                    sock.write_all(request_str.as_bytes())
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    // For raw protocol with sockets, we don't close the socket
+                    // just read until EOF
+
                     let mut output = String::new();
                     let mut buf = [0u8; 1024];
 
@@ -645,7 +915,7 @@ impl StdIpcHost {
                             return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
                         }
 
-                        match stdout.read(&mut buf) {
+                        match sock.read(&mut buf) {
                             Ok(0) => break,
                             Ok(n) => {
                                 output.push_str(&String::from_utf8_lossy(&buf[..n]));
@@ -661,7 +931,36 @@ impl StdIpcHost {
                     return Ok(output);
                 }
 
-                Err(IpcError::FramingError("no stdout pipe".to_string()))
+                // Socket transport: use tcp socket
+                if let Some(ref mut sock) = session.tcp_socket {
+                    sock.write_all(request_str.as_bytes())
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+
+                    let mut output = String::new();
+                    let mut buf = [0u8; 1024];
+
+                    loop {
+                        if std::time::Instant::now() >= deadline {
+                            return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
+                        }
+
+                        match sock.read(&mut buf) {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                output.push_str(&String::from_utf8_lossy(&buf[..n]));
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                std::thread::sleep(Duration::from_millis(10));
+                                continue;
+                            }
+                            Err(e) => return Err(IpcError::FramingError(e.to_string())),
+                        }
+                    }
+
+                    return Ok(output);
+                }
+
+                Err(IpcError::FramingError("no transport available".to_string()))
             }
             _ => Err(IpcError::DisallowedTransport(format!(
                 "protocol {:?} not supported by StdIpcHost",
@@ -678,17 +977,6 @@ impl IpcHost for StdIpcHost {
         spec: &IpcSpec,
         request: IpcRequest,
     ) -> Result<IpcResponse, IpcError> {
-        // Only pipe transport is supported
-        match spec.transport {
-            ymx_core::ipc::IpcTransport::Pipe => {}
-            _ => {
-                return Err(IpcError::DisallowedTransport(format!(
-                    "{:?}",
-                    spec.transport
-                )))
-            }
-        }
-
         // Get project root - we use "." as default since we don't have access to it here
         // The actual project root would be passed during construction or via Options
         let project_root = PathBuf::from(".");
@@ -704,30 +992,58 @@ impl IpcHost for StdIpcHost {
 
         // Try to use existing session
         if let Some(ref mut s) = sessions.get_mut(&key).filter(|s| !s.dead) {
-            match self.do_protocol(s, &request) {
-                Ok(output) => {
-                    return Ok(IpcResponse {
-                        stdout: output,
-                        stderr: String::new(),
-                        status: None,
-                    });
-                }
-                Err(e) => {
-                    // Mark dead and respawn if OnFailure
-                    s.dead = true;
-                    if spec.restart != IpcRestart::OnFailure {
-                        return Err(e);
+            // For socket transport, check if socket is still connected
+            #[cfg(unix)]
+            let socket_dead = s.unix_socket.as_ref().map(|s| s.peer_addr().is_err()).unwrap_or(false);
+            #[cfg(not(unix))]
+            let socket_dead = s.tcp_socket.as_ref().map(|s| s.peer_addr().is_err()).unwrap_or(false);
+
+            if !socket_dead {
+                match self.do_protocol(s, &request) {
+                    Ok(output) => {
+                        return Ok(IpcResponse {
+                            stdout: output,
+                            stderr: String::new(),
+                            status: None,
+                        });
                     }
-                    // Fall through to respawn
+                    Err(e) => {
+                        // Mark dead and respawn if OnFailure
+                        s.dead = true;
+                        if spec.restart != IpcRestart::OnFailure {
+                            return Err(e);
+                        }
+                        // Fall through to respawn
+                    }
+                }
+            } else {
+                s.dead = true;
+                if spec.restart != IpcRestart::OnFailure {
+                    return Err(IpcError::FramingError("socket closed".to_string()));
                 }
             }
         }
 
-        // No session exists yet → always spawn (first call).
+        // No session exists yet → always spawn/connect (first call).
         // Session exists but is dead → only respawn when restart == OnFailure.
         let has_dead_session = sessions.contains_key(&key);
         if !has_dead_session || spec.restart == IpcRestart::OnFailure {
-            let mut new_session = self.spawn_session(&project_root, name, spec)?;
+            let mut new_session = match spec.transport {
+                ymx_core::ipc::IpcTransport::Socket => {
+                    // For socket transport, connect to the socket
+                    Self::connect_socket(spec)?
+                }
+                ymx_core::ipc::IpcTransport::Pipe => {
+                    self.spawn_session(&project_root, name, spec)?
+                }
+                _ => {
+                    return Err(IpcError::DisallowedTransport(format!(
+                        "{:?}",
+                        spec.transport
+                    )))
+                }
+            };
+
             let output = self.do_protocol(&mut new_session, &request);
 
             // Store the session (even if the call failed)
