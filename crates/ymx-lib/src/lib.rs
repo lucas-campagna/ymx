@@ -968,6 +968,206 @@ impl StdIpcHost {
             ))),
         }
     }
+
+    /// Make an HTTP request (rule-21 HTTP transport).
+    ///
+    /// Stateless: no session management, no lifecycle hooks, no restart policy.
+    fn call_http(&self, spec: &IpcSpec, request: &IpcRequest) -> Result<String, IpcError> {
+        use std::time::Duration;
+
+        // URL is required for HTTP transport
+        let url = spec.url.as_ref().ok_or_else(|| {
+            IpcError::Custom("url is required for HTTP transport".to_string())
+        })?;
+
+        // Interpolate URL with args ($0, $name placeholders)
+        let interpolated_url = Self::interpolate_template(url, &request.args);
+
+        // Determine HTTP method (default POST)
+        let method = spec.method.as_deref().unwrap_or("POST");
+        let is_get_or_head = method == "GET" || method == "HEAD";
+
+        // Collect query param names
+        let query_param_names: Vec<&str> = spec.query.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect()).unwrap_or_default();
+
+        // Separate query args from body args
+        let query_args: IndexMap<String, &Value> = request
+            .args
+            .iter()
+            .filter(|(k, _)| query_param_names.contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), v))
+            .collect();
+
+        let body_args: IndexMap<String, &Value> = request
+            .args
+            .iter()
+            .filter(|(k, _)| !query_param_names.contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), v))
+            .collect();
+
+        // Build URL with query string
+        let final_url = if !query_args.is_empty() {
+            let query_string: String = query_args
+                .iter()
+                .map(|(k, v)| {
+                    let rendered = Self::render_value_for_http(v, &spec.mode);
+                    format!("{}={}", urlencoding::encode(k), urlencoding::encode(&rendered))
+                })
+                .collect::<Vec<_>>()
+                .join("&");
+            format!("{}?{}", interpolated_url, query_string)
+        } else {
+            interpolated_url.clone()
+        };
+
+        // Build request body based on body shaping
+        let body: Option<String> = if is_get_or_head {
+            // GET/HEAD: no body regardless of body setting
+            None
+        } else {
+            match spec.body.as_ref().unwrap_or(&ymx_core::ipc::IpcHttpBody::All) {
+                ymx_core::ipc::IpcHttpBody::Off => None,
+                ymx_core::ipc::IpcHttpBody::All => {
+                    if body_args.is_empty() {
+                        None
+                    } else {
+                        Some(Self::render_args_for_body(&body_args, &spec.mode)?)
+                    }
+                }
+                ymx_core::ipc::IpcHttpBody::Positional => {
+                    // Only $0 (first positional arg, which is the first arg by insertion order)
+                    let first_val = body_args.values().next();
+                    first_val.map(|v| Self::render_value_for_http(v, &spec.mode))
+                }
+                ymx_core::ipc::IpcHttpBody::Named(name) => {
+                    body_args.get(name).map(|v| Self::render_value_for_http(v, &spec.mode))
+                }
+            }
+        };
+
+        // Build headers
+        let mut req = ureq::request(method, &final_url);
+
+        // Set Content-Type header based on mode if body is present
+        if body.is_some() {
+            let content_type = match spec.mode {
+                ymx_core::ipc::IpcMode::Json => "application/json",
+                ymx_core::ipc::IpcMode::Text => "text/plain",
+            };
+            req = req.set("Content-Type", content_type);
+        }
+
+        // Apply user-specified headers
+        if let Some(ref headers) = spec.headers {
+            for (key, val) in headers {
+                let value = match val {
+                    Value::String(s) => s.clone(),
+                    _ => serde_json::to_string(val).unwrap_or_default(),
+                };
+                req = req.set(key, &value);
+            }
+        }
+
+        // Set timeout
+        if let Some(timeout_ms) = spec.request_timeout {
+            req = req.timeout(Duration::from_millis(timeout_ms));
+        }
+
+        // Send request
+        let response = if let Some(ref body_str) = body {
+            req.send_string(body_str)
+                .map_err(|e| IpcError::SpawnFailed(format!("HTTP request failed: {}", e)))?
+        } else {
+            req.call()
+                .map_err(|e| IpcError::SpawnFailed(format!("HTTP request failed: {}", e)))?
+        };
+
+        // Check status code
+        let status = response.status();
+        let ok_spec = spec.ok_status.as_deref().unwrap_or("2xx");
+        if !Self::check_ok_status(status, ok_spec) {
+            let body_text = response
+                .into_string()
+                .map_err(|e| IpcError::FramingError(format!("Failed to read response body: {}", e)))?;
+            return Err(IpcError::StatusCode(status, body_text));
+        }
+
+        // Read response body
+        let response_body = response
+            .into_string()
+            .map_err(|e| IpcError::FramingError(format!("Failed to read response body: {}", e)))?;
+
+        Ok(response_body)
+    }
+
+    /// Render a single Value for HTTP (URL query or body).
+    fn render_value_for_http(value: &Value, mode: &ymx_core::ipc::IpcMode) -> String {
+        match value {
+            Value::String(s) => s.clone(),
+            Value::Int(n) => n.to_string(),
+            Value::Float(f) => f.to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Null => "null".to_string(),
+            _ => match mode {
+                ymx_core::ipc::IpcMode::Json => serde_json::to_string(value).unwrap_or_default(),
+                ymx_core::ipc::IpcMode::Text => serde_json::to_string(value).unwrap_or_default(),
+            },
+        }
+    }
+
+    /// Render args for HTTP request body.
+    fn render_args_for_body(
+        args: &IndexMap<String, &Value>,
+        mode: &ymx_core::ipc::IpcMode,
+    ) -> Result<String, IpcError> {
+        match mode {
+            ymx_core::ipc::IpcMode::Text => {
+                // Text mode: join all values with space
+                let rendered: Vec<String> = args
+                    .values()
+                    .map(|v| Self::render_value_for_http(v, mode))
+                    .collect();
+                Ok(rendered.join(" "))
+            }
+            ymx_core::ipc::IpcMode::Json => {
+                // JSON mode: render as JSON object
+                let obj: IndexMap<String, Value> = args
+                    .iter()
+                    .map(|(k, v)| {
+                        let rendered: Value = match (*v).clone() {
+                            Value::String(s) => Value::String(s),
+                            Value::Int(n) => Value::Int(n),
+                            Value::Float(f) => Value::Float(f),
+                            Value::Bool(b) => Value::Bool(b),
+                            Value::Null => Value::Null,
+                            other => other.clone(),
+                        };
+                        (k.clone(), rendered)
+                    })
+                    .collect();
+                serde_json::to_string(&obj).map_err(|e| IpcError::Custom(format!("JSON render error: {}", e)))
+            }
+        }
+    }
+
+    /// Check if HTTP status code matches the ok specification.
+    fn check_ok_status(status: u16, ok_spec: &str) -> bool {
+        match ok_spec {
+            "2xx" => (200..=299).contains(&status),
+            "3xx" => (300..=399).contains(&status),
+            "4xx" => (400..=499).contains(&status),
+            "5xx" => (500..=599).contains(&status),
+            s => {
+                // Try to parse as a specific status code
+                if let Ok(code) = s.parse::<u16>() {
+                    status == code
+                } else {
+                    // Default to 2xx
+                    (200..=299).contains(&status)
+                }
+            }
+        }
+    }
 }
 
 impl IpcHost for StdIpcHost {
@@ -977,6 +1177,16 @@ impl IpcHost for StdIpcHost {
         spec: &IpcSpec,
         request: IpcRequest,
     ) -> Result<IpcResponse, IpcError> {
+        // Handle HTTP transport directly (stateless, no session management)
+        if matches!(spec.transport, ymx_core::ipc::IpcTransport::Http) {
+            let output = self.call_http(spec, &request)?;
+            return Ok(IpcResponse {
+                stdout: output,
+                stderr: String::new(),
+                status: None,
+            });
+        }
+
         // Get project root - we use "." as default since we don't have access to it here
         // The actual project root would be passed during construction or via Options
         let project_root = PathBuf::from(".");
