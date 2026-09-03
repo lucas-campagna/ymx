@@ -1,0 +1,15 @@
+# Rule 21 IPC (rule-21/stderr-fail): `stderr: fail` treats non-empty stderr
+# as a failure and raises E018. The cmd `sh -c "echo out; echo err >&2"` writes
+# to stderr, triggering the fail behavior.
+_use:
+  echo:
+    cmd: [sh, -c, "echo out; echo err >&2"]
+    transport: pipe
+    protocol: line
+    stderr: fail
+
+main: $echo{test}
+
+_test:
+  main:
+    error: E018

@@ -1,0 +1,17 @@
+# Rule 21 IPC (rule-21/json-mode): `mode: json` serializes all call arguments
+# as a JSON object with positional args as integer keys. `$echo{hello}` with
+# positional arg "hello" serializes to {"0": "hello"}; cat echoes it back and
+# parse: yaml (default) returns the object.
+_use:
+  echo:
+    cmd: [cat]
+    transport: pipe
+    protocol: line
+    mode: json
+
+# mode: json sends positional arg as {"0": value}
+main: $echo{hello}
+
+_test:
+  main:
+    "0": "hello"

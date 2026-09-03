@@ -1,0 +1,17 @@
+# Rule 21 IPC (rule-21/json-protocol): `protocol: json` uses newline-delimited
+# JSON framing. The request is a JSON object (from mode: json serialization) on
+# its own line; the reply is also newline-delimited JSON. With cat as backend,
+# the JSON object is echoed back unchanged and parsed as a YAML object.
+_use:
+  echo:
+    cmd: [cat]
+    transport: pipe
+    protocol: json
+    mode: json
+
+# Send JSON object, receive same JSON back, parse as object
+main: $echo{ping}
+
+_test:
+  main:
+    "0": "ping"

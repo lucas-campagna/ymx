@@ -1,0 +1,19 @@
+# Rule 21 IPC (rule-21/on-response-hook): on_response: parse_json calls
+# a component with the raw reply as $raw. The hook returns a value that
+# replaces the parsed response.
+_use:
+  echo:
+    transport: pipe
+    cmd: [cat]
+    protocol: line
+    request_template: "$0\n"
+    on_response: passthrough
+
+# on_response passthrough: return the raw reply as-is (wraps in object)
+passthrough:
+  0: $raw
+
+main: $echo{hello}
+
+_test:
+  main: "hello"

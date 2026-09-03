@@ -1,0 +1,22 @@
+# Rule 21 IPC (rule-21/on-error-hook): on_error: fallback triggers a
+# component when the IPC call fails. The fallback returns a default value.
+# /bin/false exits immediately, so the line protocol reads EOF and crashes.
+_use:
+  echo:
+    transport: pipe
+    cmd: [/bin/false]
+    protocol: line
+    on_error: fallback
+
+# on_error fallback: return a simple string
+fallback:
+  from: sh
+  0: "echo fallback"
+
+main: $echo{hello}
+
+_test:
+  main:
+    exit_code: 0
+    stdout: "fallback\n"
+    stderr: ""

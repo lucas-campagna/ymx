@@ -1,0 +1,17 @@
+# Rule 21 IPC (rule-21/envelope-full): `envelope: full` wraps the response in
+# {stdout, stderr} object (mirroring rule-19 sh/pw result shape). With cat as
+# backend and empty stderr, the reply is {"stdout": "hello", "stderr": ""}.
+_use:
+  echo:
+    cmd: [cat]
+    transport: pipe
+    protocol: line
+    request_template: "$0\n"
+    envelope: full
+
+main: $echo{hello}
+
+_test:
+  main:
+    stdout: "hello"
+    stderr: ""

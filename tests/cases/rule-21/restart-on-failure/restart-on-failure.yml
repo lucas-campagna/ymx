@@ -1,20 +1,20 @@
-# Rule 21 IPC (rule-21/restart-on-failure): `restart: on-failure` marks a session
-# dead after a call failure and respawns on the next call. With a `cat` backend
-# (a stateless, never-crashing line echo) the normal call path succeeds, and
-# repeated calls reuse/respawn the session transparently. A deterministic crash
-# cannot be induced with `cat` alone; the session-reuse half of the semantics is
-# exercised here and in session-persistence.
+# Rule 21 IPC (rule-21/restart-on-failure): restart: on-failure marks a
+# session dead after a call failure and respawns on the next call.
+# With cat backend and repeated calls, session reuse is exercised.
 _use:
   echo:
     cmd: [cat]
     transport: pipe
     protocol: line
     restart: on-failure
+    max_restarts: 1
     request_template: "$0\n"
 
-first_call: $echo{alpha}
-second_call: $echo{beta}
+main:
+  first: $echo{alpha}
+  second: $echo{beta}
 
 _test:
-  first_call: "alpha"
-  second_call: "beta"
+  main:
+    first: "alpha"
+    second: "beta"

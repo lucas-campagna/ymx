@@ -1,0 +1,16 @@
+# Rule 21 IPC (rule-21/rest-shaping): HTTP transport with URL template
+# substitution, query args placement, and body shaping.
+_use:
+  api:
+    transport: http
+    url: "http://localhost:9998/items/{$0}"
+    method: GET
+    query: [verbose]
+    request_timeout: 1
+    cmd: [no-server]
+
+main: "$api{42, verbose: true}"
+
+_test:
+  main:
+    error: E018

@@ -2330,7 +2330,23 @@ impl<'a> Resolver<'a> {
                         message: format!("on_request component `{on_req}` not found"),
                     }
                 })?;
-            let result = self.call(def, args, None)?;
+            // Pass original args as named $request to avoid slot overwrites.
+            let mut hook_named = Vec::new();
+            match args {
+                Args::Positional(vals) => {
+                    if let Some(v) = vals.first() {
+                        hook_named.push(("request".to_string(), v.clone()));
+                    }
+                }
+                Args::Named(named) => {
+                    for (k, v) in named {
+                        hook_named.push((k.clone(), v.clone()));
+                    }
+                }
+                _ => {}
+            }
+            let hook_args = Args::Named(hook_named);
+            let result = self.call(def, &hook_args, None)?;
             // Result must be a JSON Value or String.
             let body = match result {
                 Value::String(s) => s,
@@ -2392,8 +2408,24 @@ impl<'a> Resolver<'a> {
                     body: Some(body),
                 })
             }
+            IpcProtocol::Line if spec.mode == IpcMode::Json => {
+                // Line protocol with json mode: build body as JSON so do_protocol
+                // sends the JSON string directly instead of template interpolation.
+                let body = serde_json::to_string(&rendered_args).map_err(|e| Diagnostic {
+                    file: Some(self.project.files[file.0 as usize].clone()),
+                    line: span.line,
+                    col: span.col,
+                    component: Some(name.to_string()),
+                    code: E011,
+                    message: format!("JSON serialization failed: {}", e),
+                })?;
+                Ok(IpcRequest {
+                    args: rendered_args,
+                    body: Some(body),
+                })
+            }
             _ => {
-                // For Line/Sentinel/Raw, body is built by do_protocol using template.
+                // For Line/Sentinel/Raw (text mode), body is built by do_protocol using template.
                 Ok(IpcRequest {
                     args: rendered_args,
                     body: None,
@@ -2638,7 +2670,7 @@ impl<'a> Resolver<'a> {
             Ok(def) => def,
             Err(_) => return Ok(None),
         };
-        let args = Args::Positional(vec![Value::String(raw.to_string())]);
+        let args = Args::Named(vec![("$raw".to_string(), Value::String(raw.to_string()))]);
         match self.call(def, &args, None) {
             Ok(v) => Ok(Some(v)),
             Err(_) => Ok(None),
@@ -2668,7 +2700,10 @@ impl<'a> Resolver<'a> {
                     message: format!("on_error component `{component}` not found"),
                 }
             })?;
-        let args = Args::Positional(vec![Value::String(error_msg.to_string())]);
+        let args = Args::Named(vec![(
+            "$error".to_string(),
+            Value::String(error_msg.to_string()),
+        )]);
         match self.call(def, &args, None) {
             Ok(v) => Ok(Some(v)),
             Err(_) => Ok(None),

@@ -1,0 +1,17 @@
+# Rule 21 IPC (rule-21/shell-hooks): `before_start` / `after_start` shell commands
+# run before/after spawning the IPC session. `before_start` writes a marker
+# file; `after_start` verifies it exists. With cat as backend these succeed.
+# The marker file is created by before_start and cleaned up implicitly.
+_use:
+  echo:
+    cmd: [cat]
+    transport: pipe
+    protocol: line
+    request_template: "$0\n"
+    before_start: "touch /tmp/ymx-before-start-marker"
+    after_start: "test -f /tmp/ymx-before-start-marker"
+
+main: $echo{hello}
+
+_test:
+  main: "hello"

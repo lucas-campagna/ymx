@@ -650,8 +650,13 @@ impl StdIpcHost {
         match spec.protocol {
             IpcProtocol::Line => {
                 // Line protocol: write request, read one line from response
-                let template = spec.request_template.as_deref().unwrap_or("{}\n");
-                let request_str = Self::interpolate_template(template, &request.args);
+                // If body is pre-built (e.g., mode:json), use it directly; otherwise interpolate template.
+                let request_str = if let Some(ref body) = request.body {
+                    format!("{}\n", body)
+                } else {
+                    let template = spec.request_template.as_deref().unwrap_or("{$0}\n");
+                    Self::interpolate_template(template, &request.args)
+                };
 
                 let timeout = spec
                     .request_timeout
@@ -662,13 +667,14 @@ impl StdIpcHost {
 
                 // Pipe transport: use child stdin/stdout
                 if let Some(ref mut child) = session.child {
-                    if let Some(ref mut stdin) = child.stdin {
+                    if let Some(mut stdin) = child.stdin.take() {
                         stdin
                             .write_all(request_str.as_bytes())
                             .map_err(|e| IpcError::FramingError(e.to_string()))?;
                         stdin
                             .flush()
                             .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                        drop(stdin);
                     }
 
                     if let Some(ref mut stdout) = child.stdout {
@@ -771,7 +777,7 @@ impl StdIpcHost {
             }
             IpcProtocol::Sentinel => {
                 // Sentinel protocol: write request, read lines until reply_until regex matches
-                let template = spec.request_template.as_deref().unwrap_or("{}\n");
+                let template = spec.request_template.as_deref().unwrap_or("{$0}\n");
                 let request_str = Self::interpolate_template(template, &request.args);
 
                 let reply_re = spec.reply_until.as_ref().ok_or_else(|| {
@@ -790,13 +796,14 @@ impl StdIpcHost {
 
                 // Pipe transport: use child stdin/stdout
                 if let Some(ref mut child) = session.child {
-                    if let Some(ref mut stdin) = child.stdin {
+                    if let Some(mut stdin) = child.stdin.take() {
                         stdin
                             .write_all(request_str.as_bytes())
                             .map_err(|e| IpcError::FramingError(e.to_string()))?;
                         stdin
                             .flush()
                             .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                        drop(stdin);
                     }
 
                     if let Some(ref mut stdout) = child.stdout {
@@ -1029,13 +1036,17 @@ impl StdIpcHost {
 
                 // Pipe transport: use child stdin/stdout
                 if let Some(ref mut child) = session.child {
-                    if let Some(ref mut stdin) = child.stdin {
+                    if let Some(mut stdin) = child.stdin.take() {
                         stdin
                             .write_all(request_body.as_bytes())
                             .map_err(|e| IpcError::FramingError(e.to_string()))?;
                         stdin
+                            .write_all(b"\n")
+                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                        stdin
                             .flush()
                             .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                        drop(stdin);
                     }
 
                     if let Some(ref mut stdout) = child.stdout {
@@ -1074,6 +1085,8 @@ impl StdIpcHost {
                 if let Some(ref mut sock) = session.unix_socket {
                     sock.write_all(request_body.as_bytes())
                         .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    sock.write_all(b"\n")
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
                     sock.flush()
                         .map_err(|e| IpcError::FramingError(e.to_string()))?;
 
@@ -1105,6 +1118,8 @@ impl StdIpcHost {
                 // Socket transport: use tcp socket
                 if let Some(ref mut sock) = session.tcp_socket {
                     sock.write_all(request_body.as_bytes())
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    sock.write_all(b"\n")
                         .map_err(|e| IpcError::FramingError(e.to_string()))?;
                     sock.flush()
                         .map_err(|e| IpcError::FramingError(e.to_string()))?;
@@ -1176,13 +1191,17 @@ impl StdIpcHost {
 
                 // Pipe transport: use child stdin/stdout
                 if let Some(ref mut child) = session.child {
-                    if let Some(ref mut stdin) = child.stdin {
+                    if let Some(mut stdin) = child.stdin.take() {
                         stdin
                             .write_all(request_body.as_bytes())
                             .map_err(|e| IpcError::FramingError(e.to_string()))?;
                         stdin
+                            .write_all(b"\n")
+                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                        stdin
                             .flush()
                             .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                        drop(stdin);
                     }
 
                     if let Some(ref mut stdout) = child.stdout {
@@ -1200,6 +1219,8 @@ impl StdIpcHost {
                 if let Some(ref mut sock) = session.unix_socket {
                     sock.write_all(request_body.as_bytes())
                         .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    sock.write_all(b"\n")
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
                     sock.flush()
                         .map_err(|e| IpcError::FramingError(e.to_string()))?;
 
@@ -1211,6 +1232,8 @@ impl StdIpcHost {
                 // Socket transport: use tcp socket
                 if let Some(ref mut sock) = session.tcp_socket {
                     sock.write_all(request_body.as_bytes())
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    sock.write_all(b"\n")
                         .map_err(|e| IpcError::FramingError(e.to_string()))?;
                     sock.flush()
                         .map_err(|e| IpcError::FramingError(e.to_string()))?;
@@ -1522,6 +1545,12 @@ impl IpcHost for StdIpcHost {
             if !socket_dead {
                 match self.do_protocol(s, &request) {
                     Ok((stdout, stderr)) => {
+                        if spec.transport == ymx_core::ipc::IpcTransport::Pipe
+                            && (spec.protocol == ymx_core::ipc::IpcProtocol::Line
+                                || spec.protocol == ymx_core::ipc::IpcProtocol::Sentinel)
+                        {
+                            s.dead = true;
+                        }
                         return Ok(IpcResponse {
                             stdout,
                             stderr,
@@ -1546,13 +1575,19 @@ impl IpcHost for StdIpcHost {
         }
 
         // No session exists yet → always spawn/connect (first call).
-        // Session exists but is dead → only respawn when restart == OnFailure.
+        // Session exists but is dead → respawn when restart == OnFailure or Line+pipe (stdin consumed).
         let has_dead_session = sessions.contains_key(&key);
-        if !has_dead_session || spec.restart == IpcRestart::OnFailure {
-            // Check max_restarts when respawning a dead session
+        let line_pipe = spec.transport == ymx_core::ipc::IpcTransport::Pipe
+            && spec.protocol == ymx_core::ipc::IpcProtocol::Line;
+        let sentinel_pipe = spec.transport == ymx_core::ipc::IpcTransport::Pipe
+            && spec.protocol == ymx_core::ipc::IpcProtocol::Sentinel;
+        let stdin_consumed_pipe = line_pipe || sentinel_pipe;
+        if !has_dead_session || spec.restart == IpcRestart::OnFailure || stdin_consumed_pipe {
+            // Check max_restarts when respawning a dead session (but not for stdin-consumed pipe
+            // protocols, where respawning is inherent to the protocol since stdin is consumed per call).
             let restart_count = if has_dead_session {
                 if let Some(dead_session) = sessions.get(&key) {
-                    if dead_session.restart_count >= spec.max_restarts {
+                    if !stdin_consumed_pipe && dead_session.restart_count >= spec.max_restarts {
                         return Err(IpcError::Custom("max restarts exceeded".to_string()));
                     }
                     dead_session.restart_count + 1
@@ -1583,6 +1618,10 @@ impl IpcHost for StdIpcHost {
             new_session.restart_count = restart_count;
 
             let output = self.do_protocol(&mut new_session, &request);
+
+            if stdin_consumed_pipe && output.is_ok() {
+                new_session.dead = true;
+            }
 
             // Store the session (even if the call failed)
             sessions.insert(key, new_session);

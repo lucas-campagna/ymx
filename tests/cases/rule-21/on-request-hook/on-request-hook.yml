@@ -1,0 +1,21 @@
+# Rule 21 IPC (rule-21/on-request-hook): `on_request: up` calls a component
+# `up` to transform the outgoing request before sending. The hook receives
+# the original args as named `$request`, avoiding slot overwrites.
+_use:
+  echo:
+    cmd: [cat]
+    transport: pipe
+    protocol: line
+    mode: text
+    on_request: up
+
+# on_request hook: passthrough that reads $request
+up:
+  request: $request
+
+# $echo{hello} → on_request transforms to "hello" → cat echoes "hello"
+main: $echo{hello}
+
+_test:
+  main:
+    request: "hello"

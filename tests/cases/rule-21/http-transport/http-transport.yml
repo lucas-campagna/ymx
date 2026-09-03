@@ -1,0 +1,17 @@
+# Rule 21 IPC (rule-21/http-transport): `transport: http` requires an external
+# HTTP server to be running. Since no server is available in the test
+# environment, the call fails with E018 (connection failure / no IpcHost).
+# This scenario documents the expected behavior when HTTP infrastructure exists.
+_use:
+  echo:
+    transport: http
+    url: http://localhost:9999/echo
+    method: POST
+    request_timeout: 1
+    cmd: [should-not-run]
+
+main: $echo{hello}
+
+_test:
+  main:
+    error: E018
