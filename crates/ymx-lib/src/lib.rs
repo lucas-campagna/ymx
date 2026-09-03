@@ -442,8 +442,8 @@ impl StdIpcHost {
                     }
                 }
 
-                // Run after_start hook
-                self.run_hook(&spec.after_start)?;
+                // Run after_start hook (best effort — session continues even on failure)
+                self.run_hook(&spec.after_start).ok();
 
                 Ok(Session {
                     child: Some(child),
@@ -456,8 +456,8 @@ impl StdIpcHost {
             }
             ymx_core::ipc::IpcTransport::Socket => {
                 // Socket transport: connect to existing socket (external: true required)
-                // Run after_start hook after successful connection
-                self.run_hook(&spec.after_start)?;
+                // Run after_start hook after successful connection (best effort)
+                self.run_hook(&spec.after_start).ok();
 
                 Ok(Session {
                     child: None,
@@ -509,8 +509,8 @@ impl StdIpcHost {
 
     /// Stop a session gracefully.
     fn stop_session(&self, session: &mut Session) -> Result<(), IpcError> {
-        // Run before_stop hook
-        self.run_hook(&session.spec.before_stop)?;
+        // Run before_stop hook (best effort — teardown proceeds regardless)
+        self.run_hook(&session.spec.before_stop).ok();
 
         // Send stop_message if provided (only for pipe transport with child)
         if let Some(ref msg) = session.spec.stop_message {
