@@ -109,6 +109,7 @@ struct Session {
     tcp_socket: Option<TcpStream>,
     spec: IpcSpec,
     dead: bool,
+    restart_count: u32,
 }
 
 /// Standard stdio-based IPC host for rule-21 external components.
@@ -452,6 +453,7 @@ impl StdIpcHost {
                     tcp_socket: None,
                     spec: spec.clone(),
                     dead: false,
+                    restart_count: 0,
                 })
             }
             ymx_core::ipc::IpcTransport::Socket => {
@@ -466,6 +468,7 @@ impl StdIpcHost {
                     tcp_socket: None,
                     spec: spec.clone(),
                     dead: false,
+                    restart_count: 0,
                 })
             }
             _ => Err(IpcError::DisallowedTransport(format!(
@@ -504,6 +507,7 @@ impl StdIpcHost {
             tcp_socket,
             spec: spec.clone(),
             dead: false,
+            restart_count: 0,
         })
     }
 
@@ -608,8 +612,39 @@ impl StdIpcHost {
         result
     }
 
+    /// Capture any remaining stderr from a child process after protocol execution.
+    /// Reads until EOF and returns the captured stderr content.
+    fn capture_child_stderr(child: &mut Option<Child>) -> String {
+        if let Some(ref mut child) = child {
+            if let Some(ref mut stderr) = child.stderr {
+                let mut buf = String::new();
+                let mut stderr_buf = [0u8; 1024];
+                loop {
+                    match stderr.read(&mut stderr_buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            buf.push_str(&String::from_utf8_lossy(&stderr_buf[..n]));
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                return buf;
+            }
+        }
+        String::new()
+    }
+
     /// Send a request and read a response using the specified protocol.
-    fn do_protocol(&self, session: &mut Session, request: &IpcRequest) -> Result<String, IpcError> {
+    /// Returns (stdout, stderr) tuple.
+    fn do_protocol(
+        &self,
+        session: &mut Session,
+        request: &IpcRequest,
+    ) -> Result<(String, String), IpcError> {
         let spec = &session.spec;
 
         match spec.protocol {
@@ -652,7 +687,8 @@ impl StdIpcHost {
                                 Ok(_) => {
                                     let trimmed =
                                         line.trim_end_matches('\n').trim_end_matches('\r');
-                                    return Ok(trimmed.to_string());
+                                    let stderr = Self::capture_child_stderr(&mut session.child);
+                                    return Ok((trimmed.to_string(), stderr));
                                 }
                                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                                     std::thread::sleep(Duration::from_millis(10));
@@ -688,7 +724,7 @@ impl StdIpcHost {
                             }
                             Ok(_) => {
                                 let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-                                return Ok(trimmed.to_string());
+                                return Ok((trimmed.to_string(), String::new()));
                             }
                             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                                 std::thread::sleep(Duration::from_millis(10));
@@ -720,7 +756,7 @@ impl StdIpcHost {
                             }
                             Ok(_) => {
                                 let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-                                return Ok(trimmed.to_string());
+                                return Ok((trimmed.to_string(), String::new()));
                             }
                             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                                 std::thread::sleep(Duration::from_millis(10));
@@ -776,7 +812,8 @@ impl StdIpcHost {
 
                             let line = line.map_err(|e| IpcError::FramingError(e.to_string()))?;
                             if re.is_match(&line) {
-                                return Ok(lines.join("\n"));
+                                let stderr = Self::capture_child_stderr(&mut session.child);
+                                return Ok((lines.join("\n"), stderr));
                             }
                             lines.push(line);
                         }
@@ -811,7 +848,7 @@ impl StdIpcHost {
                             Ok(_) => {
                                 let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
                                 if re.is_match(trimmed) {
-                                    return Ok(lines.join("\n"));
+                                    return Ok((lines.join("\n"), String::new()));
                                 }
                                 lines.push(trimmed.to_string());
                             }
@@ -847,7 +884,7 @@ impl StdIpcHost {
                             Ok(_) => {
                                 let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
                                 if re.is_match(trimmed) {
-                                    return Ok(lines.join("\n"));
+                                    return Ok((lines.join("\n"), String::new()));
                                 }
                                 lines.push(trimmed.to_string());
                             }
@@ -907,7 +944,8 @@ impl StdIpcHost {
                             }
                         }
 
-                        return Ok(output);
+                        let stderr = Self::capture_child_stderr(&mut session.child);
+                        return Ok((output, stderr));
                     }
 
                     return Err(IpcError::FramingError("no stdout pipe".to_string()));
@@ -942,7 +980,7 @@ impl StdIpcHost {
                         }
                     }
 
-                    return Ok(output);
+                    return Ok((output, String::new()));
                 }
 
                 // Socket transport: use tcp socket
@@ -971,7 +1009,7 @@ impl StdIpcHost {
                         }
                     }
 
-                    return Ok(output);
+                    return Ok((output, String::new()));
                 }
 
                 Err(IpcError::FramingError("no transport available".to_string()))
@@ -1016,7 +1054,8 @@ impl StdIpcHost {
                                 Ok(_) => {
                                     let trimmed =
                                         line.trim_end_matches('\n').trim_end_matches('\r');
-                                    return Ok(trimmed.to_string());
+                                    let stderr = Self::capture_child_stderr(&mut session.child);
+                                    return Ok((trimmed.to_string(), stderr));
                                 }
                                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                                     std::thread::sleep(Duration::from_millis(10));
@@ -1052,7 +1091,7 @@ impl StdIpcHost {
                             }
                             Ok(_) => {
                                 let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-                                return Ok(trimmed.to_string());
+                                return Ok((trimmed.to_string(), String::new()));
                             }
                             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                                 std::thread::sleep(Duration::from_millis(10));
@@ -1084,7 +1123,7 @@ impl StdIpcHost {
                             }
                             Ok(_) => {
                                 let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-                                return Ok(trimmed.to_string());
+                                return Ok((trimmed.to_string(), String::new()));
                             }
                             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                                 std::thread::sleep(Duration::from_millis(10));
@@ -1148,7 +1187,9 @@ impl StdIpcHost {
 
                     if let Some(ref mut stdout) = child.stdout {
                         let response_line = read_response_line(stdout)?;
-                        return Self::parse_jsonrpc_response(&response_line);
+                        let result = Self::parse_jsonrpc_response(&response_line)?;
+                        let stderr = Self::capture_child_stderr(&mut session.child);
+                        return Ok((result, stderr));
                     }
 
                     return Err(IpcError::FramingError("no stdout pipe".to_string()));
@@ -1163,7 +1204,8 @@ impl StdIpcHost {
                         .map_err(|e| IpcError::FramingError(e.to_string()))?;
 
                     let response_line = read_response_line(sock)?;
-                    return Self::parse_jsonrpc_response(&response_line);
+                    let result = Self::parse_jsonrpc_response(&response_line)?;
+                    return Ok((result, String::new()));
                 }
 
                 // Socket transport: use tcp socket
@@ -1174,7 +1216,8 @@ impl StdIpcHost {
                         .map_err(|e| IpcError::FramingError(e.to_string()))?;
 
                     let response_line = read_response_line(sock)?;
-                    return Self::parse_jsonrpc_response(&response_line);
+                    let result = Self::parse_jsonrpc_response(&response_line)?;
+                    return Ok((result, String::new()));
                 }
 
                 Err(IpcError::FramingError("no transport available".to_string()))
@@ -1478,10 +1521,10 @@ impl IpcHost for StdIpcHost {
 
             if !socket_dead {
                 match self.do_protocol(s, &request) {
-                    Ok(output) => {
+                    Ok((stdout, stderr)) => {
                         return Ok(IpcResponse {
-                            stdout: output,
-                            stderr: String::new(),
+                            stdout,
+                            stderr,
                             status: None,
                         });
                     }
@@ -1506,6 +1549,20 @@ impl IpcHost for StdIpcHost {
         // Session exists but is dead → only respawn when restart == OnFailure.
         let has_dead_session = sessions.contains_key(&key);
         if !has_dead_session || spec.restart == IpcRestart::OnFailure {
+            // Check max_restarts when respawning a dead session
+            let restart_count = if has_dead_session {
+                if let Some(dead_session) = sessions.get(&key) {
+                    if dead_session.restart_count >= spec.max_restarts {
+                        return Err(IpcError::Custom("max restarts exceeded".to_string()));
+                    }
+                    dead_session.restart_count + 1
+                } else {
+                    1
+                }
+            } else {
+                0
+            };
+
             let mut new_session = match spec.transport {
                 ymx_core::ipc::IpcTransport::Socket => {
                     // For socket transport, connect to the socket
@@ -1522,14 +1579,17 @@ impl IpcHost for StdIpcHost {
                 }
             };
 
+            // Set the restart count for the new session
+            new_session.restart_count = restart_count;
+
             let output = self.do_protocol(&mut new_session, &request);
 
             // Store the session (even if the call failed)
             sessions.insert(key, new_session);
 
-            output.map(|stdout| IpcResponse {
+            output.map(|(stdout, stderr)| IpcResponse {
                 stdout,
-                stderr: String::new(),
+                stderr,
                 status: None,
             })
         } else {

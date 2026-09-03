@@ -47,6 +47,7 @@ use crate::diag::{
 use crate::interp;
 use crate::ipc::{
     IpcEnvelope, IpcError, IpcMode, IpcParse, IpcProtocol, IpcRequest, IpcResponse, IpcSpec,
+    IpcStderr,
 };
 use crate::ir::{render_f64, render_value, Args, Value};
 use crate::math::{BraceCallHook, CallHook, MathEngine, Scope, ShellCallHook, V1Engine};
@@ -2268,7 +2269,9 @@ impl<'a> Resolver<'a> {
                 self.run_lifecycle_hook(cmd, "after_start", span, file, name)?;
             } else {
                 // after_start on failure (best effort).
-                let _ = self.run_lifecycle_hook(cmd, "after_start", span, file, name).ok();
+                let _ = self
+                    .run_lifecycle_hook(cmd, "after_start", span, file, name)
+                    .ok();
             }
         }
 
@@ -2529,6 +2532,18 @@ impl<'a> Resolver<'a> {
         file: FileId,
         name: &str,
     ) -> Result<Value, Diagnostic> {
+        // stderr: fail check - if stderr is non-empty and stderr mode is fail, return error
+        if spec.stderr == IpcStderr::Fail && !response.stderr.is_empty() {
+            return Err(Diagnostic {
+                file: Some(self.project.files[file.0 as usize].clone()),
+                line: span.line,
+                col: span.col,
+                component: Some(name.to_string()),
+                code: E018,
+                message: format!("stderr: {}", response.stderr),
+            });
+        }
+
         let mut raw = response.stdout.clone();
 
         // trim: strip trailing whitespace.
@@ -2642,16 +2657,17 @@ impl<'a> Resolver<'a> {
         file: FileId,
         ipc_name: &str,
     ) -> Result<Option<Value>, Diagnostic> {
-        let def = resolve_ref(self.project, component, file, self.opts.plain.clone()).map_err(|_| {
-            Diagnostic {
-                file: Some(self.project.files[file.0 as usize].clone()),
-                line: span.line,
-                col: span.col,
-                component: Some(ipc_name.to_string()),
-                code: E002,
-                message: format!("on_error component `{component}` not found"),
-            }
-        })?;
+        let def =
+            resolve_ref(self.project, component, file, self.opts.plain.clone()).map_err(|_| {
+                Diagnostic {
+                    file: Some(self.project.files[file.0 as usize].clone()),
+                    line: span.line,
+                    col: span.col,
+                    component: Some(ipc_name.to_string()),
+                    code: E002,
+                    message: format!("on_error component `{component}` not found"),
+                }
+            })?;
         let args = Args::Positional(vec![Value::String(error_msg.to_string())]);
         match self.call(def, &args, None) {
             Ok(v) => Ok(Some(v)),
