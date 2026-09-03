@@ -1,0 +1,15 @@
+# Rule 21 IPC (rule-21/basic-pipe): minimal pipe transport with a cat backend.
+# `_use` mapping RHS `{cmd: [cat], transport: pipe, protocol: line}` declares `echo`
+# as an IPC component. `$echo{hello}` binds $0 = "hello"; cat echoes it back and
+# the default `parse: yaml` yields the String "hello".
+_use:
+  echo:
+    cmd: [cat]
+    transport: pipe
+    protocol: line
+    request_template: "$0\n"
+
+main: $echo{hello}
+
+_test:
+  main: "hello"

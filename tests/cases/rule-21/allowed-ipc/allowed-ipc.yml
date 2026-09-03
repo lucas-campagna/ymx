@@ -1,0 +1,18 @@
+# Rule 21 IPC (rule-21/allowed-ipc): `_ymx.allowed_ipc: [socket]` restricts the
+# permitted transports. The `echo` alias uses `transport: pipe`, which is NOT in
+# the allowed list, so the call fails with E018 (disallowed transport).
+_ymx:
+  allowed_ipc: [socket]
+
+_use:
+  echo:
+    cmd: [cat]
+    transport: pipe
+    protocol: line
+    request_template: "$0\n"
+
+main: $echo{hello}
+
+_test:
+  main:
+    error: E018

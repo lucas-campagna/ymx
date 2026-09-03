@@ -1,0 +1,16 @@
+# Rule 21 IPC (rule-21/error-pattern): `error_pattern: "^ERR:"` flags any reply
+# starting with "ERR:" as a failure. Sending "ERR: something" is echoed back and
+# matches the pattern, so the call fails with E018.
+_use:
+  echo:
+    cmd: [cat]
+    transport: pipe
+    protocol: line
+    error_pattern: "^ERR:"
+    request_template: "$0\n"
+
+main: "$echo{ERR: something}"
+
+_test:
+  main:
+    error: E018

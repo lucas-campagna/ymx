@@ -1,0 +1,15 @@
+# Rule 21 IPC (rule-21/parse-none): `parse: none` returns the raw reply as a
+# String, never parsing it. `$echo{123}` → cat echoes "123" → String "123"
+# (not Int, unlike the parse: yaml default).
+_use:
+  echo:
+    cmd: [cat]
+    transport: pipe
+    protocol: line
+    parse: none
+    request_template: "$0\n"
+
+main: $echo{123}
+
+_test:
+  main: "123"

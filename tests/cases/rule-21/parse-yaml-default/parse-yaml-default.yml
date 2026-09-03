@@ -1,0 +1,17 @@
+# Rule 21 IPC (rule-21/parse-yaml-default): the default `parse: yaml` turns a
+# reply that looks like YAML into a native Value. `$echo{123}` → cat echoes
+# "123" → parsed as Int 123. `$echo{"[1,2]"}` sends the literal string [1,2]
+# which cat echoes and parse:yaml resolves to an Array.
+_use:
+  echo:
+    cmd: [cat]
+    transport: pipe
+    protocol: line
+    request_template: "$0\n"
+
+main: $echo{123}
+array_reply: $echo{"[1,2]"}
+
+_test:
+  main: 123
+  array_reply: [1, 2]

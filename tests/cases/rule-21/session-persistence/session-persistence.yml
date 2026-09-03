@@ -1,0 +1,19 @@
+# Rule 21 IPC (rule-21/session-persistence): several calls to the same IPC alias
+# in one compile reuse the (single) underlying session — the host caches the
+# session by (project root, alias, spec). Each call here must succeed against
+# the same `cat` session.
+_use:
+  echo:
+    cmd: [cat]
+    transport: pipe
+    protocol: line
+    request_template: "$0\n"
+
+call1: $echo{one}
+call2: $echo{two}
+call3: $echo{three}
+
+_test:
+  call1: "one"
+  call2: "two"
+  call3: "three"

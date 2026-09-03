@@ -723,8 +723,10 @@ impl IpcHost for StdIpcHost {
             }
         }
 
-        // No session or dead - respawn if OnFailure
-        if spec.restart == IpcRestart::OnFailure {
+        // No session exists yet → always spawn (first call).
+        // Session exists but is dead → only respawn when restart == OnFailure.
+        let has_dead_session = sessions.contains_key(&key);
+        if !has_dead_session || spec.restart == IpcRestart::OnFailure {
             let mut new_session = self.spawn_session(&project_root, name, spec)?;
             let output = self.do_protocol(&mut new_session, &request);
 

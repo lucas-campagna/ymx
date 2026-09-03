@@ -1,0 +1,14 @@
+# Rule 21 IPC (rule-21/text-mode): explicit `mode: text` sends $0 as a string.
+# `$echo{mode text works}` → cat echoes the string back → "mode text works".
+_use:
+  echo:
+    cmd: [cat]
+    transport: pipe
+    protocol: line
+    mode: text
+    request_template: "$0\n"
+
+main: $echo{mode text works}
+
+_test:
+  main: "mode text works"

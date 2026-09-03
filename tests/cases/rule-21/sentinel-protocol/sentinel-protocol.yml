@@ -1,0 +1,17 @@
+# Rule 21 IPC (rule-21/sentinel-protocol): `protocol: sentinel` frames the reply
+# with `reply_until`; everything before the matching marker line is the reply.
+# request_template writes $0 then a `__DONE__` marker; cat echoes both lines and
+# the sentinel reader stops at the `^__DONE__$` line, returning the preceding
+# line ("hello sentinel") as the reply.
+_use:
+  echo:
+    cmd: [cat]
+    transport: pipe
+    protocol: sentinel
+    request_template: "$0\n__DONE__\n"
+    reply_until: "^__DONE__$"
+
+main: $echo{hello sentinel}
+
+_test:
+  main: "hello sentinel"

@@ -173,6 +173,13 @@ fn run_scenario(file: &Path, failures: &mut Vec<String>) {
     // Enable shell execution for tests
     opts.executor = Some(Arc::new(StdExecutor));
 
+    // Inject StdIpcHost so IPC scenarios work out of the box (mirrors CLI).
+    if opts.ipc.is_none() {
+        if let Some(ref exec) = opts.executor {
+            opts.ipc = Some(Arc::new(ymx_lib::StdIpcHost::new(exec.clone())));
+        }
+    }
+
     // If `_build_error` was set but we reached `parse_tests`, the scenario was
     // supposed to fail at load/extract but didn't — that's a failure.
     if build_error.is_some() {
