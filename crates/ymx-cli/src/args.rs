@@ -253,7 +253,7 @@ pub struct ParseError {
 /// or an `--errors` request (printed diagnostic table, exit `0`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseOutcome {
-    Cli(ParsedCli),
+    Cli(Box<ParsedCli>),
     Help,
     Errors,
 }
@@ -509,7 +509,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         code,
         pdf_backend,
     };
-    Ok(ParseOutcome::Cli(cli))
+    Ok(ParseOutcome::Cli(Box::new(cli)))
 }
 
 /// Advance `i` past the flag's name and return the next argument (the
@@ -535,7 +535,7 @@ mod tests {
 
     fn cli_of(parts: &[&str]) -> ParsedCli {
         match parse(&args(parts)) {
-            Ok(ParseOutcome::Cli(c)) => c,
+            Ok(ParseOutcome::Cli(c)) => *c,
             other => panic!("expected Cli, got {other:?}"),
         }
     }
