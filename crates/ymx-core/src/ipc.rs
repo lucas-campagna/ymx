@@ -181,6 +181,10 @@ impl Default for IpcSpec {
 #[derive(Debug, Clone)]
 pub struct IpcRequest {
     pub args: IndexMap<String, Value>,
+    /// Optional pre-rendered request body. When Some, this is sent directly
+    /// as the wire format, bypassing args serialization. Used by on_request
+    /// override and by json/jsonrpc protocols.
+    pub body: Option<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -325,8 +325,9 @@ impl StdIpcHost {
                 if let Some(timeout_ms) = spec.startup_timeout {
                     let timeout = Duration::from_millis(timeout_ms);
                     if let Some(ref ready_pattern) = spec.ready {
-                        let ready_re = Regex::new(ready_pattern)
-                            .map_err(|e| IpcError::FramingError(format!("invalid ready regex: {}", e)))?;
+                        let ready_re = Regex::new(ready_pattern).map_err(|e| {
+                            IpcError::FramingError(format!("invalid ready regex: {}", e))
+                        })?;
 
                         let mut stdout = child.stdout.take().map(BufReader::new);
                         let mut stderr = child.stderr.take().map(BufReader::new);
@@ -387,8 +388,9 @@ impl StdIpcHost {
                     }
                 } else if let Some(ref ready_pattern) = spec.ready {
                     // No timeout but has ready pattern - wait indefinitely
-                    let ready_re = Regex::new(ready_pattern)
-                        .map_err(|e| IpcError::FramingError(format!("invalid ready regex: {}", e)))?;
+                    let ready_re = Regex::new(ready_pattern).map_err(|e| {
+                        IpcError::FramingError(format!("invalid ready regex: {}", e))
+                    })?;
 
                     let mut stdout = child.stdout.take().map(BufReader::new);
                     let mut stderr = child.stderr.take().map(BufReader::new);
@@ -476,8 +478,7 @@ impl StdIpcHost {
     /// Connect to a socket (unix or tcp) for the given spec.
     fn connect_socket(spec: &IpcSpec) -> Result<Session, IpcError> {
         #[cfg(unix)]
-        let unix_socket = if spec.path.is_some() {
-            let path = spec.path.as_ref().unwrap();
+        let unix_socket = if let Some(path) = &spec.path {
             let stream = UnixStream::connect(path)
                 .map_err(|e| IpcError::SpawnFailed(format!("unix socket connect failed: {}", e)))?;
             Some(stream)
@@ -488,8 +489,7 @@ impl StdIpcHost {
         #[cfg(not(unix))]
         let unix_socket: Option<UnixStream> = None;
 
-        let tcp_socket = if spec.addr.is_some() {
-            let addr = spec.addr.as_ref().unwrap();
+        let tcp_socket = if let Some(addr) = &spec.addr {
             let stream = TcpStream::connect(addr)
                 .map_err(|e| IpcError::SpawnFailed(format!("tcp socket connect failed: {}", e)))?;
             Some(stream)
@@ -642,7 +642,9 @@ impl StdIpcHost {
 
                         loop {
                             if std::time::Instant::now() >= deadline {
-                                return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
+                                return Err(IpcError::Timeout(
+                                    spec.request_timeout.unwrap_or(30000),
+                                ));
                             }
 
                             match reader.read_line(&mut line) {
@@ -681,7 +683,9 @@ impl StdIpcHost {
                         }
 
                         match reader.read_line(&mut line) {
-                            Ok(0) => return Err(IpcError::FramingError("socket closed".to_string())),
+                            Ok(0) => {
+                                return Err(IpcError::FramingError("socket closed".to_string()))
+                            }
                             Ok(_) => {
                                 let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
                                 return Ok(trimmed.to_string());
@@ -711,7 +715,9 @@ impl StdIpcHost {
                         }
 
                         match reader.read_line(&mut line) {
-                            Ok(0) => return Err(IpcError::FramingError("socket closed".to_string())),
+                            Ok(0) => {
+                                return Err(IpcError::FramingError("socket closed".to_string()))
+                            }
                             Ok(_) => {
                                 let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
                                 return Ok(trimmed.to_string());
@@ -763,7 +769,9 @@ impl StdIpcHost {
 
                         for line in reader.lines() {
                             if std::time::Instant::now() >= deadline {
-                                return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
+                                return Err(IpcError::Timeout(
+                                    spec.request_timeout.unwrap_or(30000),
+                                ));
                             }
 
                             let line = line.map_err(|e| IpcError::FramingError(e.to_string()))?;
@@ -797,7 +805,9 @@ impl StdIpcHost {
 
                         let mut line = String::new();
                         match reader.read_line(&mut line) {
-                            Ok(0) => return Err(IpcError::FramingError("socket closed".to_string())),
+                            Ok(0) => {
+                                return Err(IpcError::FramingError("socket closed".to_string()))
+                            }
                             Ok(_) => {
                                 let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
                                 if re.is_match(trimmed) {
@@ -831,7 +841,9 @@ impl StdIpcHost {
 
                         let mut line = String::new();
                         match reader.read_line(&mut line) {
-                            Ok(0) => return Err(IpcError::FramingError("socket closed".to_string())),
+                            Ok(0) => {
+                                return Err(IpcError::FramingError("socket closed".to_string()))
+                            }
                             Ok(_) => {
                                 let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
                                 if re.is_match(trimmed) {
@@ -877,7 +889,9 @@ impl StdIpcHost {
 
                         loop {
                             if std::time::Instant::now() >= deadline {
-                                return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
+                                return Err(IpcError::Timeout(
+                                    spec.request_timeout.unwrap_or(30000),
+                                ));
                             }
 
                             match stdout.read(&mut buf) {
@@ -962,11 +976,243 @@ impl StdIpcHost {
 
                 Err(IpcError::FramingError("no transport available".to_string()))
             }
-            _ => Err(IpcError::DisallowedTransport(format!(
-                "protocol {:?} not supported by StdIpcHost",
-                spec.protocol
-            ))),
+            IpcProtocol::Json => {
+                // JSON protocol: send pre-built JSON body, read one line, parse as JSON.
+                let request_body = request.body.as_ref().ok_or_else(|| {
+                    IpcError::FramingError("body not set for json protocol".to_string())
+                })?;
+
+                let timeout = spec
+                    .request_timeout
+                    .map(Duration::from_millis)
+                    .unwrap_or(Duration::from_secs(30));
+
+                let deadline = std::time::Instant::now() + timeout;
+
+                // Pipe transport: use child stdin/stdout
+                if let Some(ref mut child) = session.child {
+                    if let Some(ref mut stdin) = child.stdin {
+                        stdin
+                            .write_all(request_body.as_bytes())
+                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                        stdin
+                            .flush()
+                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    }
+
+                    if let Some(ref mut stdout) = child.stdout {
+                        let mut reader = BufReader::new(stdout);
+                        let mut line = String::new();
+
+                        loop {
+                            if std::time::Instant::now() >= deadline {
+                                return Err(IpcError::Timeout(
+                                    spec.request_timeout.unwrap_or(30000),
+                                ));
+                            }
+
+                            match reader.read_line(&mut line) {
+                                Ok(0) => return Err(IpcError::Crashed),
+                                Ok(_) => {
+                                    let trimmed =
+                                        line.trim_end_matches('\n').trim_end_matches('\r');
+                                    return Ok(trimmed.to_string());
+                                }
+                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                    std::thread::sleep(Duration::from_millis(10));
+                                    continue;
+                                }
+                                Err(e) => return Err(IpcError::FramingError(e.to_string())),
+                            }
+                        }
+                    }
+
+                    return Err(IpcError::FramingError("no stdout pipe".to_string()));
+                }
+
+                // Socket transport: use unix socket
+                #[cfg(unix)]
+                if let Some(ref mut sock) = session.unix_socket {
+                    sock.write_all(request_body.as_bytes())
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    sock.flush()
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+
+                    let mut reader = BufReader::new(sock);
+                    let mut line = String::new();
+
+                    loop {
+                        if std::time::Instant::now() >= deadline {
+                            return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
+                        }
+
+                        match reader.read_line(&mut line) {
+                            Ok(0) => {
+                                return Err(IpcError::FramingError("socket closed".to_string()))
+                            }
+                            Ok(_) => {
+                                let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+                                return Ok(trimmed.to_string());
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                std::thread::sleep(Duration::from_millis(10));
+                                continue;
+                            }
+                            Err(e) => return Err(IpcError::FramingError(e.to_string())),
+                        }
+                    }
+                }
+
+                // Socket transport: use tcp socket
+                if let Some(ref mut sock) = session.tcp_socket {
+                    sock.write_all(request_body.as_bytes())
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    sock.flush()
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+
+                    let mut reader = BufReader::new(sock);
+                    let mut line = String::new();
+
+                    loop {
+                        if std::time::Instant::now() >= deadline {
+                            return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
+                        }
+
+                        match reader.read_line(&mut line) {
+                            Ok(0) => {
+                                return Err(IpcError::FramingError("socket closed".to_string()))
+                            }
+                            Ok(_) => {
+                                let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+                                return Ok(trimmed.to_string());
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                std::thread::sleep(Duration::from_millis(10));
+                                continue;
+                            }
+                            Err(e) => return Err(IpcError::FramingError(e.to_string())),
+                        }
+                    }
+                }
+
+                Err(IpcError::FramingError("no transport available".to_string()))
+            }
+            IpcProtocol::Jsonrpc => {
+                // JSON-RPC 2.0 protocol: send pre-built JSON-RPC request, read response, extract result.
+                let request_body = request.body.as_ref().ok_or_else(|| {
+                    IpcError::FramingError("body not set for jsonrpc protocol".to_string())
+                })?;
+
+                let timeout = spec
+                    .request_timeout
+                    .map(Duration::from_millis)
+                    .unwrap_or(Duration::from_secs(30));
+
+                let deadline = std::time::Instant::now() + timeout;
+
+                // Helper to read one line from a reader
+                let read_response_line = |reader: &mut dyn Read| -> Result<String, IpcError> {
+                    let mut buf_reader = BufReader::new(reader);
+                    let mut line = String::new();
+                    loop {
+                        if std::time::Instant::now() >= deadline {
+                            return Err(IpcError::Timeout(spec.request_timeout.unwrap_or(30000)));
+                        }
+                        match buf_reader.read_line(&mut line) {
+                            Ok(0) => {
+                                return Err(IpcError::FramingError("socket closed".to_string()))
+                            }
+                            Ok(_) => {
+                                let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+                                return Ok(trimmed.to_string());
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                std::thread::sleep(Duration::from_millis(10));
+                                continue;
+                            }
+                            Err(e) => return Err(IpcError::FramingError(e.to_string())),
+                        }
+                    }
+                };
+
+                // Pipe transport: use child stdin/stdout
+                if let Some(ref mut child) = session.child {
+                    if let Some(ref mut stdin) = child.stdin {
+                        stdin
+                            .write_all(request_body.as_bytes())
+                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                        stdin
+                            .flush()
+                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    }
+
+                    if let Some(ref mut stdout) = child.stdout {
+                        let response_line = read_response_line(stdout)?;
+                        return Self::parse_jsonrpc_response(&response_line);
+                    }
+
+                    return Err(IpcError::FramingError("no stdout pipe".to_string()));
+                }
+
+                // Socket transport: use unix socket
+                #[cfg(unix)]
+                if let Some(ref mut sock) = session.unix_socket {
+                    sock.write_all(request_body.as_bytes())
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    sock.flush()
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+
+                    let response_line = read_response_line(sock)?;
+                    return Self::parse_jsonrpc_response(&response_line);
+                }
+
+                // Socket transport: use tcp socket
+                if let Some(ref mut sock) = session.tcp_socket {
+                    sock.write_all(request_body.as_bytes())
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                    sock.flush()
+                        .map_err(|e| IpcError::FramingError(e.to_string()))?;
+
+                    let response_line = read_response_line(sock)?;
+                    return Self::parse_jsonrpc_response(&response_line);
+                }
+
+                Err(IpcError::FramingError("no transport available".to_string()))
+            }
         }
+    }
+
+    /// Parse a JSON-RPC 2.0 response and extract the result or error.
+    fn parse_jsonrpc_response(response_line: &str) -> Result<String, IpcError> {
+        let response: serde_json::Value = serde_json::from_str(response_line)
+            .map_err(|e| IpcError::FramingError(format!("JSON-RPC response parse error: {}", e)))?;
+
+        // Check for JSON-RPC error response
+        if let Some(error_obj) = response.get("error") {
+            if let Some(msg) = error_obj.get("message").and_then(|m| m.as_str()) {
+                let code = error_obj
+                    .get("code")
+                    .and_then(|c| c.as_i64())
+                    .unwrap_or(-32768);
+                return Err(IpcError::FramingError(format!(
+                    "JSON-RPC error {}: {}",
+                    code, msg
+                )));
+            }
+            return Err(IpcError::FramingError(
+                "JSON-RPC error response without message".to_string(),
+            ));
+        }
+
+        // Extract result
+        let result = response.get("result").ok_or_else(|| {
+            IpcError::FramingError("JSON-RPC response missing result field".to_string())
+        })?;
+
+        // Serialize result back to string for handle_ipc_response to parse
+        serde_json::to_string(result).map_err(|e| {
+            IpcError::FramingError(format!("JSON-RPC result serialization error: {}", e))
+        })
     }
 
     /// Make an HTTP request (rule-21 HTTP transport).
@@ -976,9 +1222,10 @@ impl StdIpcHost {
         use std::time::Duration;
 
         // URL is required for HTTP transport
-        let url = spec.url.as_ref().ok_or_else(|| {
-            IpcError::Custom("url is required for HTTP transport".to_string())
-        })?;
+        let url = spec
+            .url
+            .as_ref()
+            .ok_or_else(|| IpcError::Custom("url is required for HTTP transport".to_string()))?;
 
         // Interpolate URL with args ($0, $name placeholders)
         let interpolated_url = Self::interpolate_template(url, &request.args);
@@ -988,7 +1235,11 @@ impl StdIpcHost {
         let is_get_or_head = method == "GET" || method == "HEAD";
 
         // Collect query param names
-        let query_param_names: Vec<&str> = spec.query.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect()).unwrap_or_default();
+        let query_param_names: Vec<&str> = spec
+            .query
+            .as_ref()
+            .map(|v| v.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
 
         // Separate query args from body args
         let query_args: IndexMap<String, &Value> = request
@@ -1011,7 +1262,11 @@ impl StdIpcHost {
                 .iter()
                 .map(|(k, v)| {
                     let rendered = Self::render_value_for_http(v, &spec.mode);
-                    format!("{}={}", urlencoding::encode(k), urlencoding::encode(&rendered))
+                    format!(
+                        "{}={}",
+                        urlencoding::encode(k),
+                        urlencoding::encode(&rendered)
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join("&");
@@ -1025,7 +1280,11 @@ impl StdIpcHost {
             // GET/HEAD: no body regardless of body setting
             None
         } else {
-            match spec.body.as_ref().unwrap_or(&ymx_core::ipc::IpcHttpBody::All) {
+            match spec
+                .body
+                .as_ref()
+                .unwrap_or(&ymx_core::ipc::IpcHttpBody::All)
+            {
                 ymx_core::ipc::IpcHttpBody::Off => None,
                 ymx_core::ipc::IpcHttpBody::All => {
                     if body_args.is_empty() {
@@ -1039,9 +1298,9 @@ impl StdIpcHost {
                     let first_val = body_args.values().next();
                     first_val.map(|v| Self::render_value_for_http(v, &spec.mode))
                 }
-                ymx_core::ipc::IpcHttpBody::Named(name) => {
-                    body_args.get(name).map(|v| Self::render_value_for_http(v, &spec.mode))
-                }
+                ymx_core::ipc::IpcHttpBody::Named(name) => body_args
+                    .get(name)
+                    .map(|v| Self::render_value_for_http(v, &spec.mode)),
             }
         };
 
@@ -1086,9 +1345,9 @@ impl StdIpcHost {
         let status = response.status();
         let ok_spec = spec.ok_status.as_deref().unwrap_or("2xx");
         if !Self::check_ok_status(status, ok_spec) {
-            let body_text = response
-                .into_string()
-                .map_err(|e| IpcError::FramingError(format!("Failed to read response body: {}", e)))?;
+            let body_text = response.into_string().map_err(|e| {
+                IpcError::FramingError(format!("Failed to read response body: {}", e))
+            })?;
             return Err(IpcError::StatusCode(status, body_text));
         }
 
@@ -1145,7 +1404,8 @@ impl StdIpcHost {
                         (k.clone(), rendered)
                     })
                     .collect();
-                serde_json::to_string(&obj).map_err(|e| IpcError::Custom(format!("JSON render error: {}", e)))
+                serde_json::to_string(&obj)
+                    .map_err(|e| IpcError::Custom(format!("JSON render error: {}", e)))
             }
         }
     }
@@ -1204,9 +1464,17 @@ impl IpcHost for StdIpcHost {
         if let Some(ref mut s) = sessions.get_mut(&key).filter(|s| !s.dead) {
             // For socket transport, check if socket is still connected
             #[cfg(unix)]
-            let socket_dead = s.unix_socket.as_ref().map(|s| s.peer_addr().is_err()).unwrap_or(false);
+            let socket_dead = s
+                .unix_socket
+                .as_ref()
+                .map(|s| s.peer_addr().is_err())
+                .unwrap_or(false);
             #[cfg(not(unix))]
-            let socket_dead = s.tcp_socket.as_ref().map(|s| s.peer_addr().is_err()).unwrap_or(false);
+            let socket_dead = s
+                .tcp_socket
+                .as_ref()
+                .map(|s| s.peer_addr().is_err())
+                .unwrap_or(false);
 
             if !socket_dead {
                 match self.do_protocol(s, &request) {

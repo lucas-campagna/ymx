@@ -45,7 +45,9 @@ use crate::diag::{
     Diagnostic, FileId, Span, E002, E003, E005, E006, E008, E009, E010, E011, E016, E018,
 };
 use crate::interp;
-use crate::ipc::{IpcEnvelope, IpcError, IpcMode, IpcParse, IpcRequest, IpcResponse, IpcSpec};
+use crate::ipc::{
+    IpcEnvelope, IpcError, IpcMode, IpcParse, IpcProtocol, IpcRequest, IpcResponse, IpcSpec,
+};
 use crate::ir::{render_f64, render_value, Args, Value};
 use crate::math::{BraceCallHook, CallHook, MathEngine, Scope, ShellCallHook, V1Engine};
 use crate::namespace::{classify, DefClass, Definition};
@@ -2220,9 +2222,6 @@ impl<'a> Resolver<'a> {
         span: Span,
         file: FileId,
     ) -> Result<Value, Diagnostic> {
-        // 3.2: Render call arguments per mode.
-        let rendered_args = self.render_ipc_args(args, spec, span, name, file)?;
-
         // 3.4: Check Options.ipc and allowed_ipc.
         let host = self.opts.ipc.as_ref().ok_or_else(|| Diagnostic {
             file: Some(self.project.files[file.0 as usize].clone()),
@@ -2252,15 +2251,13 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        // 3.3: Build IpcRequest.
-        let request = IpcRequest {
-            args: rendered_args,
-        };
-
         // 3.8: Lifecycle hooks — before_start.
         if let Some(ref cmd) = spec.before_start {
             self.run_lifecycle_hook(cmd, "before_start", span, file, name)?;
         }
+
+        // 3.3: Build IpcRequest with body for json/jsonrpc protocols or on_request.
+        let request = self.build_ipc_request(name, spec, args, span, file)?;
 
         // 3.5: Call host.call().
         let response = host.call(name, spec, request).map_err(|e| {
@@ -2290,6 +2287,163 @@ impl<'a> Resolver<'a> {
 
         // 3.6: Apply response mapping.
         self.handle_ipc_response(&response, spec, span, file, name)
+    }
+
+    /// Build the IpcRequest for an IPC call.
+    ///
+    /// For `on_request`: calls the component with the original args and uses
+    /// its result as the wire format directly (bypassing mode rendering).
+    ///
+    /// For `protocol: json`: serializes args as a JSON object and sends as one line.
+    ///
+    /// For `protocol: jsonrpc`: builds a JSON-RPC 2.0 request object and sends as one line.
+    fn build_ipc_request(
+        &self,
+        name: &str,
+        spec: &IpcSpec,
+        args: &Args,
+        span: Span,
+        file: FileId,
+    ) -> Result<IpcRequest, Diagnostic> {
+        // Handle on_request override: component result becomes wire format directly.
+        if let Some(ref on_req) = spec.on_request {
+            let def =
+                resolve_ref(self.project, on_req, file, self.opts.plain.clone()).map_err(|_| {
+                    Diagnostic {
+                        file: Some(self.project.files[file.0 as usize].clone()),
+                        line: span.line,
+                        col: span.col,
+                        component: Some(name.to_string()),
+                        code: E002,
+                        message: format!("on_request component `{on_req}` not found"),
+                    }
+                })?;
+            let result = self.call(def, args, None)?;
+            // Result must be a JSON Value or String.
+            let body = match result {
+                Value::String(s) => s,
+                other => serde_json::to_string(&other).map_err(|e| Diagnostic {
+                    file: Some(self.project.files[file.0 as usize].clone()),
+                    line: span.line,
+                    col: span.col,
+                    component: Some(name.to_string()),
+                    code: E011,
+                    message: format!("on_request result serialization failed: {}", e),
+                })?,
+            };
+            return Ok(IpcRequest {
+                args: IndexMap::new(),
+                body: Some(body),
+            });
+        }
+
+        // Render args per mode.
+        let rendered_args = self.render_ipc_args(args, spec, span, name, file)?;
+
+        // For json and jsonrpc protocols, build the body here and return early.
+        match spec.protocol {
+            IpcProtocol::Json => {
+                // Serialize args as JSON object - this is the value sent over the wire.
+                let body = serde_json::to_string(&rendered_args).map_err(|e| Diagnostic {
+                    file: Some(self.project.files[file.0 as usize].clone()),
+                    line: span.line,
+                    col: span.col,
+                    component: Some(name.to_string()),
+                    code: E011,
+                    message: format!("JSON serialization failed: {}", e),
+                })?;
+                Ok(IpcRequest {
+                    args: rendered_args,
+                    body: Some(body),
+                })
+            }
+            IpcProtocol::Jsonrpc => {
+                // Build JSON-RPC 2.0 request object.
+                let params = self.jsonrpc_params(&rendered_args);
+                let id = self.next_jsonrpc_id();
+                let jsonrpc_request = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": name,
+                    "params": params,
+                    "id": id
+                });
+                let body = serde_json::to_string(&jsonrpc_request).map_err(|e| Diagnostic {
+                    file: Some(self.project.files[file.0 as usize].clone()),
+                    line: span.line,
+                    col: span.col,
+                    component: Some(name.to_string()),
+                    code: E011,
+                    message: format!("JSON-RPC serialization failed: {}", e),
+                })?;
+                Ok(IpcRequest {
+                    args: rendered_args,
+                    body: Some(body),
+                })
+            }
+            _ => {
+                // For Line/Sentinel/Raw, body is built by do_protocol using template.
+                Ok(IpcRequest {
+                    args: rendered_args,
+                    body: None,
+                })
+            }
+        }
+    }
+
+    /// Build the params field for a JSON-RPC request from rendered args.
+    ///
+    /// Pure positional args → array [v0, v1, ...]
+    /// Pure named args → object {"name": value, ...}
+    /// Mixed args → object with integer keys for positional, string keys for named
+    fn jsonrpc_params(&self, args: &IndexMap<String, Value>) -> serde_json::Value {
+        let positional: Vec<_> = args
+            .iter()
+            .filter(|(k, _)| k.parse::<usize>().is_ok())
+            .map(|(k, v)| (k.parse::<usize>().unwrap(), v))
+            .collect();
+        let named: Vec<_> = args
+            .iter()
+            .filter(|(k, _)| k.parse::<usize>().is_err())
+            .collect();
+
+        let has_positional = !positional.is_empty();
+        let has_named = !named.is_empty();
+
+        if has_positional && !has_named {
+            // Pure positional: array
+            let mut arr: Vec<serde_json::Value> = vec![serde_json::Value::Null; positional.len()];
+            for (idx, v) in positional {
+                arr[idx] = value_to_json(v);
+            }
+            serde_json::Value::Array(arr)
+        } else if has_named && !has_positional {
+            // Pure named: object
+            let mut obj = serde_json::Map::new();
+            for (k, v) in named {
+                obj.insert(k.clone(), value_to_json(v));
+            }
+            serde_json::Value::Object(obj)
+        } else if has_positional && has_named {
+            // Mixed: object with integer keys for positional, string keys for named
+            let mut obj = serde_json::Map::new();
+            for (idx, v) in positional {
+                obj.insert(idx.to_string(), value_to_json(v));
+            }
+            for (k, v) in named {
+                obj.insert(k.clone(), value_to_json(v));
+            }
+            serde_json::Value::Object(obj)
+        } else {
+            // No args: empty object
+            serde_json::Value::Object(serde_json::Map::new())
+        }
+    }
+
+    /// Get the next JSON-RPC request ID. Thread-safe via interior mutability.
+    fn next_jsonrpc_id(&self) -> i64 {
+        use std::sync::atomic::{AtomicI64, Ordering};
+        static COUNTER: AtomicI64 = AtomicI64::new(1);
+        COUNTER.fetch_add(1, Ordering::SeqCst)
     }
 
     /// Render IPC call arguments per the spec's `mode`.
@@ -3055,6 +3209,28 @@ fn yaml_to_value(yaml: &yaml_rust2::Yaml) -> Value {
 }
 
 /// Convert a serde_json `Value` to a YMX `Value`.
+/// Convert a YMX Value to a serde_json Value.
+fn value_to_json(value: &Value) -> serde_json::Value {
+    use serde_json::Value as JsonValue;
+    match value {
+        Value::Null => JsonValue::Null,
+        Value::Bool(b) => JsonValue::Bool(*b),
+        Value::Int(i) => JsonValue::Number(serde_json::Number::from(*i)),
+        Value::Float(f) => serde_json::Number::from_f64(*f)
+            .map(JsonValue::Number)
+            .unwrap_or(JsonValue::Null),
+        Value::String(s) => JsonValue::String(s.clone()),
+        Value::Array(arr) => JsonValue::Array(arr.iter().map(value_to_json).collect()),
+        Value::Object(m) => {
+            let mut obj = serde_json::Map::new();
+            for (k, v) in m {
+                obj.insert(k.clone(), value_to_json(v));
+            }
+            JsonValue::Object(obj)
+        }
+    }
+}
+
 fn json_to_value(json: &serde_json::Value) -> Value {
     use serde_json::Value as JsonValue;
     match json {
