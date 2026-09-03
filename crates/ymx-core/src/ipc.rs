@@ -25,6 +25,7 @@ pub enum IpcRunner {
 pub enum IpcTransport {
     Pipe,
     Socket,
+    #[cfg(feature = "http")]
     Http,
 }
 
@@ -63,6 +64,7 @@ pub enum IpcStderr {
     Fail,
 }
 
+#[cfg(feature = "http")]
 #[derive(Debug, Clone, PartialEq)]
 pub enum IpcHttpBody {
     All,
@@ -108,11 +110,17 @@ pub struct IpcSpec {
     pub before_stop: Option<String>,
     pub after_stop: Option<String>,
     pub prelude: Option<String>,
+    #[cfg(feature = "http")]
     pub url: Option<String>,
+    #[cfg(feature = "http")]
     pub method: Option<String>,
+    #[cfg(feature = "http")]
     pub headers: Option<IndexMap<String, Value>>,
+    #[cfg(feature = "http")]
     pub query: Option<Vec<String>>,
+    #[cfg(feature = "http")]
     pub body: Option<IpcHttpBody>,
+    #[cfg(feature = "http")]
     pub ok_status: Option<String>,
     pub addr: Option<String>,
     pub path: Option<String>,
@@ -154,11 +162,17 @@ impl Default for IpcSpec {
             before_stop: None,
             after_stop: None,
             prelude: None,
+            #[cfg(feature = "http")]
             url: None,
+            #[cfg(feature = "http")]
             method: None,
+            #[cfg(feature = "http")]
             headers: None,
+            #[cfg(feature = "http")]
             query: None,
+            #[cfg(feature = "http")]
             body: None,
+            #[cfg(feature = "http")]
             ok_status: None,
             addr: None,
             path: None,
@@ -266,6 +280,7 @@ fn parse_transport(v: &Value) -> Result<IpcTransport, String> {
     match string_value(v) {
         Some("pipe") => Ok(IpcTransport::Pipe),
         Some("socket") => Ok(IpcTransport::Socket),
+        #[cfg(feature = "http")]
         Some("http") => Ok(IpcTransport::Http),
         Some(other) => Err(format!("unknown transport '{other}'")),
         None => Err("transport must be a string".to_string()),
@@ -331,6 +346,7 @@ fn parse_restart(v: &Value) -> Result<IpcRestart, String> {
     }
 }
 
+#[cfg(feature = "http")]
 fn parse_http_body(v: &Value) -> Result<IpcHttpBody, String> {
     match v {
         Value::String(s) => match s.as_str() {
@@ -491,6 +507,7 @@ fn optional_map(
     }
 }
 
+#[cfg(feature = "http")]
 fn optional_string_vec(
     map: &IndexMap<String, Value>,
     key: &str,
@@ -734,6 +751,7 @@ pub fn parse_ipc_spec(value: &Value) -> Result<IpcSpec, Vec<Diagnostic>> {
         })?
         .unwrap_or(IpcRestart::Never);
 
+    #[cfg(feature = "http")]
     let body = map
         .get("body")
         .map(parse_http_body)
@@ -780,10 +798,15 @@ pub fn parse_ipc_spec(value: &Value) -> Result<IpcSpec, Vec<Diagnostic>> {
     let before_stop = optional_string(map, "before_stop")?;
     let after_stop = optional_string(map, "after_stop")?;
     let prelude = optional_string(map, "prelude")?;
+    #[cfg(feature = "http")]
     let url = optional_string(map, "url")?;
+    #[cfg(feature = "http")]
     let method = optional_string(map, "method")?;
+    #[cfg(feature = "http")]
     let headers = optional_map(map, "headers")?;
+    #[cfg(feature = "http")]
     let query = optional_string_vec(map, "query")?;
+    #[cfg(feature = "http")]
     let ok_status = optional_string(map, "ok_status")?;
     let addr = optional_string(map, "addr")?;
     let path = optional_string(map, "path")?;
@@ -821,11 +844,17 @@ pub fn parse_ipc_spec(value: &Value) -> Result<IpcSpec, Vec<Diagnostic>> {
         before_stop,
         after_stop,
         prelude,
+        #[cfg(feature = "http")]
         url,
+        #[cfg(feature = "http")]
         method,
+        #[cfg(feature = "http")]
         headers,
+        #[cfg(feature = "http")]
         query,
+        #[cfg(feature = "http")]
         body,
+        #[cfg(feature = "http")]
         ok_status,
         addr,
         path,

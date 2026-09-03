@@ -26,8 +26,9 @@ ignore.workspace = true
 man = ["man/ymx.1"]
 
 [features]
+default = ["watch", "http"]
+http = ["ymx-lib/http"]
 pdf-system  = ["headless_chrome"]
 pdf-bundled = ["headless_chrome/fetch"]
 watch = ["notify", "ctrlc"]
-default = ["watch"]
 

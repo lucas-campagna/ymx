@@ -1284,6 +1284,7 @@ impl StdIpcHost {
     /// Make an HTTP request (rule-21 HTTP transport).
     ///
     /// Stateless: no session management, no lifecycle hooks, no restart policy.
+    #[cfg(feature = "http")]
     fn call_http(&self, spec: &IpcSpec, request: &IpcRequest) -> Result<String, IpcError> {
         use std::time::Duration;
 
@@ -1426,6 +1427,7 @@ impl StdIpcHost {
     }
 
     /// Render a single Value for HTTP (URL query or body).
+    #[cfg(feature = "http")]
     fn render_value_for_http(value: &Value, mode: &ymx_core::ipc::IpcMode) -> String {
         match value {
             Value::String(s) => s.clone(),
@@ -1441,6 +1443,7 @@ impl StdIpcHost {
     }
 
     /// Render args for HTTP request body.
+    #[cfg(feature = "http")]
     fn render_args_for_body(
         args: &IndexMap<String, &Value>,
         mode: &ymx_core::ipc::IpcMode,
@@ -1477,6 +1480,7 @@ impl StdIpcHost {
     }
 
     /// Check if HTTP status code matches the ok specification.
+    #[cfg(feature = "http")]
     fn check_ok_status(status: u16, ok_spec: &str) -> bool {
         match ok_spec {
             "2xx" => (200..=299).contains(&status),
@@ -1504,6 +1508,7 @@ impl IpcHost for StdIpcHost {
         request: IpcRequest,
     ) -> Result<IpcResponse, IpcError> {
         // Handle HTTP transport directly (stateless, no session management)
+        #[cfg(feature = "http")]
         if matches!(spec.transport, ymx_core::ipc::IpcTransport::Http) {
             let output = self.call_http(spec, &request)?;
             return Ok(IpcResponse {

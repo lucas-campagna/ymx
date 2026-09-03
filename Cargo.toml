@@ -19,7 +19,7 @@ regex = "1"
 ymx-core = { path = "crates/ymx-core" }
 ymx-config = { path = "crates/ymx-config" }
 ymx-test = { path = "crates/ymx-test" }
-ymx-lib = { path = "crates/ymx-lib" }
+ymx-lib = { path = "crates/ymx-lib", default-features = false }
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage,coverage_nightly)'] }

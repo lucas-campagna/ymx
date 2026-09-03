@@ -2237,6 +2237,7 @@ impl<'a> Resolver<'a> {
         let transport_name = match spec.transport {
             crate::ipc::IpcTransport::Pipe => "pipe",
             crate::ipc::IpcTransport::Socket => "socket",
+            #[cfg(feature = "http")]
             crate::ipc::IpcTransport::Http => "http",
         };
         if let Some(ref allowed) = self.opts.allowed_ipc {
