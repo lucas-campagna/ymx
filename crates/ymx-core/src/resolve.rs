@@ -4488,11 +4488,14 @@ mod tests {
 
     #[test]
     fn non_call_site_strings_stay_interpolated() {
-        let p = project_with(&[("main.yml", "main: \"$x(1)!\"\n")]);
+        let p = project_with(&[(
+            "main.yml",
+            "x: \"$0\"\nmain: \"$x(1)!\"\n",
+        )]);
         assert_eq!(
-            compile_ok(&p, "main", &named(&[("x", Value::int(5))])),
-            Value::string("5(1)!"),
-            "trailing text after the parens is not a call-site"
+            compile_ok(&p, "main", &Args::None),
+            Value::string("1!"),
+            "$x(1) is a Call to component x with arg 1; trailing ! is literal text"
         );
         let p = project_with(&[("main.yml", "main: \"$$box(1)\"\n")]);
         let d = compile_err(&p, "main", &Args::None);

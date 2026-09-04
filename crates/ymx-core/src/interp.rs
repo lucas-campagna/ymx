@@ -60,7 +60,7 @@ pub fn scan_shell(src: &str, base: Span) -> Result<Vec<Segment>, Diagnostic> {
     scan_impl(src, base, true)
 }
 
-fn scan_impl(src: &str, base: Span, shell_calls: bool) -> Result<Vec<Segment>, Diagnostic> {
+fn scan_impl(src: &str, base: Span, _shell_calls: bool) -> Result<Vec<Segment>, Diagnostic> {
     let mut segments: Vec<Segment> = Vec::new();
     let mut text = String::new();
     let mut chars = src.char_indices().peekable();
@@ -130,29 +130,25 @@ fn scan_impl(src: &str, base: Span, shell_calls: bool) -> Result<Vec<Segment>, D
                             let rest = &src[start..];
                             match callsite::parse_prefix(rest) {
                                 Ok(Some((call, consumed))) => {
-                                    let is_shell_call = shell_calls;
-                                    let has_named_args = call.args.iter().any(|a| a.key.is_some());
-                                    if is_shell_call || has_named_args {
-                                        let span = span_at(base, src, start);
-                                        debug_assert_eq!(call.name, name);
-                                        let args_start = call.name.len() + 2;
-                                        let args_end = consumed.saturating_sub(1);
-                                        let args = rest[args_start..args_end].to_string();
-                                        let target = start + consumed;
-                                        while let Some(&(next_idx, _)) = chars.peek() {
-                                            if next_idx < target {
-                                                chars.next();
-                                            } else {
-                                                break;
-                                            }
+                                    let span = span_at(base, src, start);
+                                    debug_assert_eq!(call.name, name);
+                                    let args_start = call.name.len() + 2;
+                                    let args_end = consumed.saturating_sub(1);
+                                    let args = rest[args_start..args_end].to_string();
+                                    let target = start + consumed;
+                                    while let Some(&(next_idx, _)) = chars.peek() {
+                                        if next_idx < target {
+                                            chars.next();
+                                        } else {
+                                            break;
                                         }
-                                        segments.push(Segment::Call {
-                                            name: call.name,
-                                            args,
-                                            span,
-                                        });
-                                        continue;
                                     }
+                                    segments.push(Segment::Call {
+                                        name: call.name,
+                                        args,
+                                        span,
+                                    });
+                                    continue;
                                 }
                                 Ok(None) => {}
                                 Err((code, message)) => {
@@ -1291,6 +1287,59 @@ mod tests {
         assert_eq!(
             resolve_shell(&scan_shell("x $noop()", SPAN).unwrap(), &scope, &FakeEngine).unwrap(),
             Value::string("x 0")
+        );
+    }
+
+    #[test]
+    fn non_shell_scan_call_empty_args() {
+        let segs = scan("2 $b()", SPAN).unwrap();
+        assert_eq!(
+            segs,
+            vec![
+                Segment::Text("2 ".to_string()),
+                Segment::Call {
+                    name: "b".to_string(),
+                    args: "".to_string(),
+                    span: Span { line: 1, col: 3 },
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn non_shell_scan_call_with_trailing_text() {
+        let segs = scan("$b() hello", SPAN).unwrap();
+        assert_eq!(
+            segs,
+            vec![
+                Segment::Call {
+                    name: "b".to_string(),
+                    args: "".to_string(),
+                    span: Span { line: 1, col: 1 },
+                },
+                Segment::Text(" hello".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn non_shell_scan_two_consecutive_calls() {
+        let segs = scan("$a() $b()", SPAN).unwrap();
+        assert_eq!(
+            segs,
+            vec![
+                Segment::Call {
+                    name: "a".to_string(),
+                    args: "".to_string(),
+                    span: Span { line: 1, col: 1 },
+                },
+                Segment::Text(" ".to_string()),
+                Segment::Call {
+                    name: "b".to_string(),
+                    args: "".to_string(),
+                    span: Span { line: 1, col: 6 },
+                },
+            ]
         );
     }
 }
