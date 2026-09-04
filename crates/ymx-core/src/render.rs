@@ -147,13 +147,19 @@ fn render_scalar(v: &Value) -> String {
 
 /// Render an object with a `from` key as an HTML element.
 fn render_tag(map: &IndexMap<String, Value>) -> String {
-    let tag = map
+    let raw_tag = map
         .get("from")
         .and_then(|v| match v {
             Value::String(s) => Some(s.as_str()),
             _ => None,
         })
         .unwrap_or("div");
+
+    let tag = if raw_tag.starts_with('<') && raw_tag.ends_with('>') && raw_tag.len() > 2 {
+        &raw_tag[1..raw_tag.len() - 1]
+    } else {
+        raw_tag
+    };
 
     let mut attrs = render_attrs(map);
 
