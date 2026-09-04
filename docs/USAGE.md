@@ -259,11 +259,204 @@ let opts = extract_options(&project, &CliOverrides::default_for_tests()).unwrap(
 let tests = parse_tests(&project).unwrap();
 let results = run_tests(&project, &opts);
 
-let failed: Vec<_> = results.iter().filter(|r| !r.passed).collect();
-if !failed.is_empty() {
-    for result in &failed {
-        eprintln!("FAIL: {} — expected {:?}", result.test.target, result.test.expected);
+    let failed: Vec<_> = results.iter().filter(|r| !r.passed).collect();
+    if !failed.is_empty() {
+        for result in &failed {
+            eprintln!("FAIL: {} — expected {:?}", result.test.target, result.test.expected);
+        }
+        std::process::exit(1);
     }
-    std::process::exit(1);
-}
 ```
+
+## 14. External components with `_use`
+
+The `_use` directive normally imports components from other `.yml` files. When the RHS is a **mapping** (not a string), it declares an **IPC component** — an external endpoint backed by a subprocess, socket, or HTTP service. IPC declarations are validated at load time; invalid config emits `E010`.
+
+> **Restricting transports.** Set `_ymx.allowed_ipc` to a list of transport names (e.g. `[pipe, http]`) to block others. Using a disallowed transport emits `E018`.
+
+See [PRD Rule 21](PRD/15-rules-19-22.md) for the full specification.
+
+### 14.1 Basic syntax
+
+```yml
+_use:
+  alias:
+    transport: pipe | socket | http
+    cmd: [...]          # required unless external: true
+    protocol: line      # default
+    mode: text          # default
+    ...                 # additional config fields
+```
+
+The alias becomes a regular component. Calling it sends a request to the external endpoint and returns the response.
+
+### 14.2 Simple example — Python REPL
+
+Spawn a Python process that reads one line, evaluates it, and prints the result as JSON:
+
+```yml
+_use:
+  py:
+    cmd: [python, -u, driver.py]
+    transport: pipe
+    protocol: line
+    mode: json
+
+main:
+  py: print(1 + 2)
+# → py called with $0="print(1 + 2)" → driver returns "3\n" → parsed as YAML → 3
+```
+
+With `mode: json`, all call arguments are serialized as a JSON object (positional args become integer keys `{0: v0, ...}`). The default `mode: text` sends only `$0` as a string.
+
+### 14.3 Persistent shell session (coproc)
+
+Use `coproc` + `request_template` to keep a process alive across calls. The `sentinel` protocol reads until a delimiter, so each call gets a clean response:
+
+```yml
+_use:
+  sh:
+    cmd: [bash]
+    transport: pipe
+    protocol: sentinel
+    request_template: "{$0}\n__DONE__\n"
+    reply_until: '^__DONE__$'
+
+main:
+  sh: echo session state persists
+# → first call spawns bash; subsequent calls reuse the same process
+```
+
+The process is spawned lazily on first call and stays alive for the session lifetime. In `--watch` mode, sessions survive across recompiles.
+
+### 14.4 HTTP/REST
+
+For HTTP endpoints, set `transport: http`. The `url` supports `$0`/`$name` interpolation for path parameters:
+
+```yml
+_use:
+  user:
+    transport: http
+    method: GET
+    url: http://api.example.com/users/{$0}
+    query: [verbose]
+    headers: {Accept: application/json}
+
+main:
+  user: 42
+# → GET /users/42?verbose=…
+```
+
+`query` lists named args that go into the query string. `body` controls which args fill the request body (default: all args for POST/PUT).
+
+### 14.5 Shell commands with `shell: true`
+
+When `shell: true`, the string `cmd` is run via `sh -c`. Combined with `request_template`, the template is appended to the command string (not sent to stdin):
+
+```yml
+_use:
+  curl_client:
+    cmd: curl
+    shell: true
+    transport: pipe
+    protocol: raw
+    request_template: "-s http://localhost:8000/$0"
+
+main:
+  curl_client: /
+# → shell executes: curl -s http://localhost:8000/
+```
+
+### 14.6 Configuration reference
+
+All fields are optional unless noted.
+
+**Runner**
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `cmd` | string \| list | — | Required unless `external: true`. List = argv, string = whitespace-split (or shell). |
+| `shell` | bool | `false` | Run string cmd via `sh -c`. |
+| `cwd` | string | inherit | Working directory. |
+| `env` | map | inherit | Merged over parent env. |
+| `external` | bool | `false` | `true` = don't spawn; connect only (socket/http). |
+| `restart` | `never` \| `on-failure` | `never` | Auto-respawn on call failure. |
+| `max_restarts` | int | `3` | Cap for `on-failure`. |
+| `lazy` | bool | `true` | `false` = spawn at compile start. |
+| `stop_signal` | `term` \| `kill` | `term` | Signal on session teardown. |
+| `stop_message` | string | — | Sent on stdin before signaling. |
+| `stop_timeout` | ms | `2000` | Wait after `stop_message`. |
+| `coproc` | bool | — | Enable persistent session. |
+
+**Transport**
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `transport` | `pipe` \| `socket` \| `http` | `pipe` | `pipe` = stdin/stdout; `socket` = unix/tcp; `http` = request/response. |
+| `addr` / `path` | string | — | For `socket`: unix path or `host:port`. |
+| `url` | string | — | For `http`: URL template with `$0`/`$name` interpolation. |
+| `method` | string | `POST` | For `http`. |
+| `headers` | map | — | For `http`. |
+| `read_from` | `stdout` \| `stderr` | `stdout` | Pipe transport only. |
+
+**Protocol**
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `protocol` | `line` \| `sentinel` \| `raw` \| `json` \| `jsonrpc` | `line` | Framing strategy. |
+| `request_template` | string | `"{$0}\n"` | Outgoing message wrapper; `$0`/`$name` interpolated. |
+| `reply_until` | regex | — | For `sentinel`: read until this matches. |
+
+**Request / Response**
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `mode` | `text` \| `json` | `text` | `text` = send `$0` as string; `json` = serialize all args. |
+| `on_request` | component name | — | Override: call this with args; its result is sent. |
+| `parse` | `none` \| `yaml` \| `json` | `yaml` | How the reply string becomes a value. |
+| `trim` | bool | `true` | Strip trailing whitespace before parsing. |
+| `error_pattern` | regex | — | Reply matching this → `E018`. |
+| `envelope` | `payload` \| `full` | `payload` | `full` → `{stdout, stderr}`. |
+| `stderr` | `ignore` \| `capture` \| `fail` | `ignore` | Pipe transport only. |
+| `on_response` | component name | — | Transform raw reply before returning. |
+| `on_error` | component name | — | Called on failure; may return a fallback value. |
+
+**Timeouts**
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `startup_timeout` | ms | `10000` | Max wait for `ready` after spawn. |
+| `ready` | string/regex | — | Must appear on stdout/stderr before first request. |
+| `request_timeout` | ms | `30000` | Per call; `0` = unlimited. |
+
+**Lifecycle hooks**
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `before_start` | shell command | — | Run before spawn (e.g. `docker build`). |
+| `after_start` | shell command | — | Run after spawn + ready. |
+| `before_stop` | shell command | — | Run before session teardown. |
+| `after_stop` | shell command | — | Run after session teardown. |
+| `prelude` | string | — | Sent to process immediately after spawn. |
+
+### 14.7 Testing IPC components
+
+IPC components work with `_test` blocks just like regular components:
+
+```yml
+_use:
+  py:
+    cmd: [python, -u, driver.py]
+    transport: pipe
+    protocol: line
+    mode: json
+
+add: ${x + y}
+
+_test:
+  - add:
+      args: {x: 3, y: 4}
+      result: 7
+```
+
+> **Note:** IPC calls execute at compile time, so tests that hit real external services may be slow or require network access. Use `ymx --test .` to run them.
