@@ -43,6 +43,11 @@ ymx a.yml -c 'main: $comp2(x=2,y=3)\ncomp1$: a * b'  # → 6 (\n expanded to new
 - `--plain`: promote sub-namespace components **and** templates into the global namespace (equivalent to `_ymx.plain: true`).
 - `--plain-template`: promote sub-namespace **templates only** into the global namespace (equivalent to `_ymx.plain: template`). `--plain` and `--plain-template` are mutually exclusive (CLI arg error). Each overrides the entry-file `_ymx.plain` value per the precedence rule.
 - `--format <json|diagnostics>`: output style (v1: `json`; `diagnostics` lists errors only).
+- `--errors`: equivalent to `--format diagnostics` but can be combined with other flags. When set, only errors are printed to stderr; no JSON on stdout.
+- `--no-exec`: disable shell execution entirely (sets `opts.executor = None`). Calling `$sh{...}` or `$pw{...}` then emits E016.
+- `--allowed-backends <list>`: comma-separated list of allowed shell backends (overrides `_ymx.allowed_backends`). Calling a non-listed backend emits E016.
+- `--no-ipc`: disable IPC entirely (sets `opts.ipc = None`). Calling an IPC component then emits E018.
+- `--allowed-ipc <list>`: comma-separated list of allowed IPC transports (overrides `_ymx.allowed_ipc`). Using a non-listed transport emits E018.
 - `--test`: run inline `_test` cases (via `ymx-test`) instead of compiling the entry. When `path` is omitted it defaults to `.` (the current directory). When `path` is a **directory** (or `.`), recursively search for `.yml`/`.yaml` files up to depth 10; each file is its own independent project (its parent directory is the project root). If the max search depth is reached while walking, emit `warning: max search depth (10) exceeded in <path>; skipping <folder>` and continue. Files and directories matching `.gitignore` patterns are skipped. Aggregate results across all projects; exit non-zero if any test fails. When `path` is a **file**, run tests for that single project (the existing behaviour). `--test` does not read stdin.
 - `-c, --code <yml>`: inline YAML or JSON component definitions. Accepts both YAML and JSON formats (auto-detected, same as stdin args). Four usage modes:
   - **No file, `-c` only**: the inline content is the script; entry is `main.main` (or `--entry` override). Equivalent to `cat script.yml | ymx` but without a file on disk.

@@ -1,12 +1,12 @@
-.TH YMX 1 "2026-08-18" "0.1.0" "ymx manual"
+.TH YMX 1 "2026-09-04" "1.45" "ymx manual"
 .SH NAME
-ymx \\- YAML \\(r JSON compiler for the YMX language (v1)
+ymx \\- YAML \\(r JSON compiler for the YMX language
 .SH SYNOPSIS
 .B ymx
 [path] [flags]
 .SH DESCRIPTION
 .B ymx
-is a YAML parser and compiler for the YMX language (v1). It reads a YAML project
+is a YAML parser and compiler for the YMX language. It reads a YAML project
 (a directory of .yml/.yaml files) and compiles the requested entry component to
 JSON output.
 
@@ -17,8 +17,81 @@ Components are callable with arguments, support templates (components whose
 names start with $), and can reference each other via the \fBfrom\fR property
 or inline $\fIcomp\fR(...) calls.
 
-The compiler applies rules 1\\(en16 of the YMX language. The output is a
+A project can span multiple files via the \fB_use\fR directive, which imports
+components from other YAML files. Imported components become available in the
+importing file's namespace, and transitively re-exported imports are available
+to callers of the importing file.
+
+The compiler applies rules 1\\(en22 of the YMX language. The output is a
 JSON-encoded value (an object, array, string, number, bool, or null).
+
+.SH "MULTI-FILE PROJECTS"
+
+The \fB_use\fR directive controls which components are imported from other files
+in the project. It is placed at the top level of a YAML document (before any
+component definitions). Three forms are supported:
+
+.SS "Bare wildcard (_use: *)"
+The simplest form. When no \fB_use\fR is present, all sibling and sub-directory
+files are automatically imported (recursive wildcard). Explicit \fB_use: *\fR
+has the same effect.
+.PP
+.nf
+    # main.yml \\(em imports everything from the project
+    _use: *
+    greeting: "Hello, $name"
+.fi
+
+.SS "Wildcard object (_use: {\"*\": \"file\"})"
+Imports all public components from a specific file. The key \fB*\fR is a
+wildcard matching all components in the named file.
+.PP
+.nf
+    # main.yml \\(em imports all components from lib/utils.yml
+    _use:
+      "*": lib/utils
+    greeting: $format_name($name)
+.fi
+
+.SS "Named import (_use: {alias: \"file.component\"})"
+Imports a specific component under an alias. The alias becomes the local name
+for the imported component.
+.PP
+.nf
+    # main.yml \\(em imports 'helper' from lib/utils.yml as 'fmt'
+    _use:
+      fmt: lib/utils.helper
+    result: $fmt($input)
+.fi
+
+.SS "Transitive re-export"
+When file A imports file B, and file B itself has \fB_use\fR directives, B's
+own imports are processed first. Names imported into B are then re-exportable
+to A (and to callers of A). This makes import chains compose naturally.
+
+.SS "File-scoped components"
+Components whose names start with \fB_\fR (underscore) are file-scoped and
+cannot be imported by other files. Attempting to reference them from outside
+their document raises \fBE005\fR.
+
+.SS "Cycle detection"
+Circular \fB_use\fR chains are detected at load time and rejected with \fBE001\fR.
+
+.SS "IPC declarations in _use"
+When the right-hand side of a \fB_use\fR mapping entry is a mapping (not a
+string), it declares an IPC component (rule 21). The mapping specifies the
+external runner, transport, and protocol configuration. See the \fIRule 21\fR
+section for details.
+.PP
+.nf
+    _use:
+      weather:
+        runner: http
+        url: "https://api.example.com/weather"
+        method: GET
+        response:
+          path: "$.data"
+.fi
 
 .SH OPTIONS
 
@@ -64,8 +137,25 @@ foo\fR compiles component \fBfoo\fR from \fBmain.yml\fR, with entry path
 .B -m, --max-depth <n>
 Limit on template/call recursion (default: 256). Each recursive operation
 (inline $\fIcomp\fR(...) call, math \fIcomp\fR(...) call, bare $name
-component fallback, template step, \fBfrom\fR dispatch) is checked against
-this cap. Exceeding it raises \fBE008\fR.
+component fallback, template step, \fBfrom\fR dispatch, brace call
+(\fB$name{...}\fR), and IPC call) is checked against this cap. Exceeding
+it raises \fBE008\fR.
+.TP
+.B -c, --code <yml>
+Inline YAML/JSON component definition. The value is parsed as a YAML document
+whose top-level keys become components. Can be repeated; later \fB-c\fR values
+override earlier ones for the same component name. Example:
+\fBymx -c 'greeting: "Hello"' main.yml\fR.
+.TP
+.B --plain
+Promote all sub-namespace names (templates and regular components) into the
+global namespace. Mutually exclusive with \fB--plain-template\fR. Overrides
+\fB_ymx.plain\fR in the entry file.
+.TP
+.B --plain-template
+Promote only template names (those starting with \fB$\fR) into the global
+namespace. Regular components remain namespaced. Mutually exclusive with
+\fB--plain\fR. Overrides \fB_ymx.plain\fR in the entry file.
 .TP
 .B -f, --format <json|diagnostics|compact>
 Output format. \fBjson\fR (default) emits the compiled JSON value.
@@ -75,6 +165,27 @@ no JSON on success; on any diagnostic it lists each error to stderr.
 .B --pretty
 Pretty-print JSON output. Implies \fB--format json\fR and forces
 indentation. Mutually exclusive with \fB--format compact\fR.
+
+.SS "Execution and IPC"
+
+.TP
+.B --no-exec
+Disable shell execution (rule 19). Any \fB$sh{...}\fR or \fB$pw{...}\fR
+command raises \fBE016\fR. Useful in sandboxed or CI environments.
+.TP
+.B --allowed-backends <list>
+Comma-separated list of allowed shell backends (default: all). Only the
+listed backends may be used in \fB$sh{...}\fR / \fB$pw{...}\fR commands.
+Unlisted backends raise \fBE016\fR.
+.TP
+.B --no-ipc
+Disable IPC components (rule 21). Any IPC call raises \fBE018\fR. Useful
+in environments without network access.
+.TP
+.B --allowed-ipc <list>
+Comma-separated list of allowed IPC runner names (default: all). Only the
+listed runners may be used in IPC declarations. Unlisted runners raise
+\fBE018\fR.
 
 .SS "Output and test"
 
@@ -92,6 +203,10 @@ blocks in every subdirectory containing .yml/.yaml files (each is an
 independent project); aggregate results across all projects and exit non-zero
 if any test fails. When \fBpath\fR is a file, run tests for that single
 project.
+.TP
+.B --errors
+Show only errors. Suppresses successful JSON output; diagnostic messages are
+written to stderr. Exit code is 0 only if no diagnostics were produced.
 
 .SS "Help"
 
@@ -104,7 +219,7 @@ available in the man page: \fBman ymx\fR.
 The following rules define how YMX parses and resolves YAML into a JSON value.
 Each rule is applied in order during compilation.
 
-.SS "Rule 1 — Top-level keys are components"
+.SS "Rule 1 \\(em Top-level keys are components"
 Every top-level key-value pair in a document defines a component.
 The key is the component name; the value is its body.
 .PP
@@ -116,7 +231,7 @@ The key is the component name; the value is its body.
 .PP
 Here \fBuser\fR is a component with two properties.
 
-.SS "Rule 2 — Components are callable with arguments"
+.SS "Rule 2 \\(em Components are callable with arguments"
 Arguments passed to a component are referenced inside its body by name
 prefixed with \fB$\fR.
 .PP
@@ -133,7 +248,7 @@ Bare \fB$name\fR (no parentheses) resolves in order: (a) a named argument in
 scope, (b) a regular component of that name called with no args, (c) error
 (rule 10).
 
-.SS "Rule 3 — Inline call syntax ($comp(...))"
+.SS "Rule 3 \\(em Inline call syntax ($comp(...))"
 A \fB$name(...)\fR expression inside a value calls another component in place.
 Positional and named arguments may be mixed; a positional arg may not follow a
 named one (\fBE012\fR).
@@ -152,7 +267,7 @@ Calling \fBa\fR returns \fB\"12 + 34\"\fR.
 .PP
 Calling \fBa\fR returns \fB408\fR.
 
-.SS "Rule 4 — Positional arguments ($0, $1, ...)"
+.SS "Rule 4 \\(em Positional arguments ($0, $1, ...)"
 When calling a component with \fB$\fR, unnamed arguments bind to positional
 slots \fB$0\fR, \fB$1\fR, \fB$2\fR, ...
 .PP
@@ -166,7 +281,7 @@ Calling \fBa\fR returns \fB\"12 + 34\"\fR.
 Integer YAML keys denote positional slots: \fB0:\fR sets \fB$0\fR,
 \fB1:\fR sets \fB$1\fR, etc.
 
-.SS "Rule 5 — Template chaining ($a \\(-> $$a \\(-> $$$a)"
+.SS "Rule 5 \\(em Template chaining ($a \\(-> $$a \\(-> $$$a)"
 A component whose name starts with \fB$\fR is a template and is applied
 automatically after its matching (non-\fB$\fR) component is called.
 Templates can be chained indefinitely: \fB$a\fR, \fB$$a\fR, \fB$$$a\fR, ...
@@ -198,7 +313,7 @@ Templates are namespaced by default: \fB$box\fR in \fBsubdir/\fR applies only
 to components in the \fBsubdir\fR namespace. Use \fB_ymx.plain: true\fR
 to promote sub-namespace names globally.
 
-.SS "Rule 6 — from property for explicit dispatch"
+.SS "Rule 6 \\(em from property for explicit dispatch"
 The \fBfrom\fR property references another component by name, which is called
 with the current component's remaining properties as arguments.
 Override the keyword with \fB--from-keyword\fR or \fB_ymx.from_keyword\fR.
@@ -216,7 +331,7 @@ Calling \fBCompA\fR returns \fB\"12 + 34\"\fR.
 If \fBfrom\fR does not resolve to a valid regular component, it is treated as
 a plain property (no error).
 
-.SS "Rule 7 — Math expressions in call arguments"
+.SS "Rule 7 \\(em Math expressions in call arguments"
 \fB${...}\fR evaluates its contents as a math expression.
 Component calls inside math use \fBname(...)\fR syntax (no leading \fB$\fR).
 Math operators: \fB+\fR (add/concat), \fB-\fR, \fB*\\fR, \fB/\\fR (float),
@@ -245,7 +360,7 @@ Identifiers inside \fB${...}\fR (without \fB$\fR) are in-scope arguments or
 Use \fBname(...)\fR (no \fB$\fR) to call a component; dotted paths allowed
 (e.g. \fBsubdir.comp(...)\fR).
 
-.SS "Rule 8 — Shortcut: property name matching a component calls it"
+.SS "Rule 8 \\(em Shortcut: property name matching a component calls it"
 If a component defines a property whose name matches another component, that
 property value is passed as \fB$0\fR to the matched component, and the
 remaining properties are passed as named arguments.
@@ -263,7 +378,7 @@ Calling \fBa\fR returns \fB[1, 3, 5]\fR.
 Shortcut fires during step 3 of rule 11. It is suppressed when \fBfrom\fR
 points to a valid regular component.
 
-.SS "Rule 9 — Non-existing properties are ignored"
+.SS "Rule 9 \\(em Non-existing properties are ignored"
 Extra caller properties that a component does not reference are silently
 ignored.
 .PP
@@ -274,28 +389,28 @@ ignored.
 Calling \fBa\fR with \fB{\"x\":1,\"y\":2,\"z\":3}\fR returns \fB\"1 + 2\"\fR;
 \fBz\fR is ignored.
 
-.SS "Rule 10 — All referenced properties are required"
+.SS "Rule 10 \\(em All referenced properties are required"
 Any property referenced via \fB$name\fR, \fB$0\fR, \fB${name}\fR, etc.
 must be supplied by the caller or declared optional (rule 17).
 Missing a required argument raises \fBE003\fR.
 
-.SS "Rule 11 — Three-step resolution order"
+.SS "Rule 11 \\(em Three-step resolution order"
 Resolving a component runs in three fixed steps:
 .TP
 1.
-\fBProperty resolution (before template)\fR — every property value is fully
+\fBProperty resolution (before template)\fR \\(em every property value is fully
 resolved. Nested call-sites (\fB$comp(...)\fR, \fB${...}\fR) resolve
 bottom-up. Bare \fB$name\fR resolves as: argument \\(-> component call \\(->
 error. Property-key modifiers (\fB?\fR, \fB$\\fR) are stripped first.
 .TP
 2.
-\fBTemplate chain (rule 5)\fR — applied to the post-step-1 result.
+\fBTemplate chain (rule 5)\fR \\(em applied to the post-step-1 result.
 .TP
 3.
-\fBfrom / shortcut dispatch (rules 6 and 8)\fR — mutually exclusive;
+\fBfrom / shortcut dispatch (rules 6 and 8)\fR \\(em mutually exclusive;
 \fBfrom\fR takes priority if valid, otherwise the shortcut fires.
 
-.SS "Rule 12 — Array template: map over items"
+.SS "Rule 12 \\(em Array template: map over items"
 When a component returns an array and a matching \fB$template\fR exists,
 each array item is passed through the template individually.
 .PP
@@ -313,12 +428,12 @@ each array item is passed through the template individually.
 Calling \fBa\fR produces
 \fB[{\"prop1\": 2, \"prop2\": 2}, {\"prop1\": 4, \"prop2\": 12}]\fR.
 
-.SS "Rule 13 — Array template reduces to last application result"
+.SS "Rule 13 \\(em Array template reduces to last application result"
 When the template is an array, it iterates over its items, carrying the
 previous result as \fB$last\fR. The final result is the return value of the
 last iteration.
 .PP
-Each step starts from the \fBinitial\fR arguments; the previous step's result
+Each step starts from the \fBinital\fR arguments; the previous step's result
 only overwrites keys it actually returns, and only for the immediately next
 step.
 .PP
@@ -343,7 +458,7 @@ Step 3: reverts to \fBx=1, y=2, $last=6\fR \\(-> \fB\"1 + 2 < 6\"\fR
 .PP
 Result: \fB\"1 + 2 < 6\"\fR.
 
-.SS "Rule 14 — Both-array reduce"
+.SS "Rule 14 \\(em Both-array reduce"
 When both \fBa\fR and \fB$a\fR are arrays, \fB$a\fR is applied as a reduce
 sequence independently to each element of \fBa\fR. Result is an array of
 reduced entries.
@@ -364,7 +479,7 @@ reduced entries.
 .PP
 Result: \fB[{\"a\": 1, \"b\": 4, \"sum\": 5}, {\"a\": 3, \"b\": 8, \"sum\": 11}]\fR.
 
-.SS "Rule 15 — $merge builtin"
+.SS "Rule 15 \\(em $merge builtin"
 \fB$merge(a, b)\fR merges two values. Arrays are concatenated; objects are
 shallow-merged (second overwrites first for shared keys). Both arguments are
 evaluated eagerly. Mixed shapes are \fBE011\fR.
@@ -383,9 +498,9 @@ evaluated eagerly. Mixed shapes are \fBE011\fR.
     # config -> {theme: dark, lang: fr, debug: true}
 .fi
 
-.SS "Rule 16 — $map and $reduce builtins"
+.SS "Rule 16 \\(em $map and $reduce builtins"
 .TP
-\fB$map(callable, array)\fR — applies \fBcallable\fR to each item of
+\fB$map(callable, array)\fR \\(em applies \fBcallable\fR to each item of
 \fBarray\fR, returning an array of results. First arg (callable) is kept
 unevaluated; second arg is evaluated eagerly. Object items supply named args;
 scalar items bind \fB$0\fR.
@@ -398,7 +513,7 @@ scalar items bind \fB$0\fR.
 .fi
 .PP
 .TP
-\fB$reduce(callable, array)\fR — applies \fBcallable\fR iteratively over
+\fB$reduce(callable, array)\fR \\(em applies \fBcallable\fR iteratively over
 \fBarray\fR, accumulating a result. The last iteration's return value is the
 result; empty array yields \fBnull\fR. First arg unevaluated; second arg eager.
 \fB$last\fR holds the previous result (undefined on first step; \fBE003\fR if
@@ -414,7 +529,7 @@ referenced there).
     # result -> "30 + 30"
 .fi
 
-.SS "Rule 17 — ? optional property-key modifier (v1)"
+.SS "Rule 17 \\(em ? optional property-key modifier (v1)"
 A property key of the form \fB<name>?:\fR declares an optional property with
 a default value. The caller-supplied value wins; if absent, the default is
 used. \fB?:\fR relaxes rule 10 for that property.
@@ -445,7 +560,7 @@ Merge mode activates only when the callee body contains at least one \fB?:\fR
 property. In merge mode, caller-supplied keys forward into the output and win
 over the body; the body (including \fB?:\fR defaults) fills gaps.
 
-.SS "Rule 18 — $ math shorthand property-key modifier (v2)"
+.SS "Rule 18 \\(em $ math shorthand property-key modifier (v2)"
 A trailing \fB$\fR on a property key wraps the value in \fB${...}\fR.
 \fB<name>$: <src>\fR is equivalent to \fB<name>: ${<src>}\fR.
 .PP
@@ -463,6 +578,155 @@ Combined with \fB?\fR: \fB<name>?$: <src>\fR is equivalent to
 .PP
 Note: rule 18 is \fBv2\fR. In v1, \fB$\fR on a property key or the
 wrong-order modifier combination \fB$?:\fR surfaces as \fBE010\fR.
+
+.SS "Rule 19 \\(em Shell components (sh, pw)"
+Shell components execute an external command and return its output.
+.TP
+\fB$sh{cmd}\fR \\(em runs \fBcmd\fR via the system shell (\fB/bin/sh -c\fR).
+.TP
+\fB$pw{cmd}\fR \\(em runs \fBcmd\fR via a persistent shell (keeps state across
+calls within the same session).
+.PP
+Property-key shorthand: \fBmain$sh: cmd\fR is equivalent to
+\fBmain: $sh{cmd}\fR.
+.PP
+The result is an object with two fields:
+.TP
+.B exit_code
+The integer exit code of the process (0 on success).
+.TP
+.B stdout
+The captured standard output as a string.
+.PP
+.nf
+    result: $sh{echo hello}
+    # result -> {exit_code: 0, stdout: "hello"}
+.fi
+.PP
+Shell backends (\fBsh\fR, \fBpw\fR) are reserved component names (\fBE007\fR).
+Shell execution is restricted by \fB_ymx.allowed_backends\fR and the
+\fB--allowed-backends\fR CLI flag. If the requested backend is not in the
+allowed list, or if no executor is provided (e.g. \fB--no-exec\fR), the
+command raises \fBE016\fR. Spawn failures also raise \fBE016\fR.
+
+.SS "Rule 20 \\(em HTML renderer"
+When a component resolves to an HTML rendering context, the \fBfrom\fR property
+selects the HTML tag, and \fBchildren\fR provides the content.
+.TP
+.B from: <tag>
+Literal tag syntax: \fBfrom: <div>\fR renders an HTML \fB<div>\fR element
+(not a component reference).
+.TP
+.B children
+Content inside the tag. Can be:
+.RS
+.IP \\(bu 2
+A scalar string (rendered as text content)
+.IP \\(bu 2
+An object with a \fBfrom\fR key (nested element)
+.IP \\(bu 2
+\fBnull\fR (empty element)
+.RE
+.PP
+.nf
+    card:
+      from: <div>
+      class: card
+      style: "padding: 1rem"
+      children:
+        from: <h1>
+        children: "Hello"
+.fi
+.PP
+Shorthand: \fB<div>: value\fR is equivalent to
+\fB{from: <div>, children: value}\fR.
+.PP
+\fBclass\fR and \fBstyle\fR properties are normalized: a scalar string
+value is kept as-is; an array of strings is joined with spaces.
+.PP
+Array or object children without a \fBfrom\fR wrapper raise \fBE017\fR.
+
+.SS "Rule 21 \\(em External components via _use IPC declarations"
+IPC (Inter-Process Communication) components call external services declared
+in \fB_use\fR mappings. When the right-hand side of a \fB_use\fR entry is a
+mapping (not a string), it declares an IPC component.
+.PP
+Configuration fields:
+.TS
+tab(@);
+lB lB l.
+Field@Type@Description
+_
+runner@string@IPC backend: "http", "grpc", "cli", "process"
+transport@string@Transport: "http", "stdio", "unix", "tcp"
+protocol@protocol@protocol config (HTTP method/url, gRPC service/proto, etc.)
+request@mapping@Request shaping: headers, body template, query params
+response@mapping@Response mapping: JSON path extraction, status code checks
+http@mapping@HTTP-specific: follow_redirects, tls_verify, timeout_ms
+timeout@integer@Overall call timeout in milliseconds
+lifecycle@mapping@Hooks: on_request, on_response, on_error
+.TE
+.PP
+Wire format is determined by the \fBmode\fR field:
+.TP
+.B mode: text
+The request body is a plain text string; the response is parsed as text.
+.TP
+.B mode: json
+The request body is JSON-encoded; the response is parsed as JSON.
+.PP
+IPC sessions are created per-call by default. A session persists across
+multiple calls when \fBlifetime: session\fR is set in the config.
+.PP
+IPC call failures (no host, disallowed transport, spawn failure, crash,
+protocol error, timeout, error_pattern match, non-2xx HTTP) raise \fBE018\fR.
+.PP
+.nf
+    _use:
+      weather:
+        runner: http
+        url: "https://api.example.com/weather"
+        method: GET
+        mode: json
+        response:
+          path: "$.data"
+    forecast: $weather({city: "London"})
+.fi
+
+.SS "Rule 22 \\(em Brace calls and the $<name> key suffix"
+Brace call syntax provides a concise way to call a component with a payload.
+.TP
+.B $name{payload}
+Calls component \fBname\fR with \fBpayload\fR. The payload is interpreted as:
+.RS
+.IP \\(bu 2
+\fIScalar\fR \\(em bound to \fB$0\fR (single positional argument)
+.IP \\(bu 2
+\fIObject\fR \\(em each key-value pair becomes a named argument
+.IP \\(bu 2
+\fIArray\fR \\(em each element becomes a positional argument (\fB$0\fR, \fB$1\fR, ...)
+.IP \\(bu 2
+\fIEmpty\fR \\(em no arguments passed
+.RE
+.PP
+.nf
+    greet: $hello{world}         # $0 = "world"
+    add: $sum({x: 1, y: 2})     # x=1, y=2
+    pair: $zip([1, 2], [3, 4])  # $0=[1,2], $1=[3,4]
+    noop: $done{}                # no arguments
+.fi
+.PP
+Key suffix form: \fBkey$name: value\fR is equivalent to
+\fBkey: $name{value}\fR.
+.PP
+.nf
+    result$sh: echo hello
+    # equivalent to: result: $sh{echo hello}
+.fi
+.PP
+Brace calls are equivalent to \fBfrom\fR dispatch and shortcut forms where
+applicable. Brace calls and IPC calls count as recursive operations for the
+purposes of \fB--max-depth\fR (rule 8).
 
 .SH "EXIT CODES"
 
@@ -526,13 +790,6 @@ Run inline tests for a project:
 .fi
 .PP
 
-Run tests recursively across an entire directory tree:
-.PP
-.nf
-    ymx . --test
-.fi
-.PP
-
 Emit diagnostics instead of JSON (useful in CI):
 .PP
 .nf
@@ -575,6 +832,117 @@ Select a different entry component with stdin args:
 .fi
 .PP
 
+Multi-file project with _use:
+.PP
+.nf
+    # Project structure:
+    #   main.yml      \\(em entry point
+    #   lib/utils.yml \\(em shared components
+    #
+    # main.yml:
+    _use:
+      "*": lib/utils
+    greeting: $format_name($name)
+.fi
+.PP
+
+Named import and rename:
+.PP
+.nf
+    # main.yml \\(em import 'helper' as 'fmt'
+    _use:
+      fmt: lib/utils.helper
+    result: $fmt($input)
+.fi
+.PP
+
+Inline code with -c:
+.PP
+.nf
+    ymx main.yml -c 'greeting: "Hello from inline"'
+.fi
+.PP
+
+-c with file overlay (inline overrides file components):
+.PP
+.nf
+    ymx main.yml -c 'override: "this wins"'
+.fi
+.PP
+
+Shell execution:
+.PP
+.nf
+    ymx main.yml -c 'result: $sh{echo hello}'
+.fi
+.PP
+
+IPC declaration in _use:
+.PP
+.nf
+    # main.yml
+    _use:
+      weather:
+        runner: http
+        url: "https://api.example.com/weather"
+        method: GET
+    forecast: $weather
+.fi
+.PP
+
+HTML rendering with literal tags:
+.PP
+.nf
+    ymx main.yml -c '
+    page:
+      from: <html>
+      children:
+        from: <body>
+        children:
+          from: <h1>
+          children: "Hello, World!"
+    '
+.fi
+.PP
+
+.SH "PROJECT METADATA"
+
+.SS "_ymx \\(em front matter"
+The \fB_ymx\fR key in the entry file's YAML document provides compiler
+options. Precedence: \fICLI flag > entry-file _ymx > engine default\fR.
+.PP
+.TS
+tab(@);
+lB lB lB l.
+Field@Type@Default@Notes
+_
+max_depth@integer@256@Recursion cap for templates, calls, brace calls, IPC
+from_keyword@string@from@Override the dispatch keyword
+format@string@json@Output format: json, compact, diagnostics
+pretty@boolean@false@Pretty-print JSON (implies format json)
+plain@enum@namespaced@Template promotion: namespaced, true, false
+allowed_backends@list@[sh,pw]@Allowed shell backends
+allowed_ipc@list@all@Allowed IPC runner names (empty = allow all)
+.TE
+.PP
+
+.SS "_test \\(em inline tests"
+The \fB_test\fR key defines inline test cases for a component. Three forms:
+.TP
+.B Form A \\(em simple value
+\fB_test: expected_json\fR \\(em the component must compile to this value.
+.TP
+.B Form B-value \\(em expected value
+\fB_test:\fR with \fBtarget: component_name\fR and \fBexpected: value\fR.
+.TP
+.B Form B-error \\(em expected error
+\fB_test:\fR with \fBtarget: component_name\fR and \fBerror: diagnostic_code\fR.
+
+.SS "_use \\(em file imports"
+See \fIMULTI-FILE PROJECTS\fR section above for the full \fB_use\fR directive
+documentation, including wildcard imports, named imports, transitive re-export,
+and IPC declarations.
+
 .SH "SHELL COMPLETION"
 
 Shell completion scripts are provided in the \fBcompletions/\fR directory:
@@ -610,7 +978,7 @@ _
 E001@load@YAML parse error or unsupported YAML feature. Multi-document streams (---),
  complex mapping keys, YAML merge keys (<<), or non-string top-level keys are
  not supported. Also the catch-all for I/O failures (missing root, unreadable
- file).
+ file). Cyclic _use chains also raise E001.
 E002@compile@Unknown component reference. A $name or ${name} or from: name
  refers to a component that does not exist in any reachable namespace.
 E003@compile@Missing required argument. A property $x is referenced but neither
@@ -618,13 +986,13 @@ E003@compile@Missing required argument. A property $x is referenced but neither
 E004@load@Duplicate component name in the same namespace. Two top-level
  definitions of the same component in files belonging to the same namespace.
 E005@compile@File-scope violation. A _-prefixed (file-scoped) component is
- referenced from outside its document.
+ referenced from outside its document, or is imported via _use.
 E006@compile@Ambiguous shortcut. Two properties in the same component body both
  match names of existing components, making the rule-8 shortcut ambiguous.
 E007@load@Reserved builtin name. Defining a component or template named map,
- reduce, or merge (or $map, $$reduce, etc.) is rejected.
+ reduce, merge, sh, or pw (or $map, $$reduce, etc.) is rejected.
 E008@compile@Max-depth exceeded. The recursion depth cap (--max-depth, default
- 256) was exhausted.
+ 256) was exhausted. Brace calls and IPC calls count as recursive operations.
 E009@options@Entry not found. The entry path has fewer than two segments,
  resolves to a missing file, has an ambiguous .yml/.yaml stem, or the entry
  name is not a valid component identifier.
@@ -638,9 +1006,18 @@ E011@compile@Math error or builtin argument type error. Division by zero,
 E012@compile@Positional argument after a named argument. $f(name=1, 2) is
  not allowed.
 E013@compile@Array or object literal as a direct call argument. $f([1,2,3])
- or $f({a:1}) is not supported in v1.
+ or $f({a:1}) is not supported in v1 via call syntax. Note: the brace form
+ (rule 22) accepts array and object payloads.
 E015@load@Meta-key reserved name. A top-level key that is a leading-$ variant
  of _ymx or _test (e.g. $_ymx, $$_test) is rejected as reserved.
+E016@compile@Shell execution error. The executor was not provided (--no-exec),
+ the requested backend is not in the allowed list (--allowed-backends), or
+ the command failed to spawn.
+E017@render@Array or object children without a from component wrapper. HTML
+ children must be scalar, an object with a from key, or null.
+E018@compile@IPC call failure. No host provided, disallowed transport
+ (--no-ipc / --allowed-ipc), spawn failure, process crash, protocol error,
+ timeout, error_pattern match, or non-2xx HTTP status.
 .TE
 
 .SH FILES
