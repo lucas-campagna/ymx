@@ -4492,10 +4492,7 @@ mod tests {
 
     #[test]
     fn non_call_site_strings_stay_interpolated() {
-        let p = project_with(&[(
-            "main.yml",
-            "x: \"$0\"\nmain: \"$x(1)!\"\n",
-        )]);
+        let p = project_with(&[("main.yml", "x: \"$0\"\nmain: \"$x(1)!\"\n")]);
         assert_eq!(
             compile_ok(&p, "main", &Args::None),
             Value::string("1!"),
