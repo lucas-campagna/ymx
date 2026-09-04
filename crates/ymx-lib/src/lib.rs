@@ -185,7 +185,15 @@ impl StdIpcHost {
     }
 
     /// Build a `Command` from `spec.cmd` (list or string form).
-    fn build_command(spec: &IpcSpec, project_root: &Path) -> Result<Command, IpcError> {
+    ///
+    /// When `shell: true` and `request_args` is `Some((args, template))`, the
+    /// interpolated template is appended to the shell command string so the
+    /// subprocess receives it as a command-line argument rather than on stdin.
+    fn build_command(
+        spec: &IpcSpec,
+        project_root: &Path,
+        request_args: Option<(&IndexMap<String, Value>, &str)>,
+    ) -> Result<Command, IpcError> {
         let cmd = spec
             .cmd
             .as_ref()
@@ -194,27 +202,34 @@ impl StdIpcHost {
         let mut cmd_obj = if spec.shell {
             let mut c = Command::new("sh");
             c.arg("-c");
-            match cmd {
-                Value::String(s) => {
-                    c.arg(s);
-                }
-                Value::Array(arr) => {
-                    let shell_cmd = arr
-                        .iter()
-                        .map(|v| match v {
-                            Value::String(s) => s.as_str(),
-                            _ => "",
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    c.arg(shell_cmd);
-                }
+
+            let base_cmd = match cmd {
+                Value::String(s) => s.clone(),
+                Value::Array(arr) => arr
+                    .iter()
+                    .map(|v| match v {
+                        Value::String(s) => s.as_str(),
+                        _ => "",
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" "),
                 _ => {
                     return Err(IpcError::Custom(
                         "cmd must be a string or array when shell: true".to_string(),
                     ))
                 }
             };
+
+            // When shell: true + request_template, append the interpolated template
+            // to the shell command string instead of sending it via stdin.
+            let full_cmd = if let Some((args, template)) = request_args {
+                let interpolated = Self::interpolate_template(template, args);
+                format!("{} {}", base_cmd, interpolated)
+            } else {
+                base_cmd
+            };
+
+            c.arg(full_cmd);
             c
         } else {
             match cmd {
@@ -310,13 +325,14 @@ impl StdIpcHost {
         project_root: &Path,
         _alias: &str,
         spec: &IpcSpec,
+        request_args: Option<(&IndexMap<String, Value>, &str)>,
     ) -> Result<Session, IpcError> {
         // Run before_start hook
         self.run_hook(&spec.before_start)?;
 
         match spec.transport {
             ymx_core::ipc::IpcTransport::Pipe => {
-                let mut cmd = Self::build_command(spec, project_root)?;
+                let mut cmd = Self::build_command(spec, project_root, request_args)?;
 
                 let mut child = cmd
                     .spawn()
@@ -667,14 +683,17 @@ impl StdIpcHost {
 
                 // Pipe transport: use child stdin/stdout
                 if let Some(ref mut child) = session.child {
-                    if let Some(mut stdin) = child.stdin.take() {
-                        stdin
-                            .write_all(request_str.as_bytes())
-                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                        stdin
-                            .flush()
-                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                        drop(stdin);
+                    // Skip stdin write when shell: true + template (it's in the command)
+                    if !(spec.shell && spec.request_template.is_some()) {
+                        if let Some(mut stdin) = child.stdin.take() {
+                            stdin
+                                .write_all(request_str.as_bytes())
+                                .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                            stdin
+                                .flush()
+                                .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                            drop(stdin);
+                        }
                     }
 
                     if let Some(ref mut stdout) = child.stdout {
@@ -796,14 +815,17 @@ impl StdIpcHost {
 
                 // Pipe transport: use child stdin/stdout
                 if let Some(ref mut child) = session.child {
-                    if let Some(mut stdin) = child.stdin.take() {
-                        stdin
-                            .write_all(request_str.as_bytes())
-                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                        stdin
-                            .flush()
-                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                        drop(stdin);
+                    // Skip stdin write when shell: true + template (it's in the command)
+                    if !(spec.shell && spec.request_template.is_some()) {
+                        if let Some(mut stdin) = child.stdin.take() {
+                            stdin
+                                .write_all(request_str.as_bytes())
+                                .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                            stdin
+                                .flush()
+                                .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                            drop(stdin);
+                        }
                     }
 
                     if let Some(ref mut stdout) = child.stdout {
@@ -920,11 +942,14 @@ impl StdIpcHost {
 
                 // Pipe transport: use child stdin/stdout
                 if let Some(ref mut child) = session.child {
-                    if let Some(mut stdin) = child.stdin.take() {
-                        stdin
-                            .write_all(request_str.as_bytes())
-                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                        drop(stdin); // Close stdin
+                    // Skip stdin write when shell: true + template (it's in the command)
+                    if !(spec.shell && spec.request_template.is_some()) {
+                        if let Some(mut stdin) = child.stdin.take() {
+                            stdin
+                                .write_all(request_str.as_bytes())
+                                .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                            drop(stdin); // Close stdin
+                        }
                     }
 
                     if let Some(ref mut stdout) = child.stdout {
@@ -1036,17 +1061,20 @@ impl StdIpcHost {
 
                 // Pipe transport: use child stdin/stdout
                 if let Some(ref mut child) = session.child {
-                    if let Some(mut stdin) = child.stdin.take() {
-                        stdin
-                            .write_all(request_body.as_bytes())
-                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                        stdin
-                            .write_all(b"\n")
-                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                        stdin
-                            .flush()
-                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                        drop(stdin);
+                    // Skip stdin write when shell: true + template (it's in the command)
+                    if !(spec.shell && spec.request_template.is_some()) {
+                        if let Some(mut stdin) = child.stdin.take() {
+                            stdin
+                                .write_all(request_body.as_bytes())
+                                .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                            stdin
+                                .write_all(b"\n")
+                                .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                            stdin
+                                .flush()
+                                .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                            drop(stdin);
+                        }
                     }
 
                     if let Some(ref mut stdout) = child.stdout {
@@ -1191,17 +1219,20 @@ impl StdIpcHost {
 
                 // Pipe transport: use child stdin/stdout
                 if let Some(ref mut child) = session.child {
-                    if let Some(mut stdin) = child.stdin.take() {
-                        stdin
-                            .write_all(request_body.as_bytes())
-                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                        stdin
-                            .write_all(b"\n")
-                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                        stdin
-                            .flush()
-                            .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                        drop(stdin);
+                    // Skip stdin write when shell: true + template (it's in the command)
+                    if !(spec.shell && spec.request_template.is_some()) {
+                        if let Some(mut stdin) = child.stdin.take() {
+                            stdin
+                                .write_all(request_body.as_bytes())
+                                .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                            stdin
+                                .write_all(b"\n")
+                                .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                            stdin
+                                .flush()
+                                .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                            drop(stdin);
+                        }
                     }
 
                     if let Some(ref mut stdout) = child.stdout {
@@ -1609,7 +1640,17 @@ impl IpcHost for StdIpcHost {
                     Self::connect_socket(spec)?
                 }
                 ymx_core::ipc::IpcTransport::Pipe => {
-                    self.spawn_session(&project_root, name, spec)?
+                    // When shell: true + request_template, pass args through so
+                    // build_command can append the interpolated template to the
+                    // shell command string (instead of sending via stdin).
+                    let request_args = if spec.shell && spec.request_template.is_some() {
+                        spec.request_template
+                            .as_ref()
+                            .map(|t| (&request.args, t.as_str()))
+                    } else {
+                        None
+                    };
+                    self.spawn_session(&project_root, name, spec, request_args)?
                 }
                 _ => {
                     return Err(IpcError::DisallowedTransport(format!(
