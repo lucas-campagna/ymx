@@ -1983,6 +1983,10 @@ impl<'a> Resolver<'a> {
         }) else {
             return Ok(None);
         };
+        // Literal HTML tag (<name>) — not a component reference
+        if target.starts_with('<') && target.ends_with('>') {
+            return Ok(None);
+        }
         match resolve_ref(self.project, target, file, self.opts.plain.clone()) {
             Ok(def) if !def.full_name.starts_with('$') => Ok(Some(def)),
             _ => Ok(None),
