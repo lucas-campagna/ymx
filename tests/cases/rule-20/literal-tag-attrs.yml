@@ -1,0 +1,14 @@
+# Rule 20: literal tag with id, class (array), and style attributes.
+tag_with_attrs:
+  from: <div>
+  id: app
+  class:
+    - container
+    - main
+  style: "color: red"
+  children: Hello
+
+_test:
+  tag_with_attrs:
+    format: html
+    result: "<div id=\"app\" class=\"container main\" style=\"color: red\">Hello</div>"

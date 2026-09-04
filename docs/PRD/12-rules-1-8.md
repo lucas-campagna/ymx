@@ -163,6 +163,8 @@ b: 123
 
 Now `a` calls `b` and returns `123`.
 
+> **Literal HTML tag syntax (`<name>`).** A `from` value enclosed in angle brackets — `<name>` — is a **literal HTML tag name**, not a component reference. The resolver skips component dispatch entirely; the `from` value is forwarded as a plain property. The HTML renderer (rule 20) uses the string as the tag name directly. This allows generating HTML tags that collide with component names (e.g. `from: <main>` produces the `<main>` tag, not a call to the `main` component). The angle brackets are part of the tag name — `<div>` is distinct from `div`. A `from` value that is a literal tag suppresses the rule-8 shortcut, same as a valid component `from`.
+
 ### 7. Math and component calls with `${...}`
 
 The `${...}` form evaluates its contents as a math expression and can also call components as functions inside it.

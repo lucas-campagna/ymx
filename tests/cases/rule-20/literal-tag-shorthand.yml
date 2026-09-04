@@ -1,0 +1,8 @@
+# Rule 20: <div>: hello world shorthand tag key produces <div>hello world</div>.
+shorthand_div:
+  <div>: hello world
+
+_test:
+  shorthand_div:
+    format: html
+    result: "<div>hello world</div>"

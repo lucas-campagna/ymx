@@ -1,0 +1,25 @@
+# Rule 20: literal tags with various children types: string, number, and nested literal tag.
+scalar_child:
+  from: <p>
+  children: text
+
+number_child:
+  from: <p>
+  children: 42
+
+nested_child:
+  from: <div>
+  children:
+    from: <span>
+    children: inner
+
+_test:
+  scalar_child:
+    format: html
+    result: "<p>text</p>"
+  number_child:
+    format: html
+    result: "<p>42</p>"
+  nested_child:
+    format: html
+    result: "<div><span>inner</span></div>"

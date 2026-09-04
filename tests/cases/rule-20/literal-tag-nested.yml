@@ -1,0 +1,13 @@
+# Rule 20: nested literal tags via from: — <div> > <span> > <em>.
+nested_literal:
+  from: <div>
+  children:
+    from: <span>
+    children:
+      from: <em>
+      children: emphasized
+
+_test:
+  nested_literal:
+    format: html
+    result: "<div><span><em>emphasized</em></span></div>"

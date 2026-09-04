@@ -64,6 +64,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.41 | `done` | Introduce ParsedKey for property-key modifier parsing | ymx-core | [1.41-parsed-key-refactor.md](1.41-parsed-key-refactor.md) | 1.40 |
 | 1.42 | `done` | External components via `_use` IPC declarations (core) | ymx-core, ymx-lib, ymx-cli | [1.42-ipc-core.md](1.42-ipc-core.md) | 1.38 |
 | 1.43 | `done` | IPC transports, structured mode & hooks (rule 21 extended) | ymx-core, ymx-lib | [1.43-ipc-transports-hooks.md](1.43-ipc-transports-hooks.md) | 1.42 |
+| 1.44 | `planned` | Literal HTML tag syntax (`<name>`) | ymx-core | [1.44-literal-tags.md](1.44-literal-tags.md) | 1.35 |
 
 ## v2 milestones
 
