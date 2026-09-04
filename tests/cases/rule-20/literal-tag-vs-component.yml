@@ -1,5 +1,4 @@
 # Rule 20: from: <main> renders the HTML tag even when a "main" component exists.
-# "main" (no angle brackets) calls the component; <main> renders the tag.
 main: "from component"
 
 tag_over_component:
@@ -11,7 +10,6 @@ component_call:
 
 _test:
   tag_over_component:
-    format: html
     result: "<main>from tag</main>"
   component_call:
     result: "from component"

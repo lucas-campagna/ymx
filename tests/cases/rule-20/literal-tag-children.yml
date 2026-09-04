@@ -15,11 +15,8 @@ nested_child:
 
 _test:
   scalar_child:
-    format: html
     result: "<p>text</p>"
   number_child:
-    format: html
     result: "<p>42</p>"
   nested_child:
-    format: html
     result: "<div><span>inner</span></div>"

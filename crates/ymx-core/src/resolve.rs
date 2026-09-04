@@ -54,6 +54,7 @@ use crate::math::{BraceCallHook, CallHook, MathEngine, Scope, ShellCallHook, V1E
 use crate::namespace::{classify, DefClass, Definition};
 use crate::parse::{key_to_string, node_to_value, Node};
 use crate::project::{Options, PlainMode, Project};
+use crate::render::convert_literal_tags;
 
 /// Resolve the entry path `<folder.path>.<file>.<component>` against an
 /// already-loaded [`Project`].
@@ -783,6 +784,22 @@ impl<'a> Resolver<'a> {
         let Value::Object(m) = value else {
             return Ok(value.clone());
         };
+        // Shorthand literal tag: <name>: value → from: <name>, children: value
+        let mut converted = None;
+        for (k, v) in m.iter() {
+            if k.starts_with('<') && k.ends_with('>') && k.len() > 2 {
+                let mut new_map = IndexMap::new();
+                new_map.insert(self.opts.from_keyword.clone(), Value::String(k.clone()));
+                new_map.insert("children".into(), v.clone());
+                converted = Some(new_map);
+                break;
+            }
+        }
+        let m = if let Some(ref converted_map) = converted {
+            converted_map
+        } else {
+            m
+        };
         match self.resolve_from_target(m, file)? {
             Some(def) => {
                 let named: Vec<(String, Value)> = m
@@ -793,6 +810,12 @@ impl<'a> Resolver<'a> {
                 self.call(def, &args_from(named, Vec::new()), None)
             }
             None => {
+                // Literal HTML tag: from: <name> renders the tag directly
+                if let Some(Value::String(from_val)) = m.get(&self.opts.from_keyword) {
+                    if from_val.starts_with('<') && from_val.ends_with('>') && from_val.len() > 2 {
+                        return Ok(convert_literal_tags(m));
+                    }
+                }
                 // Check if from: sh or from: pw (builtin executors).
                 // resolve_from_target returns None when resolve_ref returns NotFound
                 // (e.g., for builtin names sh/pw after removing sh_pw_def check).
@@ -1902,12 +1925,40 @@ impl<'a> Resolver<'a> {
         file: FileId,
         component: Option<&str>,
     ) -> Result<Value, Diagnostic> {
+        // Shorthand literal tag: <name>: value → from: <name>, children: value
+        if !props.named.contains_key(&self.opts.from_keyword) {
+            for (k, v) in props.named.iter() {
+                if k.starts_with('<') && k.ends_with('>') && k.len() > 2 {
+                    let mut new_named = IndexMap::new();
+                    new_named.insert(self.opts.from_keyword.clone(), Value::String(k.clone()));
+                    new_named.insert("children".into(), v.clone());
+                    // Add remaining properties
+                    for (k2, v2) in props.named.iter() {
+                        if k2 != k {
+                            new_named.insert(k2.clone(), v2.clone());
+                        }
+                    }
+                    let new_props = PropertySet {
+                        named: new_named,
+                        slots: props.slots.clone(),
+                        order: props.order.clone(),
+                    };
+                    return self.dispatch_from(&new_props, file, component);
+                }
+            }
+        }
         match self.resolve_from_target(&props.named, file)? {
             Some(def) => {
                 let args = self.props_to_args(props);
                 self.call(def, &args, None)
             }
             None => {
+                // Literal HTML tag: from: <name> renders the tag directly
+                if let Some(Value::String(from_val)) = props.named.get(&self.opts.from_keyword) {
+                    if from_val.starts_with('<') && from_val.ends_with('>') && from_val.len() > 2 {
+                        return Ok(convert_literal_tags(&props.named));
+                    }
+                }
                 // Check if from: sh or from: pw (builtin executors).
                 if let Some(Value::String(backend)) = props.named.get(&self.opts.from_keyword) {
                     if backend == "sh" || backend == "pw" {
@@ -1983,10 +2034,6 @@ impl<'a> Resolver<'a> {
         }) else {
             return Ok(None);
         };
-        // Literal HTML tag (<name>) — not a component reference
-        if target.starts_with('<') && target.ends_with('>') {
-            return Ok(None);
-        }
         match resolve_ref(self.project, target, file, self.opts.plain.clone()) {
             Ok(def) if !def.full_name.starts_with('$') => Ok(Some(def)),
             _ => Ok(None),

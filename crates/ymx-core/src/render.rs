@@ -145,6 +145,17 @@ fn render_scalar(v: &Value) -> String {
     html_escape(&text)
 }
 
+/// Render a value that is inner content of a literal tag.
+/// For literal tags, string children may already contain rendered HTML
+/// from inner literal tags, so we must not double-escape them.
+fn render_literal_inner(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Array(arr) => arr.iter().map(render_literal_inner).collect(),
+        _ => render_value(v),
+    }
+}
+
 /// Render an object with a `from` key as an HTML element.
 fn render_tag(map: &IndexMap<String, Value>) -> String {
     let raw_tag = map
@@ -154,7 +165,7 @@ fn render_tag(map: &IndexMap<String, Value>) -> String {
             _ => None,
         })
         .unwrap_or("div");
-
+    // Strip angle brackets from literal tag names (e.g. "<div>" → "div")
     let tag = if raw_tag.starts_with('<') && raw_tag.ends_with('>') && raw_tag.len() > 2 {
         &raw_tag[1..raw_tag.len() - 1]
     } else {
@@ -162,6 +173,11 @@ fn render_tag(map: &IndexMap<String, Value>) -> String {
     };
 
     let mut attrs = render_attrs(map);
+
+    // A literal tag (angle brackets in `from`) means children may already
+    // contain rendered HTML from inner literal tags. Treat their string
+    // content as raw (unescaped) HTML.
+    let is_literal = raw_tag.starts_with('<') && raw_tag.ends_with('>') && raw_tag.len() > 2;
 
     // Determine inner content and any additional attrs from nested children object
     let inner = if let Some(Value::Object(children_obj)) = map.get("children") {
@@ -182,6 +198,11 @@ fn render_tag(map: &IndexMap<String, Value>) -> String {
             // Either no `children` key, or has `from` — treat as normal nested tag
             render_value(&Value::Object(children_obj.clone()))
         }
+    } else if is_literal {
+        // Literal tag with non-object children: render raw (unescaped)
+        map.get("children")
+            .map(render_literal_inner)
+            .unwrap_or_default()
     } else {
         // Children is not an object (scalar, array, etc.)
         map.get("children").map(render_value).unwrap_or_default()
@@ -856,4 +877,13 @@ mod tests {
         assert_eq!(tag, "my_button");
         assert_eq!(val, &Value::string("click"));
     }
+}
+
+/// Render a property map with `<name>` patterns directly to an HTML string.
+/// Strips angle brackets from `from` values, then renders the resulting
+/// object tree via the HTML renderer. Returns a `Value::String`.
+pub fn convert_literal_tags(props: &IndexMap<String, Value>) -> Value {
+    let obj = Value::Object(props.clone());
+    let html = DefaultHtmlRenderer.render_html(&obj);
+    Value::String(html)
 }

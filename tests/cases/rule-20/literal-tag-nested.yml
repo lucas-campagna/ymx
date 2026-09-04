@@ -1,4 +1,4 @@
-# Rule 20: nested literal tags via from: — <div> > <span> > <em>.
+# Rule 20: nested literal tags — <div> > <span> > <em>
 nested_literal:
   from: <div>
   children:
@@ -9,5 +9,4 @@ nested_literal:
 
 _test:
   nested_literal:
-    format: html
     result: "<div><span><em>emphasized</em></span></div>"

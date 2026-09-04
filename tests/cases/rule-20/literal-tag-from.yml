@@ -1,9 +1,8 @@
-# Rule 20: from: <main> renders the literal <main> HTML tag, not a component lookup.
+# Rule 20: from: <main> renders the HTML tag directly.
 literal_main:
   from: <main>
   children: Hello
 
 _test:
   literal_main:
-    format: html
     result: "<main>Hello</main>"
