@@ -65,7 +65,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.42 | `done` | External components via `_use` IPC declarations (core) | ymx-core, ymx-lib, ymx-cli | [1.42-ipc-core.md](1.42-ipc-core.md) | 1.38 |
 | 1.43 | `done` | IPC transports, structured mode & hooks (rule 21 extended) | ymx-core, ymx-lib | [1.43-ipc-transports-hooks.md](1.43-ipc-transports-hooks.md) | 1.42 |
 | 1.44 | `done` | Literal HTML tag syntax (`<name>`) | ymx-core | [1.44-literal-tags.md](1.44-literal-tags.md) | 1.35 |
-| 1.45 | `planned` | Man page & docs refresh | (docs) | [1.45-man-page-refresh.md](1.45-man-page-refresh.md) | 1.44 |
+| 1.45 | `done` | Man page & docs refresh | (docs) | [1.45-man-page-refresh.md](1.45-man-page-refresh.md) | 1.44 |
 
 ## v2 milestones
 
