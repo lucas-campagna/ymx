@@ -86,7 +86,7 @@ impl CommandExecutor for StdExecutor {
 }
 
 // ---------------------------------------------------------------------------
-// StdIpcHost (Task 1.39-4)
+// StdIpcHost (Task 1.42-4)
 // ---------------------------------------------------------------------------
 
 /// Session key for caching IPC processes.

@@ -1,4 +1,4 @@
-# Backend names are no longer callable syntax (rule 22 / milestone 1.41):
+# Backend names are no longer callable syntax (rule 22 / milestone 1.39):
 # $ruby resolves to no component → E002 (previously E016 unknown backend).
 comp:
   out: $ruby{puts 1}

@@ -6067,7 +6067,7 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
     //     assert_eq!(val, Value::Object(expected));
     // }
 
-    // ---- Task 1.43: parse_property_key ----
+    // ---- Task 1.41: parse_property_key ----
 
     #[test]
     fn parse_plain_name() {
@@ -6223,7 +6223,7 @@ nums: [1, 2, 3]\ndouble: \"${$0 * 2}\"\nresult: $reduce($double, ${nums()})\n",
         );
     }
 
-    // ---- Task 1.43: lookup_fallback_suffixes ----
+    // ---- Task 1.41: lookup_fallback_suffixes ----
 
     #[test]
     fn fallback_suffixes_bare_name_tries_all() {
