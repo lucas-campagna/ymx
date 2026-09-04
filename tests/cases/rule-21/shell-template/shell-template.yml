@@ -1,0 +1,18 @@
+# Rule 21 IPC: shell: true appends request_template to command string.
+# `echo` with shell: true and request_template: "$0" → sh -c "echo <arg>"
+# echo returns the arg as a line, raw protocol captures it.
+
+_use:
+  echo:
+    cmd: echo
+    shell: true
+    transport: pipe
+    protocol: raw
+    mode: text
+    parse: none
+    request_template: "$0"
+
+main: $echo{hello}
+
+_test:
+  main: "hello"

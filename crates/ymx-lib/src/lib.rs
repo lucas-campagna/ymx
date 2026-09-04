@@ -17,7 +17,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -104,6 +104,7 @@ struct SessionKey {
 #[derive(Debug)]
 struct Session {
     child: Option<Child>,
+    stdin: Option<ChildStdin>,
     #[cfg(unix)]
     unix_socket: Option<UnixStream>,
     tcp_socket: Option<TcpStream>,
@@ -172,6 +173,7 @@ impl StdIpcHost {
             }
         }
         format!("{:?}", spec.protocol).hash(&mut h);
+        spec.coproc.hash(&mut h);
         spec.request_template.hash(&mut h);
         spec.reply_until.hash(&mut h);
         spec.startup_timeout.hash(&mut h);
@@ -462,8 +464,17 @@ impl StdIpcHost {
                 // Run after_start hook (best effort — session continues even on failure)
                 self.run_hook(&spec.after_start).ok();
 
+                // For coproc sessions, keep stdin open in the session for subsequent writes.
+                // For non-coproc sessions, leave stdin on child so do_protocol can take/drop it.
+                let stdin = if spec.coproc {
+                    child.stdin.take()
+                } else {
+                    None
+                };
+
                 Ok(Session {
                     child: Some(child),
+                    stdin,
                     #[cfg(unix)]
                     unix_socket: None,
                     tcp_socket: None,
@@ -479,6 +490,7 @@ impl StdIpcHost {
 
                 Ok(Session {
                     child: None,
+                    stdin: None,
                     #[cfg(unix)]
                     unix_socket: None,
                     tcp_socket: None,
@@ -518,6 +530,7 @@ impl StdIpcHost {
 
         Ok(Session {
             child: None,
+            stdin: None,
             #[cfg(unix)]
             unix_socket,
             tcp_socket,
@@ -929,8 +942,8 @@ impl StdIpcHost {
                 Err(IpcError::FramingError("no transport available".to_string()))
             }
             IpcProtocol::Raw => {
-                // Raw protocol: write request, close writer, read to EOF
-                let template = spec.request_template.as_deref().unwrap_or("{}\n");
+                // Raw protocol: write request, read to EOF (or coproc: return body as response)
+                let template = spec.request_template.as_deref().unwrap_or("{$0}\n");
                 let request_str = Self::interpolate_template(template, &request.args);
 
                 let timeout = spec
@@ -942,45 +955,76 @@ impl StdIpcHost {
 
                 // Pipe transport: use child stdin/stdout
                 if let Some(ref mut child) = session.child {
-                    // Skip stdin write when shell: true + template (it's in the command)
-                    if !(spec.shell && spec.request_template.is_some()) {
-                        if let Some(mut stdin) = child.stdin.take() {
-                            stdin
-                                .write_all(request_str.as_bytes())
-                                .map_err(|e| IpcError::FramingError(e.to_string()))?;
-                            drop(stdin); // Close stdin
-                        }
-                    }
-
-                    if let Some(ref mut stdout) = child.stdout {
-                        let mut output = String::new();
-                        let mut buf = [0u8; 1024];
-
-                        loop {
-                            if std::time::Instant::now() >= deadline {
-                                return Err(IpcError::Timeout(
-                                    spec.request_timeout.unwrap_or(30000),
-                                ));
-                            }
-
-                            match stdout.read(&mut buf) {
-                                Ok(0) => break,
-                                Ok(n) => {
-                                    output.push_str(&String::from_utf8_lossy(&buf[..n]));
-                                }
-                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                                    std::thread::sleep(Duration::from_millis(10));
-                                    continue;
-                                }
-                                Err(e) => return Err(IpcError::FramingError(e.to_string())),
+                    if spec.coproc {
+                        // Coproc: write to stored stdin, don't close it, return args as response
+                        if !(spec.shell && spec.request_template.is_some()) {
+                            if let Some(ref mut stdin) = session.stdin {
+                                stdin
+                                    .write_all(request_str.as_bytes())
+                                    .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                                stdin
+                                    .flush()
+                                    .map_err(|e| IpcError::FramingError(e.to_string()))?;
                             }
                         }
+                        // Return the request body or rendered args as stdout (process is still running)
+                        let stdout = request.body.clone().unwrap_or_else(|| {
+                            let positional: Vec<String> = request
+                                .args
+                                .values()
+                                .map(|v| match v {
+                                    Value::String(s) => s.clone(),
+                                    Value::Int(n) => n.to_string(),
+                                    Value::Float(f) => f.to_string(),
+                                    Value::Bool(b) => b.to_string(),
+                                    Value::Null => "null".to_string(),
+                                    _ => serde_json::to_string(v).unwrap_or_default(),
+                                })
+                                .collect();
+                            positional.join(" ")
+                        });
+                        return Ok((stdout, String::new()));
+                    } else {
+                        // Non-coproc: write to child stdin, close it, read to EOF
+                        if !(spec.shell && spec.request_template.is_some()) {
+                            if let Some(mut stdin) = child.stdin.take() {
+                                stdin
+                                    .write_all(request_str.as_bytes())
+                                    .map_err(|e| IpcError::FramingError(e.to_string()))?;
+                                drop(stdin); // Close stdin
+                            }
+                        }
 
-                        let stderr = Self::capture_child_stderr(&mut session.child);
-                        return Ok((output, stderr));
+                        if let Some(ref mut stdout) = child.stdout {
+                            let mut output = String::new();
+                            let mut buf = [0u8; 1024];
+
+                            loop {
+                                if std::time::Instant::now() >= deadline {
+                                    return Err(IpcError::Timeout(
+                                        spec.request_timeout.unwrap_or(30000),
+                                    ));
+                                }
+
+                                match stdout.read(&mut buf) {
+                                    Ok(0) => break,
+                                    Ok(n) => {
+                                        output.push_str(&String::from_utf8_lossy(&buf[..n]));
+                                    }
+                                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                        std::thread::sleep(Duration::from_millis(10));
+                                        continue;
+                                    }
+                                    Err(e) => return Err(IpcError::FramingError(e.to_string())),
+                                }
+                            }
+
+                            let stderr = Self::capture_child_stderr(&mut session.child);
+                            return Ok((output, stderr));
+                        }
+
+                        return Err(IpcError::FramingError("no stdout pipe".to_string()));
                     }
-
-                    return Err(IpcError::FramingError("no stdout pipe".to_string()));
                 }
 
                 // Socket transport: use unix socket
@@ -1581,7 +1625,10 @@ impl IpcHost for StdIpcHost {
             if !socket_dead {
                 match self.do_protocol(s, &request) {
                     Ok((stdout, stderr)) => {
-                        if spec.transport == ymx_core::ipc::IpcTransport::Pipe
+                        // Only mark dead for Line/Sentinel pipe protocols (stdin consumed per call).
+                        // Coproc sessions are persistent - never mark dead.
+                        if !spec.coproc
+                            && spec.transport == ymx_core::ipc::IpcTransport::Pipe
                             && (spec.protocol == ymx_core::ipc::IpcProtocol::Line
                                 || spec.protocol == ymx_core::ipc::IpcProtocol::Sentinel)
                         {

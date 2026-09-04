@@ -128,6 +128,7 @@ pub struct IpcSpec {
     pub cwd: Option<String>,
     pub cmd: Option<Value>,
     pub shell: bool,
+    pub coproc: bool,
     pub restart: IpcRestart,
     pub max_restarts: u32,
     pub lazy: bool,
@@ -180,6 +181,7 @@ impl Default for IpcSpec {
             cwd: None,
             cmd: None,
             shell: false,
+            coproc: false,
             restart: IpcRestart::Never,
             max_restarts: 0,
             lazy: true,
@@ -585,6 +587,7 @@ const KNOWN_FIELDS: &[&str] = &[
     "cwd",
     "cmd",
     "shell",
+    "coproc",
     "restart",
     "max_restarts",
     "lazy",
@@ -813,6 +816,7 @@ pub fn parse_ipc_spec(value: &Value) -> Result<IpcSpec, Vec<Diagnostic>> {
     let env = optional_map(map, "env")?;
     let cwd = optional_string(map, "cwd")?;
     let shell = optional_bool(map, "shell")?;
+    let coproc = optional_bool(map, "coproc")?;
     let max_restarts = optional_u32(map, "max_restarts", 0)?;
     let lazy = optional_bool(map, "lazy")? || !map.contains_key("lazy");
 
@@ -862,6 +866,7 @@ pub fn parse_ipc_spec(value: &Value) -> Result<IpcSpec, Vec<Diagnostic>> {
         cwd,
         cmd,
         shell,
+        coproc,
         restart,
         max_restarts,
         lazy,

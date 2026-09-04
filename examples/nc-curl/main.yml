@@ -1,0 +1,53 @@
+# nc-curl example — Rule 21 IPC: netcat listener + curl client
+#
+# Declares `nc -lp 8000` as a persistent IPC component (raw protocol,
+# spawned eagerly at compile start). A second IPC component wraps
+# `curl localhost:8000` to send an HTTP request to the listener.
+#
+# Run:  ymx examples/nc-curl/main.yml
+#
+# Architecture:
+#   1. nc_server IPC: pipe transport, raw protocol, lazy:false → spawns
+#      `nc -lp 8000` immediately. The raw protocol reads stdout to EOF
+#      after each write.
+#   2. curl_client IPC: pipe transport, line protocol → spawns
+#      `curl -s http://localhost:8000/$0` per call.
+#   3. main sends "hello" to nc via the server component, then curls
+#      the listener to verify it is up.
+
+_use:
+  nc_server:
+    cmd: [nc, -lp, 8000]
+    transport: pipe
+    protocol: raw
+    mode: text
+    lazy: false
+    parse: none
+    coproc: true
+    stop_signal: kill
+    stop_timeout: 1000
+
+  curl_client:
+    cmd: curl
+    shell: true
+    transport: pipe
+    protocol: raw
+    mode: text
+    parse: none
+    request_template: "-s http://localhost:8000/$0"
+
+# Send a line to the nc listener (raw protocol: write then read to EOF).
+# This proves nc is alive and accepting connections.
+listener_alive: $nc_server{"ping"}
+
+# Curl the listener — verifies HTTP reachability.
+curl_result: $curl_client{"/"}
+
+main:
+  listener_response: $listener_alive()
+  curl_body: $curl_result()
+
+_test:
+  main:
+    listener_response: "ping"
+    curl_body: ""
