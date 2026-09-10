@@ -1,0 +1,40 @@
+# ~/.config/ymx/commons.yml — common IPC component templates
+# Inherit with: _use: {<alias>: {from: <name>, ...override fields...}}
+
+# SQLite3 — pipe transport, line protocol, text mode
+sqlite3:
+  cmd: [sqlite3]
+  transport: pipe
+  protocol: line
+  mode: text
+  parse: none
+
+# curl — shell, raw protocol, request_template for URL
+curl:
+  cmd: curl
+  shell: true
+  transport: pipe
+  protocol: raw
+  mode: text
+  parse: none
+  request_template: "-s $0"
+
+# bash coproc — sentinel protocol for persistent session
+bash:
+  cmd: [bash]
+  transport: pipe
+  protocol: sentinel
+  request_template: "{$0}\n__DONE__\n"
+  reply_until: '^__DONE__$'
+  mode: text
+  parse: none
+
+# echo — simple echo for testing
+# Uses cat to read from stdin where request_template sends the args
+echo:
+  cmd: [cat]
+  transport: pipe
+  protocol: line
+  mode: text
+  parse: none
+  request_template: "$0"

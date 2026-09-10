@@ -133,6 +133,9 @@ pub struct IpcSpec {
     pub max_restarts: u32,
     pub lazy: bool,
     pub external: bool,
+    /// Reference to a commons component (e.g., `from: curl`). Resolved and
+    /// removed during load — not stored in the final spec.
+    pub from: Option<String>,
 }
 
 impl Default for IpcSpec {
@@ -186,6 +189,7 @@ impl Default for IpcSpec {
             max_restarts: 0,
             lazy: true,
             external: false,
+            from: None,
         }
     }
 }
@@ -592,6 +596,7 @@ const KNOWN_FIELDS: &[&str] = &[
     "max_restarts",
     "lazy",
     "external",
+    "from",
 ];
 
 /// Parse a YAML mapping `Value` into an [`IpcSpec`].
@@ -772,15 +777,19 @@ pub fn parse_ipc_spec(value: &Value) -> Result<IpcSpec, Vec<Diagnostic>> {
 
     let external = optional_bool(map, "external")?;
     let cmd = map.get("cmd").cloned();
+    let from = optional_string(map, "from")?;
 
-    if cmd.is_none() && !external {
+    // cmd is required unless external: true OR from: <name> (commons supplies cmd)
+    if cmd.is_none() && !external && from.is_none() {
         return Err(vec![Diagnostic {
             file: None,
             line: 0,
             col: 0,
             component: None,
             code: E010,
-            message: "missing required field 'cmd' (required unless external: true)".to_string(),
+            message:
+                "missing required field 'cmd' (required unless external: true or from: <name>)"
+                    .to_string(),
         }]);
     }
 
@@ -871,6 +880,7 @@ pub fn parse_ipc_spec(value: &Value) -> Result<IpcSpec, Vec<Diagnostic>> {
         max_restarts,
         lazy,
         external,
+        from,
     })
 }
 
@@ -982,6 +992,31 @@ mod tests {
         assert_eq!(spec.error_pattern.as_deref(), Some("^ERROR"));
         assert_eq!(spec.startup_timeout, Some(5000));
         assert_eq!(spec.request_timeout, Some(10000));
+    }
+
+    #[test]
+    fn parse_ipc_spec_from_field_works() {
+        // from field is parsed and stored
+        let v = Value::object({
+            let mut m = IndexMap::new();
+            m.insert("from".to_string(), Value::string("curl"));
+            m
+        });
+        let spec = parse_ipc_spec(&v).unwrap();
+        assert_eq!(spec.from, Some("curl".to_string()));
+    }
+
+    #[test]
+    fn parse_ipc_spec_cmd_not_required_when_from_present() {
+        // cmd is not required when from is present (commons provides cmd)
+        let v = Value::object({
+            let mut m = IndexMap::new();
+            m.insert("from".to_string(), Value::string("curl"));
+            m
+        });
+        let spec = parse_ipc_spec(&v).unwrap();
+        assert_eq!(spec.from, Some("curl".to_string()));
+        assert!(spec.cmd.is_none());
     }
 
     #[test]

@@ -27,9 +27,9 @@ use std::os::unix::net::UnixStream;
 use indexmap::IndexMap;
 use regex::Regex;
 
-use ymx_core::diag::{FileId, E001, E002, E004, E005, E007, E009, E015};
+use ymx_core::diag::{FileId, E001, E002, E004, E005, E007, E009, E010, E015};
 use ymx_core::namespace::{extract_document, DefClass};
-use ymx_core::parse::parse_document;
+use ymx_core::parse::{node_to_value, parse_document};
 
 pub use ymx_core;
 pub use ymx_core::diag::Diagnostic;
@@ -2117,7 +2117,6 @@ fn is_document(path: &Path) -> bool {
     )
 }
 
-/// Dotted namespace path for a document's relative path: the parent
 /// An `E001` diagnostic for a filesystem failure at `path` (no source span
 /// exists for I/O errors; anchor at 1:1).
 fn io_diagnostic(path: &Path, err: &std::io::Error) -> Diagnostic {
@@ -2129,6 +2128,240 @@ fn io_diagnostic(path: &Path, err: &std::io::Error) -> Diagnostic {
         code: E001,
         message: format!("cannot read `{}`: {err}", path.display()),
     }
+}
+
+/// Resolve `from` field in an IPC spec by looking up the commons file.
+///
+/// Loads `~/.config/ymx/commons.yml`, finds the component named `from_name`,
+/// parses it as an `IpcSpec`, deep-merges the override spec fields over the
+/// commons spec, and clears the `from` field from the result.
+///
+/// Returns `Ok(spec.clone())` if `spec.from` is `None`.
+fn resolve_ipc_from(spec: &IpcSpec) -> Result<IpcSpec, Vec<Diagnostic>> {
+    let from_name = match &spec.from {
+        Some(n) => n,
+        None => return Ok(spec.clone()),
+    };
+
+    // Load commons.yml from ~/.config/ymx/commons.yml
+    let commons_path = dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("ymx")
+        .join("commons.yml");
+
+    let commons_text = match std::fs::read_to_string(&commons_path) {
+        Ok(t) => t,
+        Err(_) => {
+            return Err(vec![Diagnostic {
+                file: None,
+                line: 1,
+                col: 1,
+                component: None,
+                code: E010,
+                message: format!(
+                    "commons file not found at `{}` (set up ~/.config/ymx/commons.yml)",
+                    commons_path.display()
+                ),
+            }]);
+        }
+    };
+
+    // Parse the commons file as a YMX document
+    let commons_node = match parse_document(&commons_text) {
+        Ok(n) => n,
+        Err(parse_err) => {
+            return Err(vec![parse_err.into_diagnostic(commons_path)]);
+        }
+    };
+
+    // The commons file is a mapping of component names to specs.
+    // Find the component named `from_name`.
+    let commons_value = node_to_value(&commons_node);
+
+    let commons_map = match &commons_value {
+        Value::Object(m) => m,
+        _ => {
+            return Err(vec![Diagnostic {
+                file: Some(commons_path.clone()),
+                line: 1,
+                col: 1,
+                component: Some(from_name.clone()),
+                code: E010,
+                message: format!(
+                    "commons file `{}` must be a mapping of component names",
+                    commons_path.display()
+                ),
+            }]);
+        }
+    };
+
+    let component_spec_value = match commons_map.get(from_name) {
+        Some(v) => v,
+        None => {
+            return Err(vec![Diagnostic {
+                file: Some(commons_path.clone()),
+                line: 1,
+                col: 1,
+                component: Some(from_name.clone()),
+                code: E002,
+                message: format!(
+                    "component `{}` not found in commons file `{}`",
+                    from_name,
+                    commons_path.display()
+                ),
+            }]);
+        }
+    };
+
+    // Parse the commons component as an IpcSpec
+    let commons_spec = match ymx_core::ipc::parse_ipc_spec(component_spec_value) {
+        Ok(s) => s,
+        Err(err_diags) => {
+            let mut diags = err_diags;
+            // Attach commons path to each diagnostic
+            for d in &mut diags {
+                d.file = Some(commons_path.clone());
+                d.component = Some(from_name.clone());
+            }
+            return Err(diags);
+        }
+    };
+
+    // Deep-merge: override spec fields win over commons spec fields.
+    // The `from` field is always cleared (it's resolved/merged and not stored).
+    //
+    // Merge strategy: for Option fields, if override has Some, use it; else commons.
+    // For bool fields (shell, coproc, external), if true in override, use it; else commons.
+    // For bool fields (lazy, trim), if false in override, use it; else commons (they default true).
+    // For u32 (max_restarts), if non-zero in override, use it; else commons.
+    // For enum fields, use override if it differs from the IpcSpec hard-coded default.
+    //
+    // Hard-coded defaults (not the Default impl, but the actual default values used):
+    const DEF_RUNNER: ymx_core::ipc::IpcRunner = ymx_core::ipc::IpcRunner::Process;
+    const DEF_TRANSPORT: ymx_core::ipc::IpcTransport = ymx_core::ipc::IpcTransport::Pipe;
+    const DEF_PROTOCOL: ymx_core::ipc::IpcProtocol = ymx_core::ipc::IpcProtocol::Line;
+    const DEF_MODE: ymx_core::ipc::IpcMode = ymx_core::ipc::IpcMode::Text;
+    const DEF_PARSE: ymx_core::ipc::IpcParse = ymx_core::ipc::IpcParse::Yaml;
+    const DEF_ENVELOPE: ymx_core::ipc::IpcEnvelope = ymx_core::ipc::IpcEnvelope::Payload;
+    const DEF_STDERR: ymx_core::ipc::IpcStderr = ymx_core::ipc::IpcStderr::Ignore;
+    const DEF_RESTART: ymx_core::ipc::IpcRestart = ymx_core::ipc::IpcRestart::Never;
+
+    let merged = IpcSpec {
+        from: None,
+        cmd: spec.cmd.clone().or(commons_spec.cmd.clone()),
+        shell: spec.shell || commons_spec.shell,
+        coproc: spec.coproc || commons_spec.coproc,
+        lazy: spec.lazy || commons_spec.lazy,
+        external: spec.external || commons_spec.external,
+        max_restarts: if spec.max_restarts != 0 {
+            spec.max_restarts
+        } else {
+            commons_spec.max_restarts
+        },
+        runner: if spec.runner != DEF_RUNNER {
+            spec.runner.clone()
+        } else {
+            commons_spec.runner.clone()
+        },
+        transport: if spec.transport != DEF_TRANSPORT {
+            spec.transport.clone()
+        } else {
+            commons_spec.transport.clone()
+        },
+        protocol: if spec.protocol != DEF_PROTOCOL {
+            spec.protocol.clone()
+        } else {
+            commons_spec.protocol.clone()
+        },
+        request_template: spec
+            .request_template
+            .clone()
+            .or(commons_spec.request_template.clone()),
+        reply_until: spec
+            .reply_until
+            .clone()
+            .or(commons_spec.reply_until.clone()),
+        mode: if spec.mode != DEF_MODE {
+            spec.mode.clone()
+        } else {
+            commons_spec.mode.clone()
+        },
+        on_request: spec.on_request.clone().or(commons_spec.on_request.clone()),
+        parse: if spec.parse != DEF_PARSE {
+            spec.parse.clone()
+        } else {
+            commons_spec.parse.clone()
+        },
+        trim: spec.trim || commons_spec.trim,
+        error_pattern: spec
+            .error_pattern
+            .clone()
+            .or(commons_spec.error_pattern.clone()),
+        envelope: if spec.envelope != DEF_ENVELOPE {
+            spec.envelope.clone()
+        } else {
+            commons_spec.envelope.clone()
+        },
+        stderr: if spec.stderr != DEF_STDERR {
+            spec.stderr.clone()
+        } else {
+            commons_spec.stderr.clone()
+        },
+        on_response: spec
+            .on_response
+            .clone()
+            .or(commons_spec.on_response.clone()),
+        on_error: spec.on_error.clone().or(commons_spec.on_error.clone()),
+        startup_timeout: spec.startup_timeout.or(commons_spec.startup_timeout),
+        ready: spec.ready.clone().or(commons_spec.ready.clone()),
+        request_timeout: spec.request_timeout.or(commons_spec.request_timeout),
+        stop_signal: spec
+            .stop_signal
+            .clone()
+            .or(commons_spec.stop_signal.clone()),
+        stop_message: spec
+            .stop_message
+            .clone()
+            .or(commons_spec.stop_message.clone()),
+        stop_timeout: spec.stop_timeout.or(commons_spec.stop_timeout),
+        before_start: spec
+            .before_start
+            .clone()
+            .or(commons_spec.before_start.clone()),
+        after_start: spec
+            .after_start
+            .clone()
+            .or(commons_spec.after_start.clone()),
+        before_stop: spec
+            .before_stop
+            .clone()
+            .or(commons_spec.before_stop.clone()),
+        after_stop: spec.after_stop.clone().or(commons_spec.after_stop.clone()),
+        prelude: spec.prelude.clone().or(commons_spec.prelude.clone()),
+        #[cfg(feature = "http")]
+        url: spec.url.clone().or(commons_spec.url.clone()),
+        #[cfg(feature = "http")]
+        method: spec.method.clone().or(commons_spec.method.clone()),
+        #[cfg(feature = "http")]
+        headers: spec.headers.clone().or(commons_spec.headers.clone()),
+        #[cfg(feature = "http")]
+        query: spec.query.clone().or(commons_spec.query.clone()),
+        #[cfg(feature = "http")]
+        body: spec.body.clone().or(commons_spec.body.clone()),
+        #[cfg(feature = "http")]
+        ok_status: spec.ok_status.clone().or(commons_spec.ok_status.clone()),
+        addr: spec.addr.clone().or(commons_spec.addr.clone()),
+        path: spec.path.clone().or(commons_spec.path.clone()),
+        env: spec.env.clone().or(commons_spec.env.clone()),
+        cwd: spec.cwd.clone().or(commons_spec.cwd.clone()),
+        restart: if spec.restart != DEF_RESTART {
+            spec.restart.clone()
+        } else {
+            commons_spec.restart.clone()
+        },
+    };
+
+    Ok(merged)
 }
 
 /// Walks `root` (`.yml`/`.yaml`), parses each document with spans, builds the
@@ -2379,7 +2612,15 @@ pub fn load_project(root: &Path) -> Result<Project, Vec<Diagnostic>> {
                 for (alias, raw_spec) in decls {
                     match ymx_core::ipc::parse_ipc_spec(&raw_spec) {
                         Ok(spec) => {
-                            fd.ipc_aliases.push((alias, spec));
+                            // Resolve `from` field via commons lookup + merge if present
+                            match resolve_ipc_from(&spec) {
+                                Ok(final_spec) => {
+                                    fd.ipc_aliases.push((alias, final_spec));
+                                }
+                                Err(err_diags) => {
+                                    diags.extend(err_diags);
+                                }
+                            }
                         }
                         Err(err_diags) => {
                             diags.extend(err_diags);

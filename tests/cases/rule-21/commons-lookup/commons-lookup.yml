@@ -1,0 +1,20 @@
+# Rule 21 IPC commons lookup (rule-21/commons-lookup):
+# Tests _use: {alias: {from: <name>}} inheritance from ~/.config/ymx/commons.yml
+# This scenario requires ~/.config/ymx/commons.yml to contain an `echo` component.
+# The commons file should contain:
+#   echo:
+#     cmd: [echo]
+#     transport: pipe
+#     protocol: line
+#     mode: text
+#     parse: none
+#     request_template: "$0\n"
+
+_use:
+  echo:
+    from: echo
+
+main: $echo{hello from commons}
+
+_test:
+  main: "hello from commons"

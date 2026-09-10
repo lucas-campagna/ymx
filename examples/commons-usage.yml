@@ -1,0 +1,8 @@
+# Demonstrates: _use: {curl: {from: curl}} inherits from commons.yml
+# Run: ymx examples/commons-usage.yml
+
+_use:
+  curl:
+    from: curl
+
+main: $curl{http://example.com}
