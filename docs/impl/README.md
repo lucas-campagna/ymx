@@ -67,6 +67,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.44 | `done` | Literal HTML tag syntax (`<name>`) | ymx-core | [1.44-literal-tags.md](1.44-literal-tags.md) | 1.35 |
 | 1.45 | `done` | Man page & docs refresh | (docs) | [1.45-man-page-refresh.md](1.45-man-page-refresh.md) | 1.44 |
 | 1.46 | `planned` | IPC shell command template args | ymx-lib | [1.46-shell-template-args.md](1.46-shell-template-args.md) | 1.43 |
+| 1.47 | `planned` | IPC commons lookup with `from` | `from: <name>` in `_use` IPC declarations inherits from `~/.config/ymx/commons.yml` | — |
 
 ## v2 milestones
 
