@@ -20,7 +20,7 @@ Stdin modes (implicit, no flag needed):
   Path given      → stdin provides call arguments (JSON, YAML fallback)
 
 Options:
-  -e, --entry <comp>       Entry component (default: main.main)
+  -e, --entry <comp>       Entry component within the file (default: main)
   -m, --max-depth <n>      Recursion limit (default: 256)
   -f, --format <fmt>       Output format: json, compact, or diagnostics (default: json)
       --pretty             Force pretty JSON with -f compact

@@ -294,8 +294,8 @@ fn help_flag_exits_zero() {
         }
         // Defaults documented inline.
         assert!(
-            stdout.contains("main.main"),
-            "{arg}: must document main.main default"
+            stdout.contains("default: main"),
+            "{arg}: must document main default"
         );
         assert!(
             stdout.contains("256"),
