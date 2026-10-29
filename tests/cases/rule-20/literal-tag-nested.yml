@@ -9,4 +9,5 @@ nested_literal:
 
 _test:
   nested_literal:
+    format: html
     result: "<div><span><em>emphasized</em></span></div>"

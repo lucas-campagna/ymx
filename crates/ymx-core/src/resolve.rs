@@ -54,7 +54,6 @@ use crate::math::{BraceCallHook, CallHook, MathEngine, Scope, ShellCallHook, V1E
 use crate::namespace::{classify, DefClass, Definition};
 use crate::parse::{key_to_string, node_to_value, Node};
 use crate::project::{Options, PlainMode, Project};
-use crate::render::convert_literal_tags;
 
 /// Resolve the entry path `<folder.path>.<file>.<component>` against an
 /// already-loaded [`Project`].
@@ -791,6 +790,12 @@ impl<'a> Resolver<'a> {
                 let mut new_map = IndexMap::new();
                 new_map.insert(self.opts.from_keyword.clone(), Value::String(k.clone()));
                 new_map.insert("children".into(), v.clone());
+                // Add remaining properties
+                for (k2, v2) in m.iter() {
+                    if k2 != k {
+                        new_map.insert(k2.clone(), v2.clone());
+                    }
+                }
                 converted = Some(new_map);
                 break;
             }
@@ -810,12 +815,6 @@ impl<'a> Resolver<'a> {
                 self.call(def, &args_from(named, Vec::new()), None)
             }
             None => {
-                // Literal HTML tag: from: <name> renders the tag directly
-                if let Some(Value::String(from_val)) = m.get(&self.opts.from_keyword) {
-                    if from_val.starts_with('<') && from_val.ends_with('>') && from_val.len() > 2 {
-                        return Ok(convert_literal_tags(m));
-                    }
-                }
                 // Check if from: sh or from: pw (builtin executors).
                 // resolve_from_target returns None when resolve_ref returns NotFound
                 // (e.g., for builtin names sh/pw after removing sh_pw_def check).
@@ -1938,10 +1937,21 @@ impl<'a> Resolver<'a> {
                             new_named.insert(k2.clone(), v2.clone());
                         }
                     }
+                    // Rebuild order: replace the shorthand key with from/children
+                    let mut new_order = Vec::new();
+                    for key in &props.order {
+                        match key {
+                            PropKey::Named(ref name) if name == k => {
+                                new_order.push(PropKey::Named(self.opts.from_keyword.clone()));
+                                new_order.push(PropKey::Named("children".to_string()));
+                            }
+                            _ => new_order.push(key.clone()),
+                        }
+                    }
                     let new_props = PropertySet {
                         named: new_named,
                         slots: props.slots.clone(),
-                        order: props.order.clone(),
+                        order: new_order,
                     };
                     return self.dispatch_from(&new_props, file, component);
                 }
@@ -1953,12 +1963,6 @@ impl<'a> Resolver<'a> {
                 self.call(def, &args, None)
             }
             None => {
-                // Literal HTML tag: from: <name> renders the tag directly
-                if let Some(Value::String(from_val)) = props.named.get(&self.opts.from_keyword) {
-                    if from_val.starts_with('<') && from_val.ends_with('>') && from_val.len() > 2 {
-                        return Ok(convert_literal_tags(&props.named));
-                    }
-                }
                 // Check if from: sh or from: pw (builtin executors).
                 if let Some(Value::String(backend)) = props.named.get(&self.opts.from_keyword) {
                     if backend == "sh" || backend == "pw" {

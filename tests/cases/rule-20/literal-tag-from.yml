@@ -5,4 +5,5 @@ literal_main:
 
 _test:
   literal_main:
+    format: html
     result: "<main>Hello</main>"

@@ -615,6 +615,15 @@ pub fn pretty_print_html(html: &str) -> String {
     result
 }
 
+/// Render a property map with `<name>` patterns directly to an HTML string.
+/// Strips angle brackets from `from` values, then renders the resulting
+/// object tree via the HTML renderer. Returns a `Value::String`.
+pub fn convert_literal_tags(props: &IndexMap<String, Value>) -> Value {
+    let obj = Value::Object(props.clone());
+    let html = DefaultHtmlRenderer.render_html(&obj);
+    Value::String(html)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -877,13 +886,4 @@ mod tests {
         assert_eq!(tag, "my_button");
         assert_eq!(val, &Value::string("click"));
     }
-}
-
-/// Render a property map with `<name>` patterns directly to an HTML string.
-/// Strips angle brackets from `from` values, then renders the resulting
-/// object tree via the HTML renderer. Returns a `Value::String`.
-pub fn convert_literal_tags(props: &IndexMap<String, Value>) -> Value {
-    let obj = Value::Object(props.clone());
-    let html = DefaultHtmlRenderer.render_html(&obj);
-    Value::String(html)
 }

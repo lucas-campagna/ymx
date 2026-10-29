@@ -10,4 +10,5 @@ tag_with_attrs:
 
 _test:
   tag_with_attrs:
+    format: html
     result: '<div id="app" class="container main" style="color: red">Hello</div>'

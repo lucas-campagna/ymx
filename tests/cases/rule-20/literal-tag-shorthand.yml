@@ -4,4 +4,5 @@ shorthand_div:
 
 _test:
   shorthand_div:
+    format: html
     result: "<div>hello world</div>"
