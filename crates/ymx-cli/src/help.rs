@@ -4,11 +4,11 @@
 //! every CLI flag (the full task-1 surface) with its default, the
 //! `--plain` / `--plain-template` mutual exclusion, the `--output`
 //! "written only on success" rule, and the exit-code contract. Kept as a
-//! single [`MANUAL`] string so the binary's Help arm and any standalone
+//! single [`MAIN_MANUAL`] string so the binary's Help arm and any standalone
 //! renderer share one source of truth.
 
 /// The `ymx` manual page. Rendered verbatim to stdout on `--help` / `-h`.
-pub const MANUAL: &str = "\
+pub const MAIN_MANUAL: &str = "\
 ymx 0.1.0 — YAML → JSON compiler for YMX v1
 
 Usage: ymx [path] [flags]
@@ -56,11 +56,40 @@ Examples:
   echo '{\"a\":1}' | ymx -c 'main$: a + 1'     Inline script with stdin args
 ";
 
-/// Render the manual page. Currently identical to [`MANUAL`] (kept as a fn
-/// in case a future caller wants formatting hooks without touching the
-/// constant).
+/// The `ymx lint` manual page. Includes man page reference.
+pub const LINT_MANUAL: &str = "\
+ymx lint 0.1.0 — YMX linter
+
+Usage: ymx lint <path> [flags]
+
+Lint mode (never reads stdin):
+  --deny <codes>       Repeatable/comma-separated L-codes to emit as errors
+  --allow <codes>      Repeatable/comma-separated L-codes to suppress
+  --fail-on <level>    Fail on error|warning|info|none (default: error)
+  --format <fmt>       Lint output: json or diagnostics (default: diagnostics)
+  Lint accepts --entry, --plain, --plain-template, --max-depth,
+  --allowed-backends, and --allowed-ipc. -c/--code, --test, --watch,
+  --output, --pretty, --errors, and --pdf-backend are usage errors.
+  Lint config lives in the entry file's _ymx.lint block; L### findings are
+  distinct from E### compiler diagnostics.
+
+Exit codes: 0 success | 1 diagnostic/lint failure | 2 usage error
+
+Examples:
+  ymx lint main.yml                       Lint a file
+  ymx lint .                              Lint current directory
+
+See the full manual with `ymx --help` or the man page with `man ./man/ymx.1`.
+";
+
+/// Render the main manual page.
 pub fn manual() -> &'static str {
-    MANUAL
+    MAIN_MANUAL
+}
+
+/// Render the lint manual page.
+pub fn lint_manual() -> &'static str {
+    LINT_MANUAL
 }
 
 #[cfg(test)]
@@ -97,19 +126,39 @@ mod tests {
     #[test]
     fn manual_lists_every_flag() {
         for flag in EXPECTED_FLAGS {
-            assert!(MANUAL.contains(flag), "manual missing flag `{flag}`");
+            assert!(
+                MAIN_MANUAL.contains(flag),
+                "main manual missing flag `{flag}`"
+            );
         }
     }
 
     #[test]
     fn manual_documents_exit_codes() {
-        assert!(MANUAL.contains("0 success"));
-        assert!(MANUAL.contains("1 diagnostic"));
-        assert!(MANUAL.contains("2 usage error"));
+        assert!(MAIN_MANUAL.contains("0 success"));
+        assert!(MAIN_MANUAL.contains("1 diagnostic"));
+        assert!(MAIN_MANUAL.contains("2 usage error"));
     }
 
     #[test]
     fn manual_fn_returns_same_string_as_const() {
-        assert_eq!(manual(), MANUAL);
+        assert_eq!(manual(), MAIN_MANUAL);
+    }
+
+    #[test]
+    fn lint_manual_documents_exit_codes() {
+        assert!(LINT_MANUAL.contains("0 success"));
+        assert!(LINT_MANUAL.contains("1 diagnostic"));
+        assert!(LINT_MANUAL.contains("2 usage error"));
+    }
+
+    #[test]
+    fn lint_manual_contains_man_page_reference() {
+        assert!(LINT_MANUAL.contains("man ./man/ymx.1"));
+    }
+
+    #[test]
+    fn lint_manual_fn_returns_same_string_as_const() {
+        assert_eq!(lint_manual(), LINT_MANUAL);
     }
 }

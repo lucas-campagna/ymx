@@ -324,6 +324,7 @@ pub struct ParseError {
 pub enum ParseOutcome {
     Cli(Box<ParsedCli>),
     Help,
+    LintHelp,
     Errors,
 }
 
@@ -366,7 +367,12 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
             return Err(lint_usage_error("--watch"));
         }
         match arg {
-            "-h" | "--help" => return Ok(ParseOutcome::Help),
+            "-h" | "--help" => {
+                if lint {
+                    return Ok(ParseOutcome::LintHelp);
+                }
+                return Ok(ParseOutcome::Help);
+            }
             "--errors" => {
                 if lint {
                     return Err(lint_usage_error("--errors"));

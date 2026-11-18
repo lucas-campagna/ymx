@@ -32,6 +32,10 @@ fn main() -> ExitCode {
                     print!("{}", help::manual());
                     ExitCode::SUCCESS
                 }
+                Ok(ParseOutcome::LintHelp) => {
+                    print!("{}", help::lint_manual());
+                    ExitCode::SUCCESS
+                }
                 Ok(ParseOutcome::Errors) => {
                     errors::print_errors();
                     ExitCode::SUCCESS
