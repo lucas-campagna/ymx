@@ -33,8 +33,7 @@
 //! 4. Otherwise `compile(&project, &opts)` — any diagnostic renders to
 //!    stderr and yields [`RunOutcome::Diagnostic`]; success hits [`emit`].
 
-use std::io::{IsTerminal, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 #[cfg(feature = "watch")]
@@ -78,71 +77,17 @@ pub trait PdfBackend: Send + Sync {
     fn render(&self, html: &str) -> Result<Vec<u8>, PdfError>;
 }
 
-/// PDF backend that uses the system-installed Chrome browser via headless_chrome.
-/// Requires `feature = "pdf-system"`.
-#[cfg(feature = "pdf-system")]
-pub struct SystemChromeBackend;
+/// PDF backend that uses ironpress (native Rust HTML-to-PDF).
+pub struct IronpressBackend;
 
-#[cfg(feature = "pdf-system")]
-impl PdfBackend for SystemChromeBackend {
+impl PdfBackend for IronpressBackend {
     fn render(&self, html: &str) -> Result<Vec<u8>, PdfError> {
-        use headless_chrome::types::PrintToPdfOptions;
-        use headless_chrome::{Browser, LaunchOptions};
+        use ironpress::html_to_pdf;
 
-        let browser = Browser::new(LaunchOptions::default()).map_err(|e| PdfError {
+        let pdf = html_to_pdf(html).map_err(|e| PdfError {
             message: e.to_string(),
         })?;
-        let tab = browser.new_tab().map_err(|e| PdfError {
-            message: e.to_string(),
-        })?;
-
-        let data_url = format!("data:text/html;charset=utf-8,{}", urlencoding::encode(html));
-        tab.navigate_to(&data_url)
-            .map_err(|e| PdfError {
-                message: e.to_string(),
-            })?
-            .wait_until_navigated()
-            .map_err(|e| PdfError {
-                message: e.to_string(),
-            })?;
-        tab.print_to_pdf(Some(PrintToPdfOptions::default()))
-            .map_err(|e| PdfError {
-                message: e.to_string(),
-            })
-    }
-}
-
-/// PDF backend that auto-downloads a bundled Chromium binary via headless_chrome.
-/// Only available when `feature = "pdf-bundled"` is enabled.
-#[cfg(feature = "pdf-bundled")]
-pub struct BundledChromeBackend;
-
-#[cfg(feature = "pdf-bundled")]
-impl PdfBackend for BundledChromeBackend {
-    fn render(&self, html: &str) -> Result<Vec<u8>, PdfError> {
-        use headless_chrome::types::PrintToPdfOptions;
-        use headless_chrome::{Browser, LaunchOptions};
-
-        let browser = Browser::new(LaunchOptions::default()).map_err(|e| PdfError {
-            message: e.to_string(),
-        })?;
-        let tab = browser.new_tab().map_err(|e| PdfError {
-            message: e.to_string(),
-        })?;
-
-        let data_url = format!("data:text/html;charset=utf-8,{}", urlencoding::encode(html));
-        tab.navigate_to(&data_url)
-            .map_err(|e| PdfError {
-                message: e.to_string(),
-            })?
-            .wait_until_navigated()
-            .map_err(|e| PdfError {
-                message: e.to_string(),
-            })?;
-        tab.print_to_pdf(Some(PrintToPdfOptions::default()))
-            .map_err(|e| PdfError {
-                message: e.to_string(),
-            })
+        Ok(pdf)
     }
 }
 
@@ -200,6 +145,238 @@ impl RunOutcome {
             RunOutcome::Success => ExitCode::SUCCESS,
             RunOutcome::LoadError | RunOutcome::UsageError => ExitCode::from(2),
             RunOutcome::Diagnostic | RunOutcome::LintFailure => ExitCode::from(1),
+        }
+    }
+}
+
+#[cfg(feature = "watch")]
+fn run_single_compile(cli: &ParsedCli) -> (RunOutcome, Vec<Diagnostic>, Option<String>) {
+    let project = match load_project(&cli.path) {
+        Ok(p) => p,
+        Err(diags) => {
+            return (RunOutcome::LoadError, diags, None);
+        }
+    };
+
+    let overrides = cli.overrides();
+    let mut opts = match extract_options(&project, &overrides) {
+        Ok(o) => o,
+        Err(diags) => {
+            return (RunOutcome::Diagnostic, diags, None);
+        }
+    };
+
+    opts.executor = Some(Arc::new(StdExecutor));
+    if cli.no_exec {
+        opts.executor = None;
+    }
+
+    // --no-ipc disables IPC entirely.
+    if cli.no_ipc {
+        opts.ipc = None;
+    } else if opts.ipc.is_none() {
+        if let Some(ref exec) = opts.executor {
+            opts.ipc = Some(Arc::new(StdIpcHost::new(exec.clone())));
+        }
+    }
+
+    match compile(&project, &opts) {
+        Ok(value) => {
+            let (outcome, output) = emit(cli, &opts, &value);
+            (outcome, Vec::new(), output)
+        }
+        Err(diags) => (RunOutcome::Diagnostic, diags, None),
+    }
+}
+
+#[cfg(feature = "watch")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RenderState {
+    Success,
+    Error,
+}
+
+#[cfg(feature = "watch")]
+fn watch_msg_path(watch_path: &Path, cli: &ParsedCli) -> String {
+    let input = watch_path.display().to_string();
+    let output = cli
+        .output
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "stdout".to_string());
+    format!("{} -> {}", input, output)
+}
+
+/// Watch mode: runs the compile pipeline on every .yml/.yaml file change.
+/// Exits cleanly on SIGINT/SIGTERM (exit 0).
+#[cfg(feature = "watch")]
+pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
+    let watch_path = cli.watch.as_ref().expect("--watch value must be present");
+    println!("Watching {}...", watch_path.display());
+
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_clone = shutdown.clone();
+
+    if let Err(e) = ctrlc::set_handler(move || {
+        shutdown_clone.store(true, Ordering::SeqCst);
+    }) {
+        eprintln!("ymx: warning: could not set Ctrl-C handler: {e}");
+    }
+
+    let debounce_duration = Duration::from_millis(100);
+    let mut pending = false;
+
+    // Collect current mtimes for watched path (file or directory)
+    fn get_current_mtimes(path: &Path) -> Vec<(PathBuf, Option<u64>)> {
+        if path.is_file() {
+            vec![get_file_mtime(path)]
+        } else if path.is_dir() {
+            let mut mtimes = Vec::new();
+            let walker = ignore::WalkBuilder::new(path)
+                .max_depth(Some(10))
+                .hidden(true)
+                .build();
+            for entry in walker.flatten() {
+                let file_path = entry.path();
+                if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
+                    if ext == "yml" || ext == "yaml" {
+                        mtimes.push(get_file_mtime(file_path));
+                    }
+                }
+            }
+            mtimes
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn get_file_mtime(path: &Path) -> (PathBuf, Option<u64>) {
+        let mtime = path
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|t| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+            })
+            .ok();
+        (path.to_path_buf(), mtime)
+    }
+
+    // Compare two mtime collections for equality
+    fn mtimes_equal(a: &[(PathBuf, Option<u64>)], b: &[(PathBuf, Option<u64>)]) -> bool {
+        if a.len() != b.len() {
+            return false;
+        }
+        // Sort both by path for comparison
+        let mut a_sorted: Vec<_> = a.iter().collect();
+        let mut b_sorted: Vec<_> = b.iter().collect();
+        a_sorted.sort_by_key(|k| &k.0);
+        b_sorted.sort_by_key(|k| &k.0);
+        a_sorted
+            .into_iter()
+            .zip(b_sorted)
+            .all(|(a, b)| a.0 == b.0 && a.1 == b.1)
+    }
+
+    // Run initial compile
+    let start = Instant::now();
+    println!(
+        "\x1b[2J\x1b[H{}: Compiling...",
+        watch_msg_path(watch_path, cli)
+    );
+    std::io::stdout().flush().ok();
+    let (outcome, diags, _output) = run_single_compile(cli);
+    let elapsed = start.elapsed();
+    let state = match outcome {
+        RunOutcome::Success => RenderState::Success,
+        _ => RenderState::Error,
+    };
+    match state {
+        RenderState::Success => {
+            let label = format!(
+                "{}: \u{2713} compiled in {:.3}s",
+                watch_msg_path(watch_path, cli),
+                elapsed.as_secs_f64()
+            );
+            print!("\x1b[2J\x1b[H{label}");
+            std::io::stdout().flush().ok();
+        }
+        RenderState::Error => {
+            print!("\x1b[2J\x1b[H\u{2717} ERROR");
+            std::io::stdout().flush().ok();
+            if diags.is_empty() {
+                eprintln!(" (no diagnostics available)");
+            } else {
+                for diag in &diags {
+                    eprintln!("{}", diag.render());
+                }
+            }
+        }
+    }
+    if shutdown.load(Ordering::SeqCst) {
+        return RunOutcome::Success;
+    }
+    // Don't exit on first compile error — keep watching
+
+    // Initialize last mtimes after initial compile
+    let mut last_mtimes = get_current_mtimes(watch_path);
+
+    loop {
+        if shutdown.load(Ordering::SeqCst) {
+            return RunOutcome::Success;
+        }
+
+        std::thread::sleep(debounce_duration);
+
+        let current_mtimes = get_current_mtimes(watch_path);
+
+        // Check if anything changed
+        if !mtimes_equal(&current_mtimes, &last_mtimes) {
+            pending = true;
+        }
+
+        if pending {
+            pending = false;
+            last_mtimes = current_mtimes;
+
+            let start = Instant::now();
+            println!(
+                "\x1b[2J\x1b[H{}: Compiling...",
+                watch_msg_path(watch_path, cli)
+            );
+            std::io::stdout().flush().ok();
+            let (outcome, diags, _output) = run_single_compile(cli);
+            let elapsed = start.elapsed();
+            let state = match outcome {
+                RunOutcome::Success => RenderState::Success,
+                _ => RenderState::Error,
+            };
+            match state {
+                RenderState::Success => {
+                    let label = format!(
+                        "{}: \u{2713} compiled in {:.3}s",
+                        watch_msg_path(watch_path, cli),
+                        elapsed.as_secs_f64()
+                    );
+                    print!("\x1b[2J\x1b[H{label}");
+                    std::io::stdout().flush().ok();
+                }
+                RenderState::Error => {
+                    print!("\x1b[2J\x1b[H\u{2717} ERROR");
+                    std::io::stdout().flush().ok();
+                    if diags.is_empty() {
+                        eprintln!(" (no diagnostics available)");
+                    } else {
+                        for diag in &diags {
+                            eprintln!("{}", diag.render());
+                        }
+                    }
+                }
+            }
+            if shutdown.load(Ordering::SeqCst) {
+                return RunOutcome::Success;
+            }
         }
     }
 }
@@ -425,9 +602,7 @@ pub fn run(cli: &ParsedCli) -> RunOutcome {
             allowed_backends: cli.allowed_backends.clone(),
             allowed_ipc: cli.allowed_ipc.clone(),
             pdf_backend: cli.pdf_backend.as_ref().map(|k| match k {
-                crate::args::PdfBackendKind::System => "system".to_string(),
-                crate::args::PdfBackendKind::Bundled => "bundled".to_string(),
-                crate::args::PdfBackendKind::Docker => "docker".to_string(),
+                crate::args::PdfBackendKind::Ironpress => "ironpress".to_string(),
             }),
         }
     } else {
@@ -514,7 +689,7 @@ pub fn run(cli: &ParsedCli) -> RunOutcome {
                 .unwrap_or("main");
             match compile_component(&project, entry_component, &args, &opts) {
                 Ok(v) => {
-                    let (outcome, output) = emit(cli, &opts, &v, None);
+                    let (outcome, output) = emit(cli, &opts, &v);
                     if let Some(out) = output {
                         print!("{out}");
                     }
@@ -528,7 +703,7 @@ pub fn run(cli: &ParsedCli) -> RunOutcome {
     // Normal compile (no positional, no stdin args, or stdin was empty).
     match compile(&project, &opts) {
         Ok(value) => {
-            let (outcome, output) = emit(cli, &opts, &value, None);
+            let (outcome, output) = emit(cli, &opts, &value);
             if let Some(out) = output {
                 print!("{out}");
             }
@@ -924,12 +1099,7 @@ fn diff(result: &TestResult) -> String {
 /// Returns `(RunOutcome, Option<String>)` where the `String` is stdout
 /// content to emit (for watch-mode clearing), or `None` for file output or
 /// diagnostics format.
-fn emit(
-    cli: &ParsedCli,
-    opts: &Options,
-    value: &Value,
-    docker_backend: Option<&Arc<DockerBackend>>,
-) -> (RunOutcome, Option<String>) {
+fn emit(cli: &ParsedCli, opts: &Options, value: &Value) -> (RunOutcome, Option<String>) {
     match opts.format {
         Format::Diagnostics => (RunOutcome::Success, None),
         // JSON format uses pretty by default (milestone 1.23: "JSON output should
@@ -940,8 +1110,65 @@ fn emit(
         // HTML format renders the value tree to HTML via DefaultHtmlRenderer.
         Format::Html => emit_html(cli, value),
         // PDF format renders the value tree to HTML then converts to PDF.
-        Format::Pdf => emit_pdf(cli, opts, value, docker_backend),
+        Format::Pdf => emit_pdf(cli, opts, value),
     }
+}
+
+fn write_file(path: &Path, json: &str) -> RunOutcome {
+    if let Err(e) = std::fs::write(path, json) {
+        let _ = std::fs::remove_file(path);
+        eprintln!(
+            "ymx: failed to write output file `{path}`: {e}",
+            path = path.display()
+        );
+        return RunOutcome::Diagnostic;
+    }
+    RunOutcome::Success
+}
+
+fn write_file_binary(path: &Path, bytes: &[u8]) -> RunOutcome {
+    if let Err(e) = std::fs::write(path, bytes) {
+        let _ = std::fs::remove_file(path);
+        eprintln!(
+            "ymx: failed to write output file `{path}`: {e}",
+            path = path.display()
+        );
+        return RunOutcome::Diagnostic;
+    }
+    RunOutcome::Success
+}
+
+fn serialize(value: &Value, pretty: bool) -> Result<String, String> {
+    if pretty {
+        serde_json::to_string_pretty(value).map_err(|e| format!("failed to serialize JSON: {e}"))
+    } else {
+        serde_json::to_string(value).map_err(|e| format!("failed to serialize JSON: {e}"))
+    }
+}
+
+fn render_diags(diags: &[Diagnostic]) -> RunOutcome {
+    for diag in diags {
+        eprintln!("{}", render_with_guidance(diag));
+    }
+    RunOutcome::Diagnostic
+}
+
+/// Render every load-error diagnostic to stderr and report
+/// [`RunOutcome::LoadError`].
+fn render_diags_load_error(diags: &[Diagnostic]) -> RunOutcome {
+    for diag in diags {
+        eprintln!("{}", render_with_guidance(diag));
+    }
+    RunOutcome::LoadError
+}
+
+/// Render diagnostics that abort a lint run. Lint load/option failures exit
+/// `1`, not the compile mode's `2`.
+fn render_diags_lint_failure(diags: &[Diagnostic]) -> RunOutcome {
+    for diag in diags {
+        eprintln!("{}", render_with_guidance(diag));
+    }
+    RunOutcome::LintFailure
 }
 
 /// Serialize `value` to JSON (pretty iff `pretty`) and dispatch to
@@ -976,1701 +1203,30 @@ fn emit_html(cli: &ParsedCli, value: &Value) -> (RunOutcome, Option<String>) {
     }
 }
 
-/// Render `value` to PDF via [`DefaultHtmlRenderer`] + [`PdfBackend`] and
+/// Render `value` to PDF via [`DefaultHtmlRenderer`] + ironpress and
 /// dispatch binary output to `--output` or stdout.
-fn emit_pdf(
-    cli: &ParsedCli,
-    opts: &Options,
-    value: &Value,
-    docker_backend: Option<&Arc<DockerBackend>>,
-) -> (RunOutcome, Option<String>) {
+fn emit_pdf(cli: &ParsedCli, _opts: &Options, value: &Value) -> (RunOutcome, Option<String>) {
     let html = DefaultHtmlRenderer.render_html(value);
 
-    // If a pre-created DockerBackend is available (watch mode), use it directly.
-    // It was explicitly created for watch mode and takes precedence over opts.pdf_backend.
-    if let Some(arc) = docker_backend {
-        let pdf_bytes = arc.render(&html);
-        return match pdf_bytes {
-            Ok(bytes) => match cli.output.as_deref() {
-                Some(path) => (write_file_binary(path, &bytes), None),
-                None => {
-                    if let Err(e) = std::io::stdout().lock().write_all(&bytes) {
-                        eprintln!("ymx: failed to write PDF to stdout: {e}");
-                        return (RunOutcome::Diagnostic, None);
-                    }
-                    (RunOutcome::Success, None)
-                }
-            },
-            Err(e) => {
-                eprintln!("ymx: PDF render error: {}", e.message);
-                (RunOutcome::Diagnostic, None)
-            }
-        };
-    }
+    let backend = IronpressBackend;
+    let pdf_bytes = backend.render(&html);
 
-    let pdf_bytes: Result<Vec<u8>, PdfError> = match opts.pdf_backend.as_str() {
-        #[cfg(feature = "pdf-system")]
-        "system" => {
-            let backend = SystemChromeBackend;
-            backend.render(&html)
-        }
-        #[cfg(not(feature = "pdf-system"))]
-        "system" => Err(PdfError {
-            message: "system backend not available: rebuild with --features pdf-system".to_string(),
-        }),
-        #[cfg(feature = "pdf-bundled")]
-        "bundled" => {
-            let backend = BundledChromeBackend;
-            backend.render(&html)
-        }
-        #[cfg(not(feature = "pdf-bundled"))]
-        "bundled" => Err(PdfError {
-            message: "bundled backend not available: rebuild with --features pdf-bundled"
-                .to_string(),
-        }),
-        _ => render_pdf_docker(&html),
-    };
-    match pdf_bytes {
-        Ok(bytes) => match cli.output.as_deref() {
+    if let Ok(bytes) = pdf_bytes {
+        match cli.output.as_deref() {
             Some(path) => (write_file_binary(path, &bytes), None),
             None => {
                 if let Err(e) = std::io::stdout().lock().write_all(&bytes) {
                     eprintln!("ymx: failed to write PDF to stdout: {e}");
-                    return (RunOutcome::Diagnostic, None);
+                    (RunOutcome::Diagnostic, None)
+                } else {
+                    (RunOutcome::Success, None)
                 }
-                // Binary stdout cannot use the ANSI clear-line sequence.
-                (RunOutcome::Success, None)
             }
-        },
-        Err(e) => {
-            eprintln!("ymx: PDF render error: {}", e.message);
-            (RunOutcome::Diagnostic, None)
         }
-    }
-}
-
-/// Find an available port on the host, starting from 1024 and incrementing upward.
-/// The WeasyPrint container always listens on 8080 inside the container, so we
-/// bind an available host port to container port 8080.
-fn find_available_port() -> Result<u16, PdfError> {
-    let mut port = 1024u16;
-    loop {
-        if TcpListener::bind(format!("127.0.0.1:{port}")).is_ok() {
-            return Ok(port);
-        }
-        port = port.checked_add(1).ok_or_else(|| PdfError {
-            message: "exhausted port range".to_string(),
-        })?;
-    }
-}
-
-/// Check if a server is ready to accept connections.
-fn check_server_ready(port: u16) -> bool {
-    TcpStream::connect(format!("localhost:{}", port)).is_ok()
-}
-
-/// Wait for the WeasyPrint server to be ready, polling with TCP connections.
-fn wait_for_server(port: u16, max_wait: Duration) -> Result<(), PdfError> {
-    let start = Instant::now();
-    while start.elapsed() < max_wait {
-        if check_server_ready(port) {
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    Err(PdfError {
-        message: "Server did not become ready".to_string(),
-    })
-}
-
-/// POST HTML to the WeasyPrint server and save the PDF response.
-fn post_html_to_pdf(port: u16, html: &str, output_path: &Path) -> Result<(), PdfError> {
-    let mut stream = TcpStream::connect(format!("localhost:{}", port)).map_err(|e| PdfError {
-        message: format!("connection failed: {}", e),
-    })?;
-
-    stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
-
-    let boundary = "----YmXBoundary123";
-    let body = format!(
-        "--{}\r\nContent-Disposition: form-data; name=\"html\"; filename=\"index.html\"\r\nContent-Type: text/html\r\n\r\n{}\r\n--{}--\r\n",
-        boundary, html, boundary
-    );
-
-    let request = format!(
-        "POST / HTTP/1.1\r\nHost: localhost:{}\r\nUser-Agent: ymx\r\nConnection: close\r\nContent-Type: multipart/form-data; boundary={}\r\nContent-Length: {}\r\n\r\n{}",
-        port, boundary, body.len(), body
-    );
-
-    stream.write_all(request.as_bytes()).map_err(|e| PdfError {
-        message: format!("send failed: {}", e),
-    })?;
-
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).map_err(|e| PdfError {
-        message: format!("read failed: {}", e),
-    })?;
-
-    let response_str = String::from_utf8_lossy(&response);
-    if let Some(pos) = response_str.find("\r\n\r\n") {
-        let body = &response[pos + 4..];
-        std::fs::write(output_path, body).map_err(|e| PdfError {
-            message: format!("write failed: {}", e),
-        })?;
-        Ok(())
+    } else if let Err(e) = pdf_bytes {
+        eprintln!("ymx: PDF render error: {}", e.message);
+        (RunOutcome::Diagnostic, None)
     } else {
-        Err(PdfError {
-            message: "Invalid HTTP response".to_string(),
-        })
-    }
-}
-
-/// Wrap `post_html_to_pdf` with retry logic.
-fn try_post_html_to_pdf(
-    port: u16,
-    html: &str,
-    output_path: &Path,
-    max_retries: u32,
-) -> Result<(), PdfError> {
-    let mut count = 0;
-    while post_html_to_pdf(port, html, output_path).is_err() && count < max_retries {
-        std::thread::sleep(Duration::from_millis(500));
-        count += 1;
-    }
-    Ok(())
-}
-
-/// Render HTML to PDF using Docker (4teamwork/weasyprint server).
-pub(crate) fn render_pdf_docker(html: &str) -> Result<Vec<u8>, PdfError> {
-    use std::fs;
-    use std::process::Command;
-
-    let cwd = std::env::current_dir().map_err(|e| PdfError {
-        message: e.to_string(),
-    })?;
-    let pdf_path = cwd.join("convert.pdf");
-
-    // Start container in detached mode with a unique name so we can clean it up after.
-    let container_name = format!("ymx-pdf-{}", std::process::id());
-    let port = find_available_port()?;
-    let docker_start = Command::new("docker")
-        .args([
-            "run",
-            "-d",
-            "--name",
-            &container_name,
-            "-p",
-            &format!("{port}:8080"),
-            "4teamwork/weasyprint",
-        ])
-        .output()
-        .map_err(|e| PdfError {
-            message: format!("docker run failed: {}", e),
-        })?;
-
-    if !docker_start.status.success() {
-        let stderr = String::from_utf8_lossy(&docker_start.stderr);
-        return Err(PdfError {
-            message: format!("docker start failed ({}): {}", docker_start.status, stderr),
-        });
-    }
-
-    // Wait for the WeasyPrint server to be ready, up to 10 seconds total.
-    let max_wait = Duration::from_secs(10);
-    wait_for_server(port, max_wait)?;
-
-    // POST HTML to the WeasyPrint server
-    try_post_html_to_pdf(port, html, &pdf_path, 10)?;
-
-    // Stop and remove the container regardless of outcome.
-    let _ = Command::new("docker")
-        .args(["rm", "-f", &container_name])
-        .output();
-
-    let pdf_bytes = fs::read(&pdf_path).map_err(|e| PdfError {
-        message: format!("failed to read convert.pdf: {}", e),
-    })?;
-
-    let _ = fs::remove_file(&pdf_path);
-
-    Ok(pdf_bytes)
-}
-
-/// Cached Docker backend: keeps a container running across compiles in watch mode.
-#[derive(Clone)]
-pub(crate) struct DockerBackend {
-    container_name: String,
-    cwd: PathBuf,
-    port: u16,
-}
-
-impl DockerBackend {
-    /// Start the Docker container in detached mode and keep it running.
-    #[cfg(feature = "watch")]
-    fn new() -> Result<Self, PdfError> {
-        let container_name = format!("ymx-pdf-{}", std::process::id());
-        let cwd = std::env::current_dir().map_err(|e| PdfError {
-            message: e.to_string(),
-        })?;
-        let port = find_available_port()?;
-
-        // Start container in detached mode (no --rm so it stays running)
-        let output = std::process::Command::new("docker")
-            .args([
-                "run",
-                "-d",
-                "--name",
-                &container_name,
-                "-p",
-                &format!("{port}:8080"),
-                "4teamwork/weasyprint",
-            ])
-            .output()
-            .map_err(|e| PdfError {
-                message: format!("docker run failed: {}", e),
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(PdfError {
-                message: format!("docker start failed: {}", stderr),
-            });
-        }
-
-        Ok(DockerBackend {
-            container_name,
-            cwd,
-            port,
-        })
-    }
-
-    /// Render HTML to PDF using the running container.
-    fn render(&self, html: &str) -> Result<Vec<u8>, PdfError> {
-        let pdf_path = self.cwd.join("convert.pdf");
-
-        // Remove any previous files
-        let _ = std::fs::remove_file(&pdf_path);
-
-        // Wait for the WeasyPrint server to be ready, up to 10 seconds total.
-        let max_wait = Duration::from_secs(10);
-        // std::thread::sleep(Duration::from_millis(500));
-        wait_for_server(self.port, max_wait)?;
-
-        // POST HTML to the WeasyPrint server
-        try_post_html_to_pdf(self.port, html, &pdf_path, 10)?;
-
-        // Sync the directory to ensure container writes are flushed to the host volume
-        let pdf_dir = pdf_path.parent().unwrap_or(std::path::Path::new("."));
-        let dir_file = std::fs::OpenOptions::new()
-            .read(true)
-            .open(pdf_dir)
-            .map_err(|e| PdfError {
-                message: format!("failed to open PDF directory for sync: {}", e),
-            })?;
-        dir_file.sync_all().map_err(|e| PdfError {
-            message: format!("failed to sync PDF directory: {}", e),
-        })?;
-
-        // Re-open the PDF file fresh to avoid cached/empty content
-        let pdf_file = std::fs::File::open(&pdf_path).map_err(|e| PdfError {
-            message: format!("failed to open convert.pdf: {}", e),
-        })?;
-        pdf_file.sync_all().map_err(|e| PdfError {
-            message: format!("failed to sync PDF file: {}", e),
-        })?;
-        let pdf_bytes = std::fs::read(&pdf_path).map_err(|e| PdfError {
-            message: format!("failed to read convert.pdf: {}", e),
-        })?;
-
-        // Clean up temp files
-        let _ = std::fs::remove_file(&pdf_path);
-
-        Ok(pdf_bytes)
-    }
-}
-
-impl Drop for DockerBackend {
-    fn drop(&mut self) {
-        // Stop and remove the container
-        let _ = std::process::Command::new("docker")
-            .args(["rm", "-f", &self.container_name])
-            .output();
-    }
-}
-
-/// Write binary `bytes` to `path`. A write failure prints a diagnostic-style
-/// error to stderr, best-effort removes any partial file, and yields
-/// [`RunOutcome::Diagnostic`].
-fn write_file_binary(path: &Path, bytes: &[u8]) -> RunOutcome {
-    if let Err(e) = std::fs::write(path, bytes) {
-        let _ = std::fs::remove_file(path);
-        eprintln!(
-            "ymx: failed to write output file `{path}`: {e}",
-            path = path.display()
-        );
-        return RunOutcome::Diagnostic;
-    }
-    RunOutcome::Success
-}
-
-/// Serialize `value` to a JSON `String`: compact by default, pretty when
-/// `pretty`. `serde_json` does not fail for our [`Value`] shape (it derives
-/// `Serialize` and contains only JSON-representable types), but the fall-back
-/// keeps the emit path robust.
-fn serialize(value: &Value, pretty: bool) -> Result<String, String> {
-    if pretty {
-        serde_json::to_string_pretty(value).map_err(|e| format!("failed to serialize JSON: {e}"))
-    } else {
-        serde_json::to_string(value).map_err(|e| format!("failed to serialize JSON: {e}"))
-    }
-}
-
-/// Write `json` to `path`: serialize first (done by the caller), then a single
-/// `fs::write` (which truncates-then-writes). A write failure prints a
-/// diagnostic-style error to stderr, best-effort removes any partial file,
-/// and yields [`RunOutcome::Diagnostic`].
-fn write_file(path: &Path, json: &str) -> RunOutcome {
-    if let Err(e) = std::fs::write(path, json) {
-        let _ = std::fs::remove_file(path);
-        eprintln!(
-            "ymx: failed to write output file `{path}`: {e}",
-            path = path.display()
-        );
-        return RunOutcome::Diagnostic;
-    }
-    RunOutcome::Success
-}
-
-/// Render every diagnostic to stderr (one enhanced `render_with_guidance()` line
-/// per entry) and report [`RunOutcome::Diagnostic`].
-fn render_diags(diags: &[Diagnostic]) -> RunOutcome {
-    for diag in diags {
-        eprintln!("{}", render_with_guidance(diag));
-    }
-    RunOutcome::Diagnostic
-}
-
-/// Render every load-error diagnostic to stderr and report
-/// [`RunOutcome::LoadError`].
-fn render_diags_load_error(diags: &[Diagnostic]) -> RunOutcome {
-    for diag in diags {
-        eprintln!("{}", render_with_guidance(diag));
-    }
-    RunOutcome::LoadError
-}
-
-/// Render diagnostics that abort a lint run. Lint load/option failures exit
-/// `1`, not the compile mode's `2`.
-fn render_diags_lint_failure(diags: &[Diagnostic]) -> RunOutcome {
-    for diag in diags {
-        eprintln!("{}", render_with_guidance(diag));
-    }
-    RunOutcome::LintFailure
-}
-
-/// Run a single compile cycle for watch mode: load -> extract -> compile -> emit.
-/// Uses the file at `cli.path` directly (not stdin or temp files).
-/// Returns `(RunOutcome, Vec<Diagnostic>, Option<String>)` where the `Vec<Diagnostic>`
-/// contains any diagnostics (empty on success) and the `String` is stdout content.
-#[cfg(feature = "watch")]
-fn run_single_compile(
-    cli: &ParsedCli,
-    docker_backend: Option<&Arc<DockerBackend>>,
-) -> (RunOutcome, Vec<Diagnostic>, Option<String>) {
-    let project = match load_project(&cli.path) {
-        Ok(p) => p,
-        Err(diags) => {
-            return (RunOutcome::LoadError, diags, None);
-        }
-    };
-
-    let overrides = cli.overrides();
-    let mut opts = match extract_options(&project, &overrides) {
-        Ok(o) => o,
-        Err(diags) => {
-            return (RunOutcome::Diagnostic, diags, None);
-        }
-    };
-
-    opts.executor = Some(Arc::new(StdExecutor));
-    if cli.no_exec {
-        opts.executor = None;
-    }
-
-    // --no-ipc disables IPC entirely.
-    if cli.no_ipc {
-        opts.ipc = None;
-    } else if opts.ipc.is_none() {
-        if let Some(ref exec) = opts.executor {
-            opts.ipc = Some(Arc::new(StdIpcHost::new(exec.clone())));
-        }
-    }
-
-    match compile(&project, &opts) {
-        Ok(value) => {
-            let (outcome, output) = emit(cli, &opts, &value, docker_backend);
-            (outcome, Vec::new(), output)
-        }
-        Err(diags) => (RunOutcome::Diagnostic, diags, None),
-    }
-}
-
-/// Format input->output path string for watch mode messages.
-#[cfg(feature = "watch")]
-fn watch_msg_path(watch_path: &Path, cli: &ParsedCli) -> String {
-    let input = watch_path.display().to_string();
-    let output = cli
-        .output
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "stdout".to_string());
-    format!("{} -> {}", input, output)
-}
-
-/// Watch mode: runs the compile pipeline on every .yml/.yaml file change.
-/// Exits cleanly on SIGINT/SIGTERM (exit 0).
-#[cfg(feature = "watch")]
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RenderState {
-    Success,
-    Error,
-}
-
-#[cfg(feature = "watch")]
-pub fn run_watch(cli: &ParsedCli) -> RunOutcome {
-    let watch_path = cli.watch.as_ref().expect("--watch value must be present");
-    println!("Watching {}...", watch_path.display());
-
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let shutdown_clone = shutdown.clone();
-
-    if let Err(e) = ctrlc::set_handler(move || {
-        shutdown_clone.store(true, Ordering::SeqCst);
-    }) {
-        eprintln!("ymx: warning: could not set Ctrl-C handler: {e}");
-    }
-
-    let debounce_duration = Duration::from_millis(100);
-    let mut pending = false;
-
-    // Pre-initialize Docker backend when using PDF format.
-    // Docker is the default PDF backend — no --pdf-backend flag needed.
-    let docker_backend: Option<Arc<DockerBackend>> = if cli.format == Some(Format::Pdf) {
-        match DockerBackend::new() {
-            Ok(b) => Some(Arc::new(b)),
-            Err(e) => {
-                eprintln!("ymx: failed to start Docker backend: {}", e.message);
-                return RunOutcome::Diagnostic;
-            }
-        }
-    } else {
-        None
-    };
-
-    // Collect current mtimes for watched path (file or directory)
-    fn get_current_mtimes(path: &Path) -> Vec<(PathBuf, Option<u64>)> {
-        if path.is_file() {
-            vec![get_file_mtime(path)]
-        } else if path.is_dir() {
-            let mut mtimes = Vec::new();
-            let walker = ignore::WalkBuilder::new(path)
-                .max_depth(Some(10))
-                .hidden(true)
-                .build();
-            for entry in walker.flatten() {
-                let file_path = entry.path();
-                if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
-                    if ext == "yml" || ext == "yaml" {
-                        mtimes.push(get_file_mtime(file_path));
-                    }
-                }
-            }
-            mtimes
-        } else {
-            Vec::new()
-        }
-    }
-
-    fn get_file_mtime(path: &Path) -> (PathBuf, Option<u64>) {
-        let mtime = path
-            .metadata()
-            .and_then(|m| m.modified())
-            .map(|t| {
-                t.duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0)
-            })
-            .ok();
-        (path.to_path_buf(), mtime)
-    }
-
-    // Compare two mtime collections for equality
-    fn mtimes_equal(a: &[(PathBuf, Option<u64>)], b: &[(PathBuf, Option<u64>)]) -> bool {
-        if a.len() != b.len() {
-            return false;
-        }
-        // Sort both by path for comparison
-        let mut a_sorted: Vec<_> = a.iter().collect();
-        let mut b_sorted: Vec<_> = b.iter().collect();
-        a_sorted.sort_by_key(|k| &k.0);
-        b_sorted.sort_by_key(|k| &k.0);
-        a_sorted
-            .into_iter()
-            .zip(b_sorted)
-            .all(|(a, b)| a.0 == b.0 && a.1 == b.1)
-    }
-
-    // Run initial compile
-    let start = Instant::now();
-    println!(
-        "\x1b[2J\x1b[H{}: Compiling...",
-        watch_msg_path(watch_path, cli)
-    );
-    std::io::stdout().flush().ok();
-    let (outcome, diags, _output) = run_single_compile(cli, docker_backend.as_ref());
-    let elapsed = start.elapsed();
-    let state = match outcome {
-        RunOutcome::Success => RenderState::Success,
-        _ => RenderState::Error,
-    };
-    match state {
-        RenderState::Success => {
-            let label = format!(
-                "{}: ✓ compiled in {:.3}s",
-                watch_msg_path(watch_path, cli),
-                elapsed.as_secs_f64()
-            );
-            print!("\x1b[2J\x1b[H{label}");
-            std::io::stdout().flush().ok();
-        }
-        RenderState::Error => {
-            print!("\x1b[2J\x1b[H✗ ERROR");
-            std::io::stdout().flush().ok();
-            if diags.is_empty() {
-                eprintln!(" (no diagnostics available)");
-            } else {
-                for diag in &diags {
-                    eprintln!("{}", diag.render());
-                }
-            }
-        }
-    }
-    if shutdown.load(Ordering::SeqCst) {
-        return RunOutcome::Success;
-    }
-    // Don't exit on first compile error — keep watching
-
-    // Initialize last mtimes after initial compile
-    let mut last_mtimes = get_current_mtimes(watch_path);
-
-    loop {
-        if shutdown.load(Ordering::SeqCst) {
-            return RunOutcome::Success;
-        }
-
-        std::thread::sleep(debounce_duration);
-
-        let current_mtimes = get_current_mtimes(watch_path);
-
-        // Check if anything changed
-        if !mtimes_equal(&current_mtimes, &last_mtimes) {
-            pending = true;
-        }
-
-        if pending {
-            pending = false;
-            last_mtimes = current_mtimes;
-
-            let start = Instant::now();
-            println!(
-                "\x1b[2J\x1b[H{}: Compiling...",
-                watch_msg_path(watch_path, cli)
-            );
-            std::io::stdout().flush().ok();
-            let (outcome, diags, _output) = run_single_compile(cli, docker_backend.as_ref());
-            let elapsed = start.elapsed();
-            let state = match outcome {
-                RunOutcome::Success => RenderState::Success,
-                _ => RenderState::Error,
-            };
-            match state {
-                RenderState::Success => {
-                    let label = format!(
-                        "{}: ✓ compiled in {:.3}s",
-                        watch_msg_path(watch_path, cli),
-                        elapsed.as_secs_f64()
-                    );
-                    print!("\x1b[2J\x1b[H{label}");
-                    std::io::stdout().flush().ok();
-                }
-                RenderState::Error => {
-                    print!("\x1b[2J\x1b[H✗ ERROR");
-                    std::io::stdout().flush().ok();
-                    if diags.is_empty() {
-                        eprintln!(" (no diagnostics available)");
-                    } else {
-                        for diag in &diags {
-                            eprintln!("{}", diag.render());
-                        }
-                    }
-                }
-            }
-            if shutdown.load(Ordering::SeqCst) {
-                return RunOutcome::Success;
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    use ymx_config::CliOverrides;
-
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
-
-    /// Unique-per-test temp directory; removed on drop (best effort).
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "ymx_cli_run_test_{}_{}",
-                std::process::id(),
-                COUNTER.fetch_add(1, Ordering::SeqCst)
-            ));
-            fs::create_dir_all(&path).expect("create temp dir");
-            TempDir(path)
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-
-        fn write(&self, relative: &str, contents: &str) {
-            let path = self.0.join(relative);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).expect("create parent dirs");
-            }
-            fs::write(path, contents).expect("write file");
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn cli_for(root: &Path) -> ParsedCli {
-        // File-based entry: positional is the entry file; project root is its parent.
-        ParsedCli {
-            path: root.join("main.yml"),
-            entry: None,
-            max_depth: None,
-            pretty: None,
-            format: None,
-            output: None,
-            test: false,
-            test_dir: None,
-            stdin_is_script: false,
-            allowed_backends: None,
-            no_exec: false,
-            no_ipc: false,
-            allowed_ipc: None,
-            code: None,
-            pdf_backend: None,
-            lint: false,
-            deny: None,
-            allow: None,
-            fail_on: None,
-            plain: None,
-            watch: None,
-        }
-    }
-
-    fn cli_with_test(root: &Path) -> ParsedCli {
-        let mut cli = cli_for(root);
-        cli.test = true;
-        cli
-    }
-
-    fn cli_with_test_dir(dir: &Path) -> ParsedCli {
-        // Recursive test mode: test=true and test_dir=Some(dir)
-        ParsedCli {
-            path: dir.to_path_buf(),
-            entry: None,
-            max_depth: None,
-            pretty: None,
-            format: None,
-            output: None,
-            test: true,
-            test_dir: Some(dir.to_path_buf()),
-            stdin_is_script: false,
-            allowed_backends: None,
-            no_exec: false,
-            no_ipc: false,
-            allowed_ipc: None,
-            code: None,
-            pdf_backend: None,
-            lint: false,
-            deny: None,
-            allow: None,
-            fail_on: None,
-            plain: None,
-            watch: None,
-        }
-    }
-
-    // entry is now a bare component name (not a dotted path).
-    fn cli_with_entry(file: &Path, component: &str) -> ParsedCli {
-        ParsedCli {
-            path: file.to_path_buf(),
-            entry: Some(component.to_string()),
-            max_depth: None,
-            pretty: None,
-            format: None,
-            output: None,
-            test: false,
-            test_dir: None,
-            stdin_is_script: false,
-            allowed_backends: None,
-            no_exec: false,
-            no_ipc: false,
-            allowed_ipc: None,
-            code: None,
-            pdf_backend: None,
-            lint: false,
-            deny: None,
-            allow: None,
-            fail_on: None,
-            plain: None,
-            watch: None,
-        }
-    }
-
-    #[test]
-    fn compile_success_returns_success() {
-        let dir = TempDir::new();
-        dir.write("main.yml", "main: 1\n");
-        let cli = cli_for(dir.path());
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn load_yaml_error_returns_load_error() {
-        let dir = TempDir::new();
-        dir.write("bad.yml", "a: 1\n---\nb: 2\n");
-        let cli = cli_for(dir.path());
-        assert_eq!(run(&cli), RunOutcome::LoadError);
-    }
-
-    #[test]
-    fn load_missing_root_returns_load_error() {
-        let dir = TempDir::new();
-        let missing = dir.path().join("nope");
-        let cli = cli_for(&missing);
-        assert_eq!(run(&cli), RunOutcome::LoadError);
-    }
-    #[test]
-    fn missing_entry_file_is_e001_load_error() {
-        // Passing a non-existent entry file returns E001 (LoadError).
-        let dir = TempDir::new();
-        dir.write("other.yml", "other: 1\n");
-        let cli = cli_for(dir.path()); // path = dir/main.yml (does not exist)
-        assert_eq!(run(&cli), RunOutcome::LoadError);
-    }
-
-    #[test]
-    fn malformed_ymx_in_entry_is_e010_diagnostic() {
-        let dir = TempDir::new();
-        dir.write("main.yml", "_ymx:\n  foo: 1\nmain: 0\n");
-        let cli = cli_for(dir.path());
-        assert_eq!(run(&cli), RunOutcome::Diagnostic);
-    }
-
-    #[test]
-    fn explicit_entry_selects_component() {
-        let dir = TempDir::new();
-        dir.write("a/b.yml", "x: 7\n");
-        let cli = cli_with_entry(&dir.path().join("a/b.yml"), "x");
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn explicit_missing_component_is_e009_diagnostic() {
-        let dir = TempDir::new();
-        dir.write("a/b.yml", "x: 7\n");
-        let cli = cli_with_entry(&dir.path().join("a/b.yml"), "y");
-        assert_eq!(run(&cli), RunOutcome::Diagnostic);
-    }
-
-    #[test]
-    fn test_branch_passing_returns_success() {
-        let dir = TempDir::new();
-        dir.write("main.yml", "main: 1\n_test:\n  main: 1\n");
-        let cli = cli_with_test(dir.path());
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn test_branch_failing_value_returns_diagnostic() {
-        let dir = TempDir::new();
-        dir.write("main.yml", "main: 1\n_test:\n  main: 2\n");
-        let cli = cli_with_test(dir.path());
-        assert_eq!(run(&cli), RunOutcome::Diagnostic);
-    }
-
-    #[test]
-    fn test_branch_error_match_returns_success() {
-        // `main` calls the unknown `$nope` -> E002; the test asserts `E002`.
-        let dir = TempDir::new();
-        dir.write(
-            "main.yml",
-            "main: \"$nope(1)\"\n_test:\n  main:\n    error: \"E002\"\n",
-        );
-        let cli = cli_with_test(dir.path());
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn test_branch_malformed_block_is_e010_diagnostic() {
-        // A B mapping with both `result` and `error` is malformed (`E010`).
-        let dir = TempDir::new();
-        dir.write(
-            "main.yml",
-            "main: 1\n_test:\n  main:\n    result: 1\n    error: \"E002\"\n",
-        );
-        let cli = cli_with_test(dir.path());
-        assert_eq!(run(&cli), RunOutcome::Diagnostic);
-    }
-
-    #[test]
-    fn test_branch_without_tests_returns_success() {
-        let dir = TempDir::new();
-        dir.write("main.yml", "main: 1\n");
-        let cli = cli_with_test(dir.path());
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn override_flags_flow_to_options() {
-        // `--max-depth 1` against a self-recursive component surfaces E008 as
-        // a compile diagnostic — confirming CLI overrides reach `Options`.
-        let dir = TempDir::new();
-        dir.write("main.yml", "main: \"$main()\"\n");
-        let mut cli = cli_for(dir.path());
-        cli.max_depth = Some(1);
-        assert_eq!(run(&cli), RunOutcome::Diagnostic);
-    }
-
-    #[test]
-    fn overrides_helper_yields_non_none_entry_always() {
-        // entry is ALWAYS derived from file_stem.component in CLI overrides,
-        // never left as None (unlike default_for_tests which is harness-only).
-        let cli = cli_for(Path::new("/proj"));
-        let ov = cli.overrides();
-        assert_eq!(ov.entry.as_deref(), Some("main.main"));
-        assert_eq!(ov.max_depth, None);
-        assert_eq!(ov.pretty, None);
-        assert_eq!(ov.format, None);
-    }
-
-    #[test]
-    fn diff_value_mismatch_renders_both_values() {
-        let dir = TempDir::new();
-        dir.write("main.yml", "main: 1\n_test:\n  main: 2\n");
-        let project = load_project(dir.path()).expect("loads");
-        let opts = extract_options(&project, &CliOverrides::default_for_tests()).expect("opts");
-        let results = run_tests(&project, &opts, None);
-        assert_eq!(results.len(), 1);
-        let r = &results[0];
-        assert!(!r.passed);
-        let rendered = diff(r);
-        assert!(rendered.contains("expected"), "{}", rendered);
-        assert!(rendered.contains("actual"), "{}", rendered);
-    }
-
-    #[test]
-    fn diff_error_actual_renders_first_code() {
-        let dir = TempDir::new();
-        dir.write(
-            "main.yml",
-            "main: \"$nope(1)\"\n_test:\n  main:\n    error: \"E008\"\n",
-        );
-        let project = load_project(dir.path()).expect("loads");
-        let opts = extract_options(&project, &CliOverrides::default_for_tests()).expect("opts");
-        let results = run_tests(&project, &opts, None);
-        assert_eq!(results.len(), 1);
-        let r = &results[0];
-        assert!(!r.passed);
-        let rendered = diff(r);
-        assert!(rendered.contains("E002"), "{}", rendered);
-    }
-
-    #[test]
-    fn render_diags_reports_diagnostic_outcome() {
-        let diags: Vec<Diagnostic> = Vec::new();
-        assert_eq!(render_diags(&diags), RunOutcome::Diagnostic);
-    }
-
-    // ---- task 4: emit ----
-
-    #[test]
-    fn serialize_compact_and_pretty_round_trip() {
-        use ymx_lib::ymx_core::parse::{node_to_value, parse_document};
-        // Build a `Value::Object` via the parser so we don't reach for
-        // `indexmap` from this crate. Keys are deliberately out of lexical
-        // order so the `preserve_order` feature's effect is observable.
-        let v = node_to_value(&parse_document("b: 2\na: 1\n").expect("parse"));
-        let compact = serialize(&v, false).expect("compact");
-        assert_eq!(
-            compact, "{\"b\":2,\"a\":1}",
-            "compact preserves YAML insertion order"
-        );
-        let pretty = serialize(&v, true).expect("pretty");
-        assert!(pretty.contains('\n'), "pretty is multiline: {pretty}");
-        assert!(pretty.contains("\"b\":"), "pretty: {pretty}");
-        assert!(pretty.contains("\"a\":"), "pretty: {pretty}");
-    }
-
-    #[test]
-    fn emit_format_json_no_output_returns_success() {
-        let dir = TempDir::new();
-        dir.write("main.yml", "main: 1\n");
-        let cli = cli_for(dir.path());
-        assert_eq!(
-            emit(&cli, &Options::default(), &Value::Int(1), None).0,
-            RunOutcome::Success
-        );
-    }
-
-    #[test]
-    fn emit_format_diagnostics_returns_success_no_output_written() {
-        let dir = TempDir::new();
-        dir.write("main.yml", "main: 1\n");
-        let mut cli = cli_for(dir.path());
-        let out = dir.path().join("ignored.json");
-        cli.output = Some(out.clone());
-        let opts = Options {
-            format: Format::Diagnostics,
-            ..Options::default()
-        };
-        assert_eq!(
-            emit(&cli, &opts, &Value::Int(1), None).0,
-            RunOutcome::Success
-        );
-        assert!(!out.exists(), "--output ignored under --format diagnostics");
-    }
-
-    #[test]
-    fn emit_json_with_output_writes_file_on_success() {
-        let dir = TempDir::new();
-        dir.write("main.yml", "main: 1\n");
-        let out = dir.path().join("out.json");
-        let mut cli = cli_for(dir.path());
-        cli.output = Some(out.clone());
-        assert_eq!(
-            emit(&cli, &Options::default(), &Value::Int(1), None).0,
-            RunOutcome::Success
-        );
-        assert!(out.exists(), "file created on success");
-        let written = fs::read_to_string(&out).expect("read back");
-        assert_eq!(written, "1", "compact JSON written verbatim");
-    }
-
-    #[test]
-    fn emit_json_pretty_with_output_writes_multiline_file() {
-        let dir = TempDir::new();
-        dir.write("main.yml", "main: 1\n");
-        let out = dir.path().join("out.json");
-        let mut cli = cli_for(dir.path());
-        cli.output = Some(out.clone());
-        let opts = Options {
-            pretty: true,
-            ..Options::default()
-        };
-        assert_eq!(
-            emit(&cli, &opts, &Value::Int(1), None).0,
-            RunOutcome::Success
-        );
-        let written = fs::read_to_string(&out).expect("read back");
-        assert_eq!(
-            written, "1",
-            "a scalar prettifiles to itself; round-trip OK"
-        );
-    }
-
-    #[test]
-    fn run_writes_output_file_on_compile_success() {
-        let dir = TempDir::new();
-        dir.write("main.yml", "main: 1\n");
-        let out = dir.path().join("out.json");
-        let mut cli = cli_for(dir.path());
-        cli.output = Some(out.clone());
-        assert_eq!(run(&cli), RunOutcome::Success);
-        assert!(out.exists());
-        assert_eq!(fs::read_to_string(&out).unwrap(), "1");
-    }
-
-    #[test]
-    fn run_does_not_write_output_file_on_load_error() {
-        // Entry file does not exist -> E001 in load_project, before compile /
-        // emit. The --output file must NOT be created.
-        let dir = TempDir::new();
-        dir.write("other.yml", "other: 1\n");
-        let out = dir.path().join("out.json");
-        let mut cli = cli_for(dir.path()); // path = dir/main.yml (does not exist)
-        cli.output = Some(out.clone());
-        assert_eq!(run(&cli), RunOutcome::LoadError);
-        assert!(!out.exists(), "no file on load error");
-    }
-
-    #[test]
-    fn run_does_not_write_output_file_on_missing_entry_with_explicit_entry() {
-        let dir = TempDir::new();
-        dir.write("a/b.yml", "x: 7\n");
-        let out = dir.path().join("out.json");
-        let mut cli = cli_with_entry(&dir.path().join("a/b.yml"), "y");
-        cli.output = Some(out.clone());
-        assert_eq!(run(&cli), RunOutcome::Diagnostic);
-        assert!(!out.exists(), "no file on E009");
-    }
-
-    #[test]
-    fn run_format_diagnostics_on_success_yields_success() {
-        // `--format diagnostics` -> empty stdout, exit 0 on success. We test
-        // the outcome here; stdout emptiness is asserted by the binary
-        // integration test in tests/cli.rs (capturing stdout requires a
-        // subprocess; in-process unit tests would race on the shared stdout
-        // handle).
-        let dir = TempDir::new();
-        dir.write("main.yml", "main: 1\n");
-        let mut cli = cli_for(dir.path());
-        cli.format = Some(Format::Diagnostics);
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn write_file_failure_returns_diagnostic_and_removes_partial() {
-        // A path whose parent does not exist cannot be written by `fs::write`
-        // (it does not create parent directories). write_file best-effort
-        // removes any partial file (none created here) and reports Diagnostic.
-        let dir = TempDir::new();
-        let bad = dir.path().join("no_such_dir").join("out.json");
-        assert_eq!(write_file(&bad, "1"), RunOutcome::Diagnostic);
-        assert!(!bad.exists());
-    }
-
-    #[test]
-    fn write_file_success_returns_success() {
-        let dir = TempDir::new();
-        let out = dir.path().join("ok.json");
-        assert_eq!(write_file(&out, "42"), RunOutcome::Success);
-        assert_eq!(fs::read_to_string(&out).unwrap(), "42");
-    }
-
-    // ---- task 2: recursive test discovery ----
-
-    #[test]
-    fn recursive_tests_single_passing_project() {
-        let dir = TempDir::new();
-        dir.write("proj/main.yml", "main: 1\n_test:\n  main: 1\n");
-        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
-    }
-
-    #[test]
-    fn recursive_tests_multiple_projects_all_pass() {
-        let dir = TempDir::new();
-        dir.write("proj1/main.yml", "main: 1\n_test:\n  main: 1\n");
-        dir.write("proj2/main.yml", "main: 2\n_test:\n  main: 2\n");
-        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
-    }
-
-    #[test]
-    fn recursive_tests_load_failure_skips_with_warning() {
-        // A subdir with an invalid YAML file should be warned and skipped,
-        // but overall outcome should still be Success (0 projects, 0 tests)
-        let dir = TempDir::new();
-        dir.write("bad/bad.yml", "a: 1\n---\nb: 2\n"); // multi-doc is E001
-                                                       // No valid projects found - warn and exit 0
-        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
-    }
-
-    #[test]
-    fn recursive_tests_no_projects_found_exits_success() {
-        let dir = TempDir::new();
-        dir.write("just_text.txt", "not yaml\n");
-        // No YMX projects found
-        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Success);
-    }
-
-    #[test]
-    fn recursive_tests_test_failure_returns_diagnostic() {
-        let dir = TempDir::new();
-        dir.write("proj/main.yml", "main: 1\n_test:\n  main: 2\n"); // expects 2, gets 1
-        assert_eq!(run(&cli_with_test_dir(dir.path())), RunOutcome::Diagnostic);
-    }
-
-    #[test]
-    fn find_project_roots_detects_nested_projects() {
-        let dir = TempDir::new();
-        dir.write("proj1/main.yml", "main: 1\n");
-        dir.write("proj2/sub/main.yml", "main: 2\n");
-        dir.write("proj2/sub/nested/deep/main.yml", "main: 3\n");
-        let roots = find_project_roots(dir.path());
-        // New behavior: each .yml file is its own project
-        assert_eq!(roots.len(), 3);
-    }
-
-    #[test]
-    fn find_project_roots_respects_gitignore() {
-        let dir = TempDir::new();
-        dir.write("proj/main.yml", "main: 1\n");
-        dir.write(".gitignore", ".*\n"); // ignore all hidden files/dirs
-        dir.write(".hidden/proj/main.yml", "main: 2\n");
-        let roots = find_project_roots(dir.path());
-        // Only the non-hidden proj is found
-        assert_eq!(roots.len(), 1);
-    }
-
-    // ---- stdin support helpers ----
-
-    #[test]
-    fn value_to_args_object_becomes_named_sorted() {
-        use ymx_lib::ymx_core::ir::Args;
-        let mut map = indexmap::IndexMap::new();
-        map.insert("z".into(), Value::Int(1));
-        map.insert("a".into(), Value::Int(2));
-        let args = value_to_args(&Value::Object(map));
-        match args {
-            Args::Named(pairs) => {
-                assert_eq!(pairs.len(), 2);
-                assert_eq!(pairs[0].0, "a"); // sorted
-                assert_eq!(pairs[1].0, "z");
-            }
-            other => panic!("expected Named, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn value_to_args_array_becomes_positional() {
-        use ymx_lib::ymx_core::ir::Args;
-        let args = value_to_args(&Value::Array(vec![Value::Int(1), Value::Int(2)]));
-        match args {
-            Args::Positional(vals) => {
-                assert_eq!(vals.len(), 2);
-                assert_eq!(vals[0], Value::Int(1));
-            }
-            other => panic!("expected Positional, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn value_to_args_scalar_becomes_positional_singleton() {
-        use ymx_lib::ymx_core::ir::Args;
-        let args = value_to_args(&Value::Int(42));
-        match args {
-            Args::Positional(vals) => {
-                assert_eq!(vals.len(), 1);
-                assert_eq!(vals[0], Value::Int(42));
-            }
-            other => panic!("expected Positional, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn serde_json_value_to_value_converts_all_types() {
-        use serde_json::json;
-        let v = json!({"a": 1, "b": [1, 2, 3], "c": true, "d": null, "e": "hi"});
-        let value = serde_json_value_to_value(&v);
-        match value {
-            Value::Object(m) => {
-                assert_eq!(m.get("a"), Some(&Value::Int(1)));
-                assert_eq!(m.get("c"), Some(&Value::Bool(true)));
-                assert_eq!(m.get("d"), Some(&Value::Null));
-                assert_eq!(m.get("e"), Some(&Value::String("hi".into())));
-                assert!(matches!(m.get("b"), Some(&Value::Array(_))));
-            }
-            other => panic!("expected Object, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn yaml_to_value_converts_all_yaml_types() {
-        let docs = YamlLoader::load_from_str("a: 1\nb: [1, 2]\nc: true\nd: ~\ne: 1.5\nf: hello\n")
-            .unwrap();
-        let doc = docs.first().expect("has doc");
-        let value = yaml_to_value(doc).expect("converts");
-        match value {
-            Value::Object(m) => {
-                assert_eq!(m.get("a"), Some(&Value::Int(1)));
-                assert!(matches!(m.get("b"), Some(&Value::Array(_))));
-                assert_eq!(m.get("c"), Some(&Value::Bool(true)));
-                assert_eq!(m.get("d"), Some(&Value::Null));
-                // Real number preserved as float
-                assert_eq!(m.get("e"), Some(&Value::Float(1.5)));
-                assert_eq!(m.get("f"), Some(&Value::String("hello".into())));
-            }
-            other => panic!("expected Object, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn yaml_to_value_array_converts_correctly() {
-        let docs = YamlLoader::load_from_str("[1, two, 3.0]\n").unwrap();
-        let doc = docs.first().expect("has doc");
-        let value = yaml_to_value(doc).expect("converts");
-        match value {
-            Value::Array(vals) => {
-                assert_eq!(vals.len(), 3);
-                assert_eq!(vals[0], Value::Int(1));
-                assert_eq!(vals[1], Value::String("two".into()));
-                assert_eq!(vals[2], Value::Float(3.0));
-            }
-            other => panic!("expected Array, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn yaml_to_value_integer_preserved_as_int() {
-        let docs = YamlLoader::load_from_str("42\n").unwrap();
-        let value = yaml_to_value(docs.first().expect("has doc")).expect("converts");
-        assert_eq!(value, Value::Int(42));
-    }
-
-    // ---- expand_escapes tests ----
-
-    #[test]
-    fn expand_escapes_newline() {
-        assert_eq!(expand_escapes("hello\\nworld"), "hello\nworld");
-    }
-
-    #[test]
-    fn expand_escapes_tab() {
-        assert_eq!(expand_escapes("hello\\tworld"), "hello\tworld");
-    }
-
-    #[test]
-    fn expand_escapes_backslash() {
-        assert_eq!(expand_escapes("hello\\\\world"), "hello\\world");
-    }
-
-    #[test]
-    fn expand_escapes_passthrough_unknown() {
-        assert_eq!(expand_escapes("hello\\qworld"), "hello\\qworld");
-    }
-
-    #[test]
-    fn expand_escapes_trailing_backslash() {
-        assert_eq!(expand_escapes("hello\\"), "hello\\");
-    }
-
-    #[test]
-    fn expand_escapes_empty_string() {
-        assert_eq!(expand_escapes(""), "");
-    }
-
-    #[test]
-    fn expand_escapes_no_escapes() {
-        assert_eq!(expand_escapes("plain text"), "plain text");
-    }
-
-    #[test]
-    fn expand_escapes_multiple() {
-        assert_eq!(expand_escapes("a\\nb\\tc\\\\d"), "a\nb\tc\\d");
-    }
-
-    // ---- task 6: -c / --code tests ----
-
-    fn err_of(parts: &[&str]) -> crate::args::ParseError {
-        let args: Vec<String> = parts.iter().map(|s| s.to_string()).collect();
-        crate::args::parse(&args).expect_err("expected usage error")
-    }
-
-    #[test]
-    fn code_only_mode_compiles_inline_script() {
-        let dir = TempDir::new();
-        let cli = ParsedCli {
-            path: dir.path().join("main.yml"),
-            entry: None,
-            max_depth: None,
-            pretty: None,
-            format: None,
-            output: None,
-            test: false,
-            test_dir: None,
-            stdin_is_script: true,
-            allowed_backends: None,
-            no_exec: false,
-            no_ipc: false,
-            allowed_ipc: None,
-            code: Some("main: hello world".to_string()),
-            pdf_backend: None,
-            lint: false,
-            deny: None,
-            allow: None,
-            fail_on: None,
-            plain: None,
-            watch: None,
-        };
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn code_with_file_overrides_components() {
-        let dir = TempDir::new();
-        dir.write("a.yml", "comp1: 5\ncomp2: 10\n");
-        let cli = ParsedCli {
-            path: dir.path().join("a.yml"),
-            entry: None,
-            max_depth: None,
-            pretty: None,
-            format: None,
-            output: None,
-            test: false,
-            test_dir: None,
-            stdin_is_script: false,
-            allowed_backends: None,
-            no_exec: false,
-            no_ipc: false,
-            allowed_ipc: None,
-            code: Some("comp1: 20\nmain: ${comp1()}".to_string()),
-            pdf_backend: None,
-            lint: false,
-            deny: None,
-            allow: None,
-            fail_on: None,
-            plain: None,
-            watch: None,
-        };
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn code_with_file_new_components_added() {
-        let dir = TempDir::new();
-        dir.write("a.yml", "comp1: 10\n");
-        let cli = ParsedCli {
-            path: dir.path().join("a.yml"),
-            entry: None,
-            max_depth: None,
-            pretty: None,
-            format: None,
-            output: None,
-            test: false,
-            test_dir: None,
-            stdin_is_script: false,
-            allowed_backends: None,
-            no_exec: false,
-            no_ipc: false,
-            allowed_ipc: None,
-            code: Some("comp2: 20\nmain: ${comp1()} + ${comp2()}".to_string()),
-            pdf_backend: None,
-            lint: false,
-            deny: None,
-            allow: None,
-            fail_on: None,
-            plain: None,
-            watch: None,
-        };
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn code_with_test_rejected_at_parse_time() {
-        let err = err_of(&["-c", "main: 1", "--test"]);
-        assert!(err.message.contains("-c/--code"));
-    }
-
-    #[test]
-    fn code_only_json_input() {
-        let dir = TempDir::new();
-        let cli = ParsedCli {
-            path: dir.path().join("main.yml"),
-            entry: None,
-            max_depth: None,
-            pretty: None,
-            format: None,
-            output: None,
-            test: false,
-            test_dir: None,
-            stdin_is_script: true,
-            allowed_backends: None,
-            no_exec: false,
-            no_ipc: false,
-            allowed_ipc: None,
-            code: Some("{\"main\": \"${1 + 2}\"}".to_string()),
-            pdf_backend: None,
-            lint: false,
-            deny: None,
-            allow: None,
-            fail_on: None,
-            plain: None,
-            watch: None,
-        };
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn code_only_math_expression() {
-        let dir = TempDir::new();
-        let cli = ParsedCli {
-            path: dir.path().join("main.yml"),
-            entry: None,
-            max_depth: None,
-            pretty: None,
-            format: None,
-            output: None,
-            test: false,
-            test_dir: None,
-            stdin_is_script: true,
-            allowed_backends: None,
-            no_exec: false,
-            no_ipc: false,
-            allowed_ipc: None,
-            code: Some("main: ${10 / 2}".to_string()),
-            pdf_backend: None,
-            lint: false,
-            deny: None,
-            allow: None,
-            fail_on: None,
-            plain: None,
-            watch: None,
-        };
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn code_only_component_call() {
-        let dir = TempDir::new();
-        let cli = ParsedCli {
-            path: dir.path().join("main.yml"),
-            entry: None,
-            max_depth: None,
-            pretty: None,
-            format: None,
-            output: None,
-            test: false,
-            test_dir: None,
-            stdin_is_script: true,
-            allowed_backends: None,
-            no_exec: false,
-            no_ipc: false,
-            allowed_ipc: None,
-            code: Some("greeting: \"hi\"\nmain: ${greeting()}".to_string()),
-            pdf_backend: None,
-            lint: false,
-            deny: None,
-            allow: None,
-            fail_on: None,
-            plain: None,
-            watch: None,
-        };
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn code_with_file_json_input() {
-        let dir = TempDir::new();
-        dir.write("a.yml", "comp1: 10\n");
-        let cli = ParsedCli {
-            path: dir.path().join("a.yml"),
-            entry: None,
-            max_depth: None,
-            pretty: None,
-            format: None,
-            output: None,
-            test: false,
-            test_dir: None,
-            stdin_is_script: false,
-            allowed_backends: None,
-            no_exec: false,
-            no_ipc: false,
-            allowed_ipc: None,
-            code: Some("{\"comp2\": 20, \"main\": \"${comp1()} + ${comp2()}\"}".to_string()),
-            pdf_backend: None,
-            lint: false,
-            deny: None,
-            allow: None,
-            fail_on: None,
-            plain: None,
-            watch: None,
-        };
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn code_with_file_math_expression() {
-        let dir = TempDir::new();
-        dir.write("a.yml", "base: 5\n");
-        let cli = ParsedCli {
-            path: dir.path().join("a.yml"),
-            entry: None,
-            max_depth: None,
-            pretty: None,
-            format: None,
-            output: None,
-            test: false,
-            test_dir: None,
-            stdin_is_script: false,
-            allowed_backends: None,
-            no_exec: false,
-            no_ipc: false,
-            allowed_ipc: None,
-            code: Some("main: ${base() * 3 + 1}".to_string()),
-            pdf_backend: None,
-            lint: false,
-            deny: None,
-            allow: None,
-            fail_on: None,
-            plain: None,
-            watch: None,
-        };
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn code_with_file_component_call() {
-        let dir = TempDir::new();
-        dir.write("a.yml", "greet: \"hello\"\n");
-        let cli = ParsedCli {
-            path: dir.path().join("a.yml"),
-            entry: None,
-            max_depth: None,
-            pretty: None,
-            format: None,
-            output: None,
-            test: false,
-            test_dir: None,
-            stdin_is_script: false,
-            allowed_backends: None,
-            no_exec: false,
-            no_ipc: false,
-            allowed_ipc: None,
-            code: Some("main: ${greet()}".to_string()),
-            pdf_backend: None,
-            lint: false,
-            deny: None,
-            allow: None,
-            fail_on: None,
-            plain: None,
-            watch: None,
-        };
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    // ---- task 6: -f html integration tests ----
-
-    #[test]
-    fn run_format_html_renders_simple_tag() {
-        let dir = TempDir::new();
-        dir.write("main.yml", "main:\n  from: div\n  children: Hello\n");
-        let mut cli = cli_for(dir.path());
-        cli.format = Some(Format::Html);
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn run_format_html_nested_inner_first() {
-        let dir = TempDir::new();
-        dir.write(
-            "main.yml",
-            "main:\n  from: div\n  children:\n    from: span\n    children: inner\n",
-        );
-        let mut cli = cli_for(dir.path());
-        cli.format = Some(Format::Html);
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn run_format_html_style_and_class() {
-        let dir = TempDir::new();
-        dir.write(
-            "main.yml",
-            "main:\n  from: div\n  style: {color: red}\n  class: [a, b]\n  children: text\n",
-        );
-        let mut cli = cli_for(dir.path());
-        cli.format = Some(Format::Html);
-        assert_eq!(run(&cli), RunOutcome::Success);
-    }
-
-    #[test]
-    fn run_format_html_with_output_file() {
-        let dir = TempDir::new();
-        dir.write("main.yml", "main:\n  from: p\n  children: hi\n");
-        let out = dir.path().join("out.html");
-        let mut cli = cli_for(dir.path());
-        cli.format = Some(Format::Html);
-        cli.output = Some(out.clone());
-        assert_eq!(run(&cli), RunOutcome::Success);
-        assert!(out.exists());
-        let content = fs::read_to_string(&out).unwrap();
-        assert!(content.contains("<p>"));
-        assert!(content.contains("hi"));
-    }
-
-    // ---- task 7: PDF integration tests ----
-
-    #[test]
-    #[ignore] // requires Chrome/Chromium installed on the system
-    #[cfg(feature = "pdf-system")]
-    fn test_pdf_system_backend_renders_valid_pdf() {
-        let dir = TempDir::new();
-        dir.write("main.yml", "main:\n  from: div\n  children: Hello PDF\n");
-
-        let project = load_project(dir.path()).expect("load_project should succeed");
-        let opts = extract_options(&project, &CliOverrides::default_for_tests())
-            .expect("extract_options should succeed");
-        let value = compile(&project, &opts).expect("compile should succeed");
-
-        // Render to HTML first
-        let html = DefaultHtmlRenderer.render_html(&value);
-        assert!(html.contains("<div>"), "HTML should contain div tag");
-
-        // Render to PDF using system backend
-        let backend = SystemChromeBackend;
-        let bytes = backend.render(&html).expect("render_pdf should succeed");
-
-        // Verify PDF magic bytes
-        assert!(!bytes.is_empty(), "PDF bytes should not be empty");
-        assert!(
-            bytes.starts_with(b"%PDF"),
-            "PDF should start with %PDF magic"
-        );
-    }
-
-    #[test]
-    #[ignore] // requires Docker running with 4teamwork/weasyprint image
-    fn test_pdf_docker_backend_renders_valid_pdf() {
-        use std::process::Command;
-
-        // Skip if docker is not available
-        if Command::new("docker").arg("info").output().is_err() {
-            return;
-        }
-
-        let dir = TempDir::new();
-        dir.write(
-            "main.yml",
-            "main:\n  from: div\n  children: Hello Docker PDF\n",
-        );
-
-        let project = load_project(dir.path()).expect("load_project should succeed");
-        let opts = extract_options(&project, &CliOverrides::default_for_tests())
-            .expect("extract_options should succeed");
-        let value = compile(&project, &opts).expect("compile should succeed");
-        let html = DefaultHtmlRenderer.render_html(&value);
-
-        // render_pdf_docker is pub(crate), call it directly
-        let bytes = render_pdf_docker(&html).expect("docker render should succeed");
-        assert!(
-            bytes.starts_with(b"%PDF"),
-            "PDF should start with %PDF magic"
-        );
+        unreachable!()
     }
 }

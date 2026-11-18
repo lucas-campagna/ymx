@@ -21,20 +21,28 @@ use std::process::ExitCode;
 use args::{parse, ParseOutcome};
 
 fn main() -> ExitCode {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
-    match parse(&argv) {
-        Ok(ParseOutcome::Help) => {
-            print!("{}", help::manual());
-            ExitCode::SUCCESS
-        }
-        Ok(ParseOutcome::Errors) => {
-            errors::print_errors();
-            ExitCode::SUCCESS
-        }
-        Ok(ParseOutcome::Cli(cli)) => run::run(&cli).to_exit_code(),
-        Err(e) => {
-            eprintln!("ymx: {message}", message = e.message);
-            ExitCode::from(2)
-        }
-    }
+    // Run in a separate thread with a large stack to avoid stack overflow
+    // during deep recursive rendering of large documents.
+    let handle = std::thread::Builder::new()
+        .stack_size(100 * 1024 * 1024)
+        .spawn(|| {
+            let argv: Vec<String> = std::env::args().skip(1).collect();
+            match parse(&argv) {
+                Ok(ParseOutcome::Help) => {
+                    print!("{}", help::manual());
+                    ExitCode::SUCCESS
+                }
+                Ok(ParseOutcome::Errors) => {
+                    errors::print_errors();
+                    ExitCode::SUCCESS
+                }
+                Ok(ParseOutcome::Cli(cli)) => run::run(&cli).to_exit_code(),
+                Err(e) => {
+                    eprintln!("ymx: {message}", message = e.message);
+                    ExitCode::from(2)
+                }
+            }
+        })
+        .expect("failed to spawn thread with large stack");
+    handle.join().expect("thread panicked")
 }

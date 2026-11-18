@@ -2,12 +2,15 @@
 //!
 //! Provides a `Ymx` class for browser/Node.js usage with:
 //! - `parse(code)` to add YMX component definitions
-//! - Dynamic component calls as methods: `ymx.component_name(args)`
+//! - Dynamic component calls: `ymx.component_name(args)`
 //! - `${...}` math/context expressions evaluated in JavaScript
+//! - Result objects with `.asHtml()` and `.asPdf()` methods
+//! - Automatic ironpress initialization and cleanup
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once, RwLock};
 
 use js_sys::JSON;
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 
 use ymx_core::diag::{Diagnostic, FileId};
@@ -15,24 +18,27 @@ use ymx_core::exec::{CommandExecutor, ExecError, ExecOutput};
 use ymx_core::ir::{Args, Value};
 use ymx_core::namespace::Definition;
 use ymx_core::parse::{Key, Node};
-use ymx_core::project::{Options, PlainMode, Project};
+use ymx_core::project::{Format, Options, PlainMode, Project};
+use ymx_core::render::{DefaultHtmlRenderer, HtmlRenderer};
 use ymx_core::resolve::compile_component;
 
 // Minimal allocator for WASM
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
+// Panic hook initialization - runs once on first Ymx::new()
+static INIT_PANIC_HOOK: Once = Once::new();
+
+fn init_panic_hook() {
+    INIT_PANIC_HOOK.call_once(|| {
+        console_error_panic_hook::set_once();
+    });
+}
+
 /// JavaScript context executor for `${...}` expressions.
-///
-/// Evaluates expressions in JavaScript with access to:
-/// - Browser globals (document, window, etc.)
-/// - Positional args bound to `$0`, `$1`, etc.
-/// - Named args bound to their names
 #[derive(Debug)]
 pub struct JsMathExecutor {
-    /// Positional arguments for the current call
     args: Mutex<Vec<Value>>,
-    /// Named arguments for the current call
     kwargs: Mutex<Vec<(String, Value)>>,
 }
 
@@ -44,13 +50,11 @@ impl JsMathExecutor {
         }
     }
 
-    /// Set the arguments for the next call
     pub fn set_args(&self, args: Vec<Value>, kwargs: Vec<(String, Value)>) {
         *self.args.lock().unwrap() = args;
         *self.kwargs.lock().unwrap() = kwargs;
     }
 
-    /// Convert a Value to a JS value
     fn value_to_js(v: &Value) -> JsValue {
         match v {
             Value::Null => JsValue::NULL,
@@ -76,26 +80,22 @@ impl JsMathExecutor {
         }
     }
 
-    /// Evaluate a JavaScript expression with bound arguments
     fn eval_js(&self, expr: &str) -> Result<String, ExecError> {
         let args = self.args.lock().unwrap();
         let kwargs = self.kwargs.lock().unwrap();
 
-        // Bind positional args: $0, $1, etc.
         for (i, arg) in args.iter().enumerate() {
             let var_name = format!("${}", i);
             let js_val = Self::value_to_js(arg);
             let _ = js_sys::Reflect::set(&js_sys::global(), &JsValue::from_str(&var_name), &js_val);
         }
 
-        // Bind named args as variables
         for (name, value) in kwargs.iter() {
             let var_name = format!("${}", name);
             let js_val = Self::value_to_js(value);
             let _ = js_sys::Reflect::set(&js_sys::global(), &JsValue::from_str(&var_name), &js_val);
         }
 
-        // Evaluate the expression
         match js_sys::eval(expr) {
             Ok(result) => {
                 let js_str = JSON::stringify(&result).expect("failed to stringify");
@@ -131,17 +131,19 @@ impl CommandExecutor for JsMathExecutor {
 /// The main YMX WASM library class.
 #[wasm_bindgen]
 pub struct Ymx {
-    project: Project,
+    project: Arc<RwLock<Project>>,
     options: Options,
     executor: Arc<JsMathExecutor>,
-    last_result: Mutex<Option<Value>>,
+    last_result: Arc<Mutex<Option<Value>>>,
+    ironpress_converter: Arc<Mutex<Option<js_sys::Object>>>,
 }
 
 #[wasm_bindgen]
 impl Ymx {
-    /// Create a new YMX instance
     #[wasm_bindgen(constructor)]
     pub fn new() -> Ymx {
+        init_panic_hook();
+
         let executor = Arc::new(JsMathExecutor::new());
         let options = Options {
             entry: "main.main".to_string(),
@@ -149,7 +151,7 @@ impl Ymx {
             default_keyword: "default".to_string(),
             max_depth: 256,
             pretty: false,
-            format: ymx_core::project::Format::Json,
+            format: Format::Json,
             plain: PlainMode::False,
             allowed_backends: None,
             pdf_backend: "docker".to_string(),
@@ -159,23 +161,18 @@ impl Ymx {
         };
 
         Ymx {
-            project: Project::new(),
+            project: Arc::new(RwLock::new(Project::new())),
             options,
             executor,
-            last_result: Mutex::new(None),
+            last_result: Arc::new(Mutex::new(None)),
+            ironpress_converter: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Parse a YMX code string, adding or overwriting components.
-    ///
-    /// Subsequent calls with the same component name will overwrite previous definitions.
-    ///
-    /// Returns `Ok(null)` on success, or throws a JS Error with diagnostic info.
     pub fn parse(&mut self, code: &str) -> Result<(), JsValue> {
-        let file_id = FileId(self.project.files.len() as u32);
+        let file_id = FileId(self.project.read().unwrap().files.len() as u32);
         let path = std::path::PathBuf::from("<inline>");
 
-        // Parse the YAML document
         let node = match ymx_core::parse::parse_document(code) {
             Ok(n) => n,
             Err(e) => {
@@ -184,18 +181,14 @@ impl Ymx {
             }
         };
 
-        // Register components into the project
-        self.project.files.push(path.clone());
+        self.project.write().unwrap().files.push(path.clone());
 
-        // Walk the parsed document and register top-level definitions
         if let Node::Object(entries, _span) = node {
             for entry in entries {
                 let name = Self::key_to_name(&entry.key);
                 if name.is_empty() {
                     continue;
                 }
-
-                // Skip meta keys
                 if name == "_ymx" || name == "_test" || name == "_use" {
                     continue;
                 }
@@ -210,74 +203,140 @@ impl Ymx {
                     exec_backend: None,
                 };
 
-                // Use register_override to allow overwriting
-                self.project.namespaces.register_override("", def);
+                self.project
+                    .write()
+                    .unwrap()
+                    .namespaces
+                    .register_override("", def);
             }
         }
 
         Ok(())
     }
 
-    /// Call a component by name with no arguments.
-    /// Returns the result as a JSON string.
-    pub fn call(&mut self, name: &str) -> Result<String, JsValue> {
-        self.call_with_args(name, &JsValue::NULL)
-    }
+    /// Get a callable proxy for a component.
+    /// Usage: `ymx.greet({ name: "World" })` or `ymx.add(1, 2)`
+    /// Returns a result object with `.asHtml()` and `.asPdf()` methods.
+    pub fn __get__(&self, name: &str) -> Result<js_sys::Function, JsValue> {
+        let name = name.to_string();
+        let project = self.project.clone();
+        let options = self.options.clone();
+        let executor = self.executor.clone();
+        let last_result = self.last_result.clone();
+        let ironpress_converter = self.ironpress_converter.clone();
 
-    /// Call a component by name with arguments.
-    /// Arguments can be:
-    /// - `null` or `undefined`: no arguments
-    /// - An object: named arguments
-    /// - An array: positional arguments
-    ///
-    /// Returns the result as a JSON string.
-    pub fn call_with_args(&mut self, name: &str, args: &JsValue) -> Result<String, JsValue> {
-        // Parse arguments
-        let (args_vec, kwargs_vec) = Self::parse_js_args(args);
+        let closure = Closure::wrap(Box::new(move |_this: JsValue, args: js_sys::Array| {
+            let (args_vec, kwargs_vec) = Self::parse_js_args_from_array(&args);
 
-        // Set up executor with arguments
-        self.executor.set_args(args_vec.clone(), kwargs_vec.clone());
+            executor.set_args(args_vec.clone(), kwargs_vec.clone());
 
-        // Determine Args type
-        let args = if kwargs_vec.is_empty() && !args_vec.is_empty() {
-            Args::Positional(args_vec)
-        } else if args_vec.is_empty() && !kwargs_vec.is_empty() {
-            Args::Named(kwargs_vec)
-        } else if !args_vec.is_empty() && !kwargs_vec.is_empty() {
-            Args::Mixed {
-                named: kwargs_vec,
-                positional: args_vec,
-            }
-        } else {
-            Args::None
-        };
+            let args = if kwargs_vec.is_empty() && !args_vec.is_empty() {
+                Args::Positional(args_vec)
+            } else if args_vec.is_empty() && !kwargs_vec.is_empty() {
+                Args::Named(kwargs_vec)
+            } else if !args_vec.is_empty() && !kwargs_vec.is_empty() {
+                Args::Mixed {
+                    named: kwargs_vec,
+                    positional: args_vec,
+                }
+            } else {
+                Args::None
+            };
 
-        // Compile and execute
-        match compile_component(&self.project, name, &args, &self.options) {
-            Ok(value) => {
-                *self.last_result.lock().unwrap() = Some(value.clone());
-                Ok(Self::value_to_json(&value))
-            }
-            Err(diags) => {
-                if let Some(diag) = diags.first() {
-                    Err(self.diagnostic_to_js(diag.clone()))
-                } else {
-                    Err(JsValue::from_str("Unknown error"))
+            match compile_component(&*project.read().unwrap(), &name, &args, &options) {
+                Ok(value) => {
+                    *last_result.lock().unwrap() = Some(value.clone());
+
+                    let result_obj = js_sys::Object::new();
+                    let value_for_html = value.clone();
+                    let value_for_pdf = value.clone();
+                    let value_for_json = value.clone();
+                    let value_for_pdf = value.clone();
+                    let value_for_json = value.clone();
+                    let ironpress_converter_clone = ironpress_converter.clone();
+
+                    // .asHtml() method
+                    let as_html = Closure::wrap(Box::new(move || {
+                        DefaultHtmlRenderer.render_html(&value_for_html)
+                    }) as Box<dyn Fn() -> String>);
+                    js_sys::Reflect::set(
+                        &result_obj,
+                        &"asHtml".into(),
+                        as_html.as_ref().unchecked_ref(),
+                    )
+                    .unwrap();
+                    as_html.forget();
+
+                    // .asPdf() method
+                    let as_pdf = Closure::wrap(Box::new(move || {
+                        let html = DefaultHtmlRenderer.render_html(&value_for_pdf);
+                        let mut converter_guard = ironpress_converter_clone.lock().unwrap();
+                        let converter = if let Some(c) = converter_guard.as_ref() {
+                            c.clone()
+                        } else {
+                            let global = js_sys::global();
+                            let ironpress =
+                                js_sys::Reflect::get(&global, &"ironpress".into()).unwrap();
+                            let HtmlConverter =
+                                js_sys::Reflect::get(&ironpress, &"HtmlConverter".into()).unwrap();
+                            let converter: js_sys::Object = js_sys::Reflect::construct(
+                                &HtmlConverter.dyn_into::<js_sys::Function>().unwrap(),
+                                &js_sys::Array::new(),
+                            )
+                            .unwrap()
+                            .into();
+                            *converter_guard = Some(converter.clone());
+                            converter
+                        };
+                        drop(converter_guard);
+
+                        let html_to_pdf =
+                            js_sys::Reflect::get(&converter, &"htmlToPdf".into()).unwrap();
+                        let html_to_pdf_fn = js_sys::Function::from(html_to_pdf);
+                        let pdf_result = html_to_pdf_fn
+                            .call1(&converter, &JsValue::from_str(&html))
+                            .unwrap();
+
+                        js_sys::Uint8Array::from(pdf_result)
+                    })
+                        as Box<dyn Fn() -> js_sys::Uint8Array>);
+                    js_sys::Reflect::set(
+                        &result_obj,
+                        &"asPdf".into(),
+                        as_pdf.as_ref().unchecked_ref(),
+                    )
+                    .unwrap();
+                    as_pdf.forget();
+
+                    // Also include the raw JSON value
+                    let json_str = serde_json::to_string(&value_for_json).unwrap();
+                    js_sys::Reflect::set(&result_obj, &"json".into(), &json_str.into()).unwrap();
+
+                    result_obj.into()
+                }
+                Err(diags) => {
+                    if let Some(diag) = diags.first() {
+                        JsValue::from_str(&format!("YMX Error [{}]: {}", diag.code, diag.message))
+                    } else {
+                        JsValue::from_str("Unknown error")
+                    }
                 }
             }
+        })
+            as Box<dyn FnMut(JsValue, js_sys::Array) -> JsValue>);
+
+        Ok(closure.into_js_value().unchecked_into::<js_sys::Function>())
+    }
+
+    pub fn components(&self) -> js_sys::Array {
+        let arr = js_sys::Array::new();
+        if let Some(ns) = self.project.read().unwrap().namespaces.namespace("") {
+            for (name, _) in ns.defs() {
+                arr.push(&JsValue::from_str(name));
+            }
         }
+        arr
     }
-
-    /// Get the last result value as a JSON string
-    pub fn last_result(&self) -> Option<String> {
-        self.last_result
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(Self::value_to_json)
-    }
-
-    // --- Private helper methods ---
 
     fn key_to_name(key: &Key) -> String {
         match key {
@@ -287,11 +346,32 @@ impl Ymx {
         }
     }
 
+    fn parse_js_args_from_array(args: &js_sys::Array) -> (Vec<Value>, Vec<(String, Value)>) {
+        let mut values = Vec::new();
+        let mut kwargs = Vec::new();
+        for i in 0..args.length() {
+            let val = args.get(i);
+            if let Some(v) = Self::js_to_value(val) {
+                values.push(v);
+            }
+        }
+        if let Some(last) = values.last() {
+            if matches!(last, Value::Object(_)) {
+                if let Value::Object(map) = values.pop().unwrap() {
+                    for (k, v) in map {
+                        kwargs.push((k, v));
+                    }
+                }
+            }
+        }
+        (values, kwargs)
+    }
+
+    #[allow(dead_code)]
     fn parse_js_args(args: &JsValue) -> (Vec<Value>, Vec<(String, Value)>) {
         if args.is_null() || args.is_undefined() {
             return (Vec::new(), Vec::new());
         }
-
         if args.is_object() {
             if js_sys::Array::is_array(args) {
                 let arr = js_sys::Array::from(args);
@@ -303,7 +383,6 @@ impl Ymx {
                 }
                 return (values, Vec::new());
             }
-
             let obj = js_sys::Object::from(args.clone());
             let mut kwargs = Vec::new();
             let keys = js_sys::Object::keys(&obj);
@@ -316,7 +395,6 @@ impl Ymx {
             }
             return (Vec::new(), kwargs);
         }
-
         (Vec::new(), Vec::new())
     }
 
@@ -359,10 +437,6 @@ impl Ymx {
         }
     }
 
-    fn value_to_json(v: &Value) -> String {
-        serde_json::to_string(v).expect("failed to serialize value")
-    }
-
     fn diagnostic_to_js(&self, diag: Diagnostic) -> JsValue {
         let msg = format!(
             "[{}] {}:{}:{} ({}): {}",
@@ -376,6 +450,20 @@ impl Ymx {
             diag.message
         );
         JsValue::from_str(&msg)
+    }
+}
+
+impl Drop for Ymx {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.ironpress_converter.lock() {
+            if let Some(converter) = guard.take() {
+                let free_fn = js_sys::Reflect::get(&converter, &"free".into()).unwrap();
+                if !free_fn.is_undefined() && !free_fn.is_null() {
+                    let free_fn = js_sys::Function::from(free_fn);
+                    let _ = free_fn.call0(&converter);
+                }
+            }
+        }
     }
 }
 

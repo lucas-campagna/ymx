@@ -254,6 +254,9 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
                             Value::String(s) if s == "docker" => {
                                 pdf_backend = Some("docker".to_string())
                             }
+                            Value::String(s) if s == "ironpress" => {
+                                pdf_backend = Some("ironpress".to_string())
+                            }
                             _ => diags.push(invalid_field(
                                 &entry_file,
                                 "pdf_backend",
@@ -298,6 +301,7 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
             "system" => Some("system".to_string()),
             "bundled" => Some("bundled".to_string()),
             "docker" => Some("docker".to_string()),
+            "ironpress" => Some("ironpress".to_string()),
             _ => {
                 diags.push(Diagnostic {
                     file: None,
@@ -305,7 +309,7 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
                     col: 1,
                     component: Some("pdf_backend".to_string()),
                     code: E010,
-                    message: "invalid value for CLI `--pdf-backend`: expected \"system\" | \"bundled\" | \"docker\"".to_string(),
+                    message: "invalid value for CLI `--pdf-backend`: expected \"system\" | \"bundled\" | \"docker\" | \"ironpress\"".to_string(),
                 });
                 None
             }

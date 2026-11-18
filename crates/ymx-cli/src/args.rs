@@ -53,9 +53,7 @@ fn parse_lint_codes(
 /// PDF backend selection for `-f pdf`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PdfBackendKind {
-    System,
-    Bundled,
-    Docker,
+    Ironpress,
 }
 
 cfg_if::cfg_if! {
@@ -304,9 +302,7 @@ impl ParsedCli {
             allowed_backends: self.allowed_backends.clone(),
             allowed_ipc: self.allowed_ipc.clone(),
             pdf_backend: self.pdf_backend.map(|k| match k {
-                PdfBackendKind::System => "system".to_string(),
-                PdfBackendKind::Bundled => "bundled".to_string(),
-                PdfBackendKind::Docker => "docker".to_string(),
+                PdfBackendKind::Ironpress => "ironpress".to_string(),
             }),
         }
     }
@@ -504,14 +500,10 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
                 }
                 let raw = take_value(args, &mut i, "--pdf-backend")?;
                 pdf_backend = Some(match raw.as_str() {
-                    "system" => PdfBackendKind::System,
-                    "bundled" => PdfBackendKind::Bundled,
-                    "docker" => PdfBackendKind::Docker,
+                    "ironpress" => PdfBackendKind::Ironpress,
                     other => {
                         return Err(ParseError {
-                            message: format!(
-                                "--pdf-backend: `{other}` is not `system`, `bundled`, or `docker`"
-                            ),
+                            message: format!("--pdf-backend: `{other}` is not `ironpress`"),
                         })
                     }
                 });
@@ -817,14 +809,8 @@ mod tests {
 
     #[test]
     fn pdf_backend_parses_all_values() {
-        let c = cli_of(&["--pdf-backend", "system", "proj/main.yml"]);
-        assert_eq!(c.pdf_backend, Some(PdfBackendKind::System));
-
-        let c = cli_of(&["--pdf-backend", "bundled", "proj/main.yml"]);
-        assert_eq!(c.pdf_backend, Some(PdfBackendKind::Bundled));
-
-        let c = cli_of(&["--pdf-backend", "docker", "proj/main.yml"]);
-        assert_eq!(c.pdf_backend, Some(PdfBackendKind::Docker));
+        let c = cli_of(&["--pdf-backend", "ironpress", "proj/main.yml"]);
+        assert_eq!(c.pdf_backend, Some(PdfBackendKind::Ironpress));
 
         let err = err_of(&["--pdf-backend", "invalid", "proj/main.yml"]);
         assert!(err.message.contains("pdf-backend"));
