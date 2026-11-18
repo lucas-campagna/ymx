@@ -460,3 +460,38 @@ _test:
 ```
 
 > **Note:** IPC calls execute at compile time, so tests that hit real external services may be slow or require network access. Use `ymx --test .` to run them.
+
+## 15. Static linting (`ymx lint`)
+
+`ymx lint <path> [flags]` checks a project without compiling side-effecting calls: no shell commands or IPC transports run, no stdin is read, and no temporary files are created. A directory uses entry `main.main`; a file uses its parent directory as the project root and derives the entry as `<file_stem>.<component>` from `--entry` (default `main`).
+
+```bash
+ymx lint .                       # directory → entry main.main
+ymx lint main.yml --entry greet  # file → entry main.greet
+```
+
+| Flag | Meaning |
+|------|---------|
+| `--deny <codes>` | Repeatable/comma-separated L-codes to emit as errors (L001–L006). |
+| `--allow <codes>` | Repeatable/comma-separated L-codes to suppress. |
+| `--fail-on <level>` | `error` (default), `warning`, `info`, or `none`. |
+| `-f`, `--format <fmt>` | `diagnostics` (default) or `json`. |
+| `--entry`, `--plain`, `--plain-template`, `--max-depth`, `--allowed-backends`, `--allowed-ipc` | Same meaning as compile mode; they shape the static check. |
+
+`--no-exec` and `--no-ipc` are accepted no-ops. `-c`/`--code`, `--test`, `--watch`, `--output`, `--pretty`, `--errors`, and `--pdf-backend` are usage errors under `ymx lint`.
+
+Configure defaults in the entry file's `_ymx`; CLI flags override each field:
+
+```yml
+_ymx:
+  lint:
+    deny: [L005]
+    allow: [L001]
+    fail_on: warning
+```
+
+Only the entry file's `_ymx.lint` is read; a malformed block is `E010`.
+
+Findings use the `L###` namespace (L001–L006 in this version) and are advisory (`warning` by default), printed separately from compiler `E###` diagnostics. Diagnostics format prints `[L001] warning: file:line:col (component): message` plus an optional `  help: ...` line; compiler diagnostics use `[compile E###] ...`. JSON emits `findings`, `diagnostics`, and a `summary` that counts only L### findings.
+
+Exit codes: `0` = no finding at or above `fail_on`; `1` = a finding met the threshold or a load/option failure prevented analysis; `2` = usage error. Compiler `E###` diagnostics from the static check are printed but do not change the lint exit code. See [PRD: Static linting](PRD/16-linting.md).

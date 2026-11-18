@@ -1,7 +1,7 @@
 ---
 version: "2.x"
 title: "YMX v2 implementation plan"
-short: "Index of versioned implementation milestones (1.1 – 1.38, 2.1)"
+short: "Index of versioned implementation milestones (1.1 – 1.48, 2.1)"
 description: |
   Tracks the build of YMX v2 per docs/PRD/README.md: the rules-1–18 resolver, JSON
   output, CLI + library, inline `_test`, file-path entry addressing, and

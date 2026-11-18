@@ -105,7 +105,7 @@ Validation, performed by `ymx-config` and reported as `E010` (a hard config erro
 ymx lint <path> [flags]
 ```
 
-`<path>` is resolved exactly like compile mode: an entry file whose parent directory is the project root (a directory uses `main.yml`/`main.yaml` with entry `main.main`). Lint never reads stdin.
+`<path>` is resolved exactly like compile mode: a directory uses `main.yml`/`main.yaml` with entry `main.main`; a file uses its parent directory as the project root and derives the entry as `<file_stem>.<component>` from `--entry` (default `main`). Lint never reads stdin and never creates temporary files.
 
 | Flag | Meaning |
 |------|---------|
@@ -115,7 +115,7 @@ ymx lint <path> [flags]
 | `--format <diagnostics\|json>` | Output style; default `diagnostics`. Lint accepts only these two values. |
 | `--entry`, `--plain`, `--plain-template`, `--max-depth`, `--allowed-backends`, `--allowed-ipc` | Same meaning as compile mode; they shape the static check only. |
 
-`--no-exec` and `--no-ipc` are implied by lint mode. Compile-only flags (`-c`, `--test`, `--watch`, `--output`, `--pretty`) are usage errors under `ymx lint`.
+`--no-exec` and `--no-ipc` are accepted as no-ops because lint mode is already static. Compile-only flags (`-c`/`--code`, `--test`, `--watch`, `--output`, `--pretty`, `--errors`, `--pdf-backend`) are usage errors under `ymx lint`.
 
 **Exit codes.**
 
