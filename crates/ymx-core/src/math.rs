@@ -482,6 +482,64 @@ fn parse(src: &str) -> Result<Expr, (usize, String)> {
     Ok(expr)
 }
 
+/// A read-only reference discovered while parsing a math expression.
+///
+/// Offsets are byte offsets into the source passed to [`scan_refs`]. This is
+/// the accessor the lint layer uses to reuse the math grammar instead of
+/// scanning raw expression text itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MathRef {
+    /// A component call `name(...)`; `args` are its argument expressions.
+    Call {
+        name: String,
+        offset: usize,
+        args: Vec<MathRef>,
+    },
+    /// A named argument read (`ident` inside `${...}`).
+    Arg { name: String, offset: usize },
+    /// A positional argument read (`$N` inside `${...}`).
+    Pos { index: usize, offset: usize },
+}
+
+/// Collect the references in a math expression using the existing math parser.
+///
+/// Returns references in source order (a call precedes its arguments). A
+/// syntax error is reported as `(byte_offset, message)`, exactly as the
+/// evaluator's parser reports it.
+pub fn scan_refs(src: &str) -> Result<Vec<MathRef>, (usize, String)> {
+    Ok(collect_expr_refs(&parse(src)?))
+}
+
+fn collect_expr_refs(expr: &Expr) -> Vec<MathRef> {
+    let mut out = Vec::new();
+    push_expr_refs(expr, &mut out);
+    out
+}
+
+fn push_expr_refs(expr: &Expr, out: &mut Vec<MathRef>) {
+    match expr {
+        Expr::Num(..) => {}
+        Expr::Arg { name, offset } => out.push(MathRef::Arg {
+            name: name.clone(),
+            offset: *offset,
+        }),
+        Expr::Pos { index, offset } => out.push(MathRef::Pos {
+            index: *index,
+            offset: *offset,
+        }),
+        Expr::Call { name, args, offset } => out.push(MathRef::Call {
+            name: name.clone(),
+            offset: *offset,
+            args: args.iter().flat_map(collect_expr_refs).collect(),
+        }),
+        Expr::Neg { inner, .. } => push_expr_refs(inner, out),
+        Expr::Bin { left, right, .. } => {
+            push_expr_refs(left, out);
+            push_expr_refs(right, out);
+        }
+    }
+}
+
 impl Parser {
     fn peek(&self) -> Option<(Tok, usize)> {
         self.toks.get(self.pos).cloned()
@@ -1041,6 +1099,36 @@ fn span_at(base: Span, src: &str, offset: usize) -> Span {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn scan_refs_uses_math_parser() {
+        assert_eq!(
+            scan_refs("x + f(1, $0) + g(y)").unwrap(),
+            vec![
+                MathRef::Arg {
+                    name: "x".to_string(),
+                    offset: 0,
+                },
+                MathRef::Call {
+                    name: "f".to_string(),
+                    offset: 4,
+                    args: vec![MathRef::Pos {
+                        index: 0,
+                        offset: 9,
+                    }],
+                },
+                MathRef::Call {
+                    name: "g".to_string(),
+                    offset: 15,
+                    args: vec![MathRef::Arg {
+                        name: "y".to_string(),
+                        offset: 17,
+                    }],
+                },
+            ]
+        );
+        assert!(scan_refs("").is_err());
+    }
 
     fn eval_ok(src: &str, scope: &Scope<'_>) -> Value {
         V1Engine

@@ -18,6 +18,7 @@
 //! - [`namespace`] — namespace registry and lookup
 //! - [`parse`] — YAML document parser (produces spanned nodes)
 //! - [`project`] — [`Project`] and [`Options`] types
+//! - [`refs`] — read-only reference extraction over spanned YAML nodes
 //! - [`render`] — HTML rendering: [`HtmlRenderer`] trait, [`DefaultHtmlRenderer`], attribute/style/class normalization
 //! - [`resolve`] — rule resolver: rules 1–16 (component resolution pipeline)
 //!
@@ -40,4 +41,5 @@ pub use render::{pretty_print_html, DefaultHtmlRenderer, HtmlRenderer};
 pub mod namespace;
 pub mod parse;
 pub mod project;
+pub mod refs;
 pub mod resolve;
