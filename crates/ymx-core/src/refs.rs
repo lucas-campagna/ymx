@@ -27,6 +27,7 @@ pub enum Slot {
 pub struct ArgRef {
     pub slot: Slot,
     pub span: Span,
+    pub end: Span,
 }
 
 /// A reference discovered in a component body.
@@ -114,6 +115,13 @@ fn is_literal_tag(target: &str) -> bool {
     target.len() >= 2 && target.starts_with('<') && target.ends_with('>')
 }
 
+fn node_end(node: &Node) -> Span {
+    match node {
+        Node::String(s, span) => advance(*span, s, s.len()),
+        _ => node.span(),
+    }
+}
+
 fn visit_key(key: &Key, key_span: Span, value: &Node, is_root: bool, out: &mut Vec<NodeRef>) {
     out.push(NodeRef::PropertyKey {
         key: key_to_string(key),
@@ -162,6 +170,7 @@ fn visit_key(key: &Key, key_span: Span, value: &Node, is_root: bool, out: &mut V
                         args: vec![ArgRef {
                             slot,
                             span: value.span(),
+                            end: node_end(value),
                         }],
                     });
                     if name == "sh" || name == "pw" {
@@ -246,6 +255,7 @@ fn collect_call(call: &ParsedCall, args_src: &str, base: Span, out: &mut Vec<Nod
         args.push(ArgRef {
             slot,
             span: advance(base, &full, inner_start + index),
+            end: advance(base, &full, inner_start + index + len),
         });
         cursor = index + len;
     }
@@ -311,6 +321,7 @@ fn collect_brace_call(name: &str, payload_src: &str, span: Span, out: &mut Vec<N
                     args.push(ArgRef {
                         slot: slot_from_text(&key),
                         span: advance(span, &full, inner_start + index),
+                        end: advance(span, &full, inner_start + index + len),
                     });
                     cursor = index + len;
                 }
@@ -321,15 +332,17 @@ fn collect_brace_call(name: &str, payload_src: &str, span: Span, out: &mut Vec<N
                     args.push(ArgRef {
                         slot: Slot::Positional(index),
                         span: advance(span, &full, inner_start + found),
+                        end: advance(span, &full, inner_start + found + len),
                     });
                     cursor = found + len;
                 }
             }
             BracePayload::Scalar(value) => {
-                let (found, _) = find_literal(payload_src, 0, &value);
+                let (found, len) = find_literal(payload_src, 0, &value);
                 args.push(ArgRef {
                     slot: Slot::Positional(0),
                     span: advance(span, &full, inner_start + found),
+                    end: advance(span, &full, inner_start + found + len),
                 });
             }
         }
@@ -404,9 +417,11 @@ fn emit_math_ref(reference: &MathRef, src: &str, base: Span, out: &mut Vec<NodeR
                             slot
                         }
                     };
+                    let (offset, end_offset) = math_ref_offsets(arg);
                     ArgRef {
                         slot,
-                        span: math_ref_span(arg, src, base),
+                        span: advance(base, src, offset),
+                        end: advance(base, src, end_offset),
                     }
                 })
                 .collect();
@@ -422,13 +437,12 @@ fn emit_math_ref(reference: &MathRef, src: &str, base: Span, out: &mut Vec<NodeR
     }
 }
 
-fn math_ref_span(reference: &MathRef, src: &str, base: Span) -> Span {
-    let offset = match reference {
-        MathRef::Arg { offset, .. }
-        | MathRef::Pos { offset, .. }
-        | MathRef::Call { offset, .. } => *offset,
-    };
-    advance(base, src, offset)
+fn math_ref_offsets(reference: &MathRef) -> (usize, usize) {
+    match reference {
+        MathRef::Arg { name, offset } => (*offset, offset + name.len() + 1),
+        MathRef::Pos { index, offset } => (*offset, offset + index.to_string().len() + 1),
+        MathRef::Call { name, offset, .. } => (*offset, offset + name.len() + 1),
+    }
 }
 
 fn slot_from_text(text: &str) -> Slot {
@@ -508,10 +522,11 @@ mod tests {
         }
     }
 
-    fn arg(slot: Slot, line: u32, col: u32) -> ArgRef {
+    fn arg(slot: Slot, line: u32, col: u32, end_col: u32) -> ArgRef {
         ArgRef {
             slot,
             span: span(line, col),
+            end: span(line, end_col),
         }
     }
 
@@ -546,16 +561,16 @@ mod tests {
                 1,
                 7,
                 vec![
-                    arg(Slot::Positional(0), 1, 12),
-                    arg(Slot::Positional(1), 1, 16),
-                    arg(Slot::Positional(2), 1, 19),
+                    arg(Slot::Positional(0), 1, 12, 14),
+                    arg(Slot::Positional(1), 1, 16, 17),
+                    arg(Slot::Positional(2), 1, 19, 26),
                 ]
             )
         );
         assert_eq!(out[1], interpolation(Slot::Named("x".into()), 1, 12));
         assert_eq!(
             out[2],
-            call("inner", 1, 19, vec![arg(Slot::Positional(0), 1, 26)])
+            call("inner", 1, 19, vec![arg(Slot::Positional(0), 1, 26, 28)])
         );
         assert_eq!(out[3], interpolation(Slot::Named("y".into()), 1, 26));
     }
@@ -585,7 +600,7 @@ mod tests {
             "sh",
             5,
             3,
-            vec![arg(Slot::Named("main".into()), 5, 12)]
+            vec![arg(Slot::Named("main".into()), 5, 12, 22)]
         )));
         assert!(out.contains(&NodeRef::ShellPayload {
             backend: "sh".into(),
@@ -626,7 +641,7 @@ mod tests {
     #[test]
     fn brace_shell_and_from_shell() {
         let out = refs("main: $sh{echo $name}\nother:\n  from: pw\n  cmd: hi $x\n");
-        assert!(out.contains(&call("sh", 1, 7, vec![arg(Slot::Positional(0), 1, 11)])));
+        assert!(out.contains(&call("sh", 1, 7, vec![arg(Slot::Positional(0), 1, 11, 21)])));
         assert!(out.contains(&NodeRef::ShellPayload {
             backend: "sh".into(),
             span: span(1, 11),
