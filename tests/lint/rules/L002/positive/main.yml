@@ -1,0 +1,3 @@
+main: "ok"
+orphan: $detached()
+detached: "ok"

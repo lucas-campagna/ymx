@@ -1,0 +1,4 @@
+main:
+  read: "$read $x"
+  x$sh: echo $value
+  value: literal

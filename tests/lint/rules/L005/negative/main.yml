@@ -1,0 +1,3 @@
+main:
+  safe$sh: echo literal
+  read: "$read $safe"

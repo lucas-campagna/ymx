@@ -1,0 +1,9 @@
+_use:
+  marker:
+    cmd: [touch, __ymx_lint_side_effect__]
+    transport: pipe
+    protocol: line
+    request_template: "$0\n"
+
+main:
+  payload$sh: touch __ymx_lint_side_effect__

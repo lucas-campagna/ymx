@@ -1,0 +1,3 @@
+_ymx:
+  lint:
+    fail_on: sometimes

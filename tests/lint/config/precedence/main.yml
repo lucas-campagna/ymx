@@ -1,0 +1,6 @@
+_ymx:
+  lint:
+    deny: [L001]
+
+main: "ok"
+unused: "never"

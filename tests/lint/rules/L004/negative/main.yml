@@ -1,0 +1,3 @@
+main: $target(used=1)
+target:
+  used: "$used"

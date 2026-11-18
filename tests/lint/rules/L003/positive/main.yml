@@ -1,0 +1,3 @@
+main:
+  unused: 2
+  read: "$read"

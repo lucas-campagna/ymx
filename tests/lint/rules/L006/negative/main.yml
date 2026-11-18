@@ -1,0 +1,8 @@
+_use:
+  echo:
+    cmd: [cat]
+    transport: pipe
+    protocol: line
+    request_template: "$0\n"
+
+main: $echo{hello}

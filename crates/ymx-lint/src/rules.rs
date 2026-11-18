@@ -217,22 +217,20 @@ fn interpolated_arg_spans(refs: &[NodeRef], args: &[ArgRef]) -> Vec<Span> {
         })
         .collect();
     args.iter()
-        .enumerate()
-        .filter_map(|(index, arg)| {
-            let start = (arg.span.line, arg.span.col);
-            let end = args
-                .get(index + 1)
-                .map(|next| (next.span.line, next.span.col));
-            let contains = reads
+        .filter(|arg| {
+            reads
                 .iter()
-                .any(|read| *read >= start && end.is_none_or(|upper| *read < upper));
-            if contains {
-                Some(arg.span)
-            } else {
-                None
-            }
+                .any(|read| span_contains_read(arg.span, arg.end, *read))
         })
+        .map(|arg| arg.span)
         .collect()
+}
+
+fn span_contains_read(start: Span, end: Span, read: (u32, u32)) -> bool {
+    let (line, col) = read;
+    let after_start = line > start.line || (line == start.line && col >= start.col);
+    let before_end = line < end.line || (line == end.line && col < end.col);
+    after_start && before_end
 }
 
 fn unused_ipc_aliases(graph: &Graph<'_>, project: &Project, findings: &mut Vec<LintDiagnostic>) {
@@ -279,5 +277,33 @@ fn slot_label(slot: &Slot) -> String {
     match slot {
         Slot::Named(name) => name.clone(),
         Slot::Positional(index) => format!("${index}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interpolated_arg_spans_uses_each_argument_end() {
+        let arg = ArgRef {
+            slot: Slot::Named("payload".to_string()),
+            span: Span { line: 1, col: 10 },
+            end: Span { line: 1, col: 20 },
+        };
+        let inside = NodeRef::Interpolation {
+            slot: Slot::Named("read".to_string()),
+            span: Span { line: 1, col: 15 },
+        };
+        let outside = NodeRef::Interpolation {
+            slot: Slot::Named("read".to_string()),
+            span: Span { line: 2, col: 1 },
+        };
+
+        assert_eq!(
+            interpolated_arg_spans(&[inside], std::slice::from_ref(&arg)),
+            vec![arg.span]
+        );
+        assert!(interpolated_arg_spans(&[outside], std::slice::from_ref(&arg)).is_empty());
     }
 }
