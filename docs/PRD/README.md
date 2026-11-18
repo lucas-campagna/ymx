@@ -21,3 +21,4 @@
 | [Rules 9–14](PRD/13-rules-9-14.md) | Required props, resolution pipeline, array templates |
 | [Rules 15–18](PRD/14-rules-15-18.md) | Builtins ($map/$reduce/$merge), optional (?), math shorthand ($) |
 | [Rules 19–22](PRD/15-rules-19-22.md) | Shell components, HTML renderer, IPC, brace calls |
+| [Static linting](PRD/16-linting.md) | ymx-lint, L### findings, `_ymx.lint`, CLI `lint` mode |

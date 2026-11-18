@@ -68,6 +68,7 @@ Status legend: `planned` -> `in-progress` -> `done` (or `blocked`).
 | 1.45 | `done` | Man page & docs refresh | (docs) | [1.45-man-page-refresh.md](1.45-man-page-refresh.md) | 1.44 |
 | 1.46 | `planned` | IPC shell command template args | ymx-lib | [1.46-shell-template-args.md](1.46-shell-template-args.md) | 1.43 |
 | 1.47 | `planned` | IPC commons lookup with `from` | `from: <name>` in `_use` IPC declarations inherits from `~/.config/ymx/commons.yml` | — |
+| 1.48 | `planned` | Static linter (ymx-lint + CLI lint mode) | ymx-lint, ymx-config, ymx-cli | [1.48-lint-crate.md](1.48-lint-crate.md) | 1.45 |
 
 ## v2 milestones
 
