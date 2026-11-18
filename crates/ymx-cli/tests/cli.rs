@@ -279,6 +279,10 @@ fn help_flag_exits_zero() {
         "--test",
         "--help",
         "-h",
+        "lint",
+        "--deny",
+        "--allow",
+        "--fail-on",
     ];
 
     for arg in ["--help", "-h"] {
@@ -300,6 +304,10 @@ fn help_flag_exits_zero() {
         assert!(
             stdout.contains("256"),
             "{arg}: must document 256 max-depth default"
+        );
+        assert!(
+            stdout.contains("ymx lint <path>"),
+            "{arg}: must document the lint subcommand"
         );
         // No diagnostics on --help — stderr is empty.
         assert_eq!(stderr(&out.0), "", "{arg}: stderr must be empty");
@@ -603,4 +611,111 @@ fn code_no_file_terminal_stdin_outputs_result() {
     let out = ymx(&["-c", "main: 12"]);
     assert_eq!(out.0.status.code(), Some(0), "exit 0: {}", stderr(&out.0));
     assert_eq!(stdout(&out.0), "12");
+}
+
+// ---------------------------------------------------------------------------
+// Lint subcommand — parsing, emit, and exit codes (milestone 1.48, task 5).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_command_runs_without_stdin() {
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n");
+    let path = dir.path().join("main.yml").to_string_lossy().to_string();
+    assert_exit(&["lint", &path], 0);
+}
+
+#[test]
+fn lint_command_accepts_directory_path() {
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n");
+    let path = dir.path().to_string_lossy().to_string();
+    assert_exit(&["lint", &path], 0);
+}
+
+#[test]
+fn lint_accepts_repeatable_deny_allow_fail_on_and_json_format() {
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n");
+    let path = dir.path().join("main.yml").to_string_lossy().to_string();
+
+    let out = ymx(&[
+        "lint",
+        "--deny",
+        "L001,L002",
+        "--deny",
+        "L003",
+        "--allow",
+        "L004,L005",
+        "--fail-on",
+        "none",
+        "--format",
+        "json",
+        &path,
+    ]);
+    assert_eq!(out.0.status.code(), Some(0), "stderr: {}", stderr(&out.0));
+    let rendered = stdout(&out.0);
+    assert!(!rendered.is_empty(), "lint JSON report must not be empty");
+    serde_json::from_str::<serde_json::Value>(&rendered).expect("valid lint JSON report");
+}
+
+#[test]
+fn lint_rejects_unsupported_formats_with_usage_exit_code() {
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n");
+    let path = dir.path().join("main.yml").to_string_lossy().to_string();
+
+    for fmt in ["compact", "html", "pdf"] {
+        assert_exit(&["lint", "--format", fmt, &path], 2);
+    }
+}
+
+#[test]
+fn lint_rejects_compile_only_flags_with_usage_exit_code() {
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n");
+    let path = dir.path().join("main.yml").to_string_lossy().to_string();
+
+    let cases: &[&[&str]] = &[
+        &["-c", "main: 1"],
+        &["--code", "main: 1"],
+        &["--test"],
+        &["--watch", "src/"],
+        &["--output", "out.json"],
+        &["--pretty"],
+        &["--errors"],
+        &["--pdf-backend", "docker"],
+    ];
+    for extra in cases {
+        let mut args = vec!["lint"];
+        args.extend_from_slice(extra);
+        args.push(&path);
+        assert_exit(&args, 2);
+    }
+}
+
+#[test]
+fn lint_requires_exactly_one_path() {
+    assert_exit(&["lint"], 2);
+
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n");
+    let path = dir.path().join("main.yml").to_string_lossy().to_string();
+    assert_exit(&["lint", &path, &path], 2);
+}
+
+#[test]
+fn lint_load_failure_exits_one() {
+    let dir = TempDir::new();
+    dir.write("bad.yml", "a: 1\n---\nb: 2\n");
+    let path = dir.path().join("bad.yml").to_string_lossy().to_string();
+    assert_exit(&["lint", &path], 1);
+}
+
+#[test]
+fn lint_accepts_no_exec_and_no_ipc_as_no_ops() {
+    let dir = TempDir::new();
+    dir.write("main.yml", "main: 1\n");
+    let path = dir.path().join("main.yml").to_string_lossy().to_string();
+    assert_exit(&["lint", "--no-exec", "--no-ipc", &path], 0);
 }

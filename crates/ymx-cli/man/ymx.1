@@ -4,6 +4,10 @@ ymx \\- YAML \\(r JSON compiler for the YMX language
 .SH SYNOPSIS
 .B ymx
 [path] [flags]
+.br
+.B ymx lint
+.I path
+.RI [ flags ]
 .SH DESCRIPTION
 .B ymx
 is a YAML parser and compiler for the YMX language. It reads a YAML project
@@ -130,6 +134,47 @@ The name of the component within the entry file to compile (default:
 folder.path + file stem + component). For example, \fBymx main.yml --entry
 foo\fR compiles component \fBfoo\fR from \fBmain.yml\fR, with entry path
 \fBmain.foo\fR.
+
+.SS "Lint subcommand"
+
+.B ymx lint <path> [flags]
+reports advisory findings about a project without executing shell commands or
+IPC transports. It resolves <path> exactly like compile mode: a directory uses
+\fBmain.yml\fR/\fBmain.yaml\fR with entry \fBmain.main\fR; a file uses its
+parent directory as the project root and derives the entry as
+\fI<file_stem>\fR.\fI<component>\fR. Lint never reads stdin and never creates
+temporary files.
+
+Lint findings use the \fBL###\fR namespace (L001\\(enL006 in this version) and
+are distinct from the \fBE###\fR compiler diagnostics listed below. E###
+diagnostics produced by the static check may be printed alongside findings but
+do not change the lint exit status.
+
+.TP
+.B --deny <codes>
+Repeatable and comma-separated list of L-codes to emit at \fBerror\fR severity.
+Overrides \fB_ymx.lint.deny\fR.
+.TP
+.B --allow <codes>
+Repeatable and comma-separated list of L-codes to suppress entirely.
+Overrides \fB_ymx.lint.allow\fR.
+.TP
+.B --fail-on <error|warning|info|none>
+Minimum emitted finding severity that makes the lint command exit 1.
+\fBnone\fR disables failure on findings. Overrides \fB_ymx.lint.fail_on\fR
+(default: \fBerror\fR).
+.TP
+.B -f, --format <diagnostics|json>
+Lint output style; only these two values are accepted. With no \fB--format\fR
+flag, lint emits diagnostics format. JSON format emits a machine-readable
+report.
+.PP
+Lint also accepts \fB--entry\fR, \fB--plain\fR, \fB--plain-template\fR,
+\fB--max-depth\fR, \fB--allowed-backends\fR, and \fB--allowed-ipc\fR with their
+normal meanings. \fB--no-exec\fR and \fB--no-ipc\fR are accepted as implied
+no-ops. The compile-only flags \fB-c\fR/\fB--code\fR, \fB--test\fR,
+\fB--watch\fR, \fB--output\fR, \fB--pretty\fR, \fB--errors\fR, and
+\fB--pdf-backend\fR are usage errors under \fBymx lint\fR.
 
 .SS "Compiler flags"
 
@@ -730,6 +775,11 @@ purposes of \fB--max-depth\fR (rule 8).
 
 .SH "EXIT CODES"
 
+For \fBymx lint\fR: \fB0\fR means no emitted L### finding met the configured
+\fBfail_on\fR threshold; \fB1\fR means a finding met the threshold or a
+load/option failure prevented analysis; \fB2\fR means a usage error (bad flag,
+missing path, unsupported format, or an incompatible compile-only flag).
+
 .TP
 .B 0
 Success. For \fB--format diagnostics\fR this also means no diagnostics were
@@ -780,6 +830,20 @@ Compile with a custom recursion limit:
 .PP
 .nf
     ymx main.yml --max-depth 128
+.fi
+.PP
+
+Lint a project (advisory L### findings; default diagnostics output):
+.PP
+.nf
+    ymx lint .
+.fi
+.PP
+
+Lint with L001 promoted to an error and a machine-readable report:
+.PP
+.nf
+    ymx lint . --deny L001 --format json
 .fi
 .PP
 
@@ -925,6 +989,26 @@ allowed_backends@list@[sh,pw]@Allowed shell backends
 allowed_ipc@list@all@Allowed IPC runner names (empty = allow all)
 .TE
 .PP
+
+.SS "_ymx.lint \\(em lint configuration"
+The optional \fBlint\fR field inside the entry file's \fB_ymx\fR block configures
+\fBymx lint\fR. Only the entry file's block is read; \fB_ymx.lint\fR in other
+documents is ignored. CLI flags take precedence over these values.
+
+.TS
+tab(@);
+lB lB lB l.
+Field@Type@Default@Notes
+_
+deny@list@[]@L-codes to emit at error severity (L001\\(enL006)
+allow@list@[]@L-codes to suppress
+fail_on@enum@error@error, warning, info, or none
+.TE
+.PP
+Findings use the \fBL###\fR namespace. They are advisory by default and are
+not E### compiler diagnostics. A code listed in both \fBdeny\fR and
+\fBallow\fR, an unknown field, or an invalid value is a hard configuration
+error. See \fIdocs/PRD/16-linting.md\fR for the full rule reference.
 
 .SS "_test \\(em inline tests"
 The \fB_test\fR key defines inline test cases for a component. Three forms:

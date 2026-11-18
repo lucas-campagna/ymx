@@ -2225,6 +2225,7 @@ dependencies = [
  "yaml-rust2",
  "ymx-config",
  "ymx-lib",
+ "ymx-lint",
  "ymx-test",
 ]
 
@@ -2258,6 +2259,16 @@ dependencies = [
  "ureq 2.12.1",
  "urlencoding",
  "ymx-core",
+]
+
+[[package]]
+name = "ymx-lint"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "ymx-config",
+ "ymx-core",
+ "ymx-lib",
 ]
 
 [[package]]

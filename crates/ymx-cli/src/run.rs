@@ -47,13 +47,17 @@ use indexmap::IndexMap;
 
 use yaml_rust2::{Yaml, YamlLoader};
 
-use ymx_config::{extract_options, CliOverrides};
+use ymx_config::{extract_lint_config, extract_options, CliOverrides, LintOverrides};
 use ymx_lib::ymx_core::ir::Args;
 use ymx_lib::ymx_core::project::{Format, Options, Project};
 use ymx_lib::ymx_core::render::{pretty_print_html, DefaultHtmlRenderer, HtmlRenderer};
 use ymx_lib::ymx_core::resolve::{compile, compile_component};
 use ymx_lib::{
     load_project, load_project_with_override, Diagnostic, StdExecutor, StdIpcHost, Value,
+};
+use ymx_lint::{
+    lint_project, render_diagnostics as render_lint_diagnostics, render_json as render_lint_json,
+    should_fail,
 };
 use ymx_test::{parse_tests, run_tests, Expected, TestResult};
 
@@ -178,6 +182,9 @@ pub enum RunOutcome {
     /// A compile-time diagnostic or test failure was rendered to stderr.
     /// Exit code 1 per PRD §Exit codes.
     Diagnostic,
+    /// A lint finding met `fail_on`, or lint load/option resolution failed.
+    /// Exit code 1 per PRD §Linting.
+    LintFailure,
     /// A CLI usage error (e.g. empty stdin in script mode).
     /// Exit code 2 per PRD §Exit codes.
     UsageError,
@@ -187,12 +194,12 @@ impl RunOutcome {
     /// Map to the process exit code:
     /// - `0` for [`RunOutcome::Success`]
     /// - `2` for [`RunOutcome::LoadError`] / [`RunOutcome::UsageError`]
-    /// - `1` for [`RunOutcome::Diagnostic`]
+    /// - `1` for [`RunOutcome::Diagnostic`] / [`RunOutcome::LintFailure`]
     pub fn to_exit_code(self) -> ExitCode {
         match self {
             RunOutcome::Success => ExitCode::SUCCESS,
             RunOutcome::LoadError | RunOutcome::UsageError => ExitCode::from(2),
-            RunOutcome::Diagnostic => ExitCode::from(1),
+            RunOutcome::Diagnostic | RunOutcome::LintFailure => ExitCode::from(1),
         }
     }
 }
@@ -308,6 +315,10 @@ fn yaml_to_value(yaml: &Yaml) -> Option<Value> {
 
 /// Drive the canonical pipeline against `cli`.
 pub fn run(cli: &ParsedCli) -> RunOutcome {
+    if cli.lint {
+        return run_lint(cli);
+    }
+
     // Watch mode: enter the file watcher loop and never return (until interrupted).
     #[cfg(feature = "watch")]
     if cli.watch.is_some() {
@@ -524,6 +535,55 @@ pub fn run(cli: &ParsedCli) -> RunOutcome {
             outcome
         }
         Err(diags) => render_diags(&diags),
+    }
+}
+
+/// Lint pipeline: load → options → lint config → static analysis → emit.
+///
+/// Unlike compile mode, lint never reads stdin or creates temp directories,
+/// and it never installs a command executor or IPC host. `lint_project`
+/// handles static mode internally.
+fn run_lint(cli: &ParsedCli) -> RunOutcome {
+    let project = match load_project(&cli.path) {
+        Ok(project) => project,
+        Err(diags) => return render_diags_lint_failure(&diags),
+    };
+
+    let overrides = cli.overrides();
+    let opts = match extract_options(&project, &overrides) {
+        Ok(opts) => opts,
+        Err(diags) => return render_diags_lint_failure(&diags),
+    };
+
+    let lint_overrides = LintOverrides {
+        entry: overrides.entry.clone(),
+        deny: cli.deny.clone(),
+        allow: cli.allow.clone(),
+        fail_on: cli.fail_on,
+    };
+    let lint_cfg = match extract_lint_config(&project, &lint_overrides) {
+        Ok(cfg) => cfg,
+        Err(diags) => return render_diags_lint_failure(&diags),
+    };
+
+    let report = lint_project(&project, &opts, &lint_cfg);
+    let rendered = if let Some(Format::Json) = &cli.format {
+        match render_lint_json(&report) {
+            Ok(json) => json,
+            Err(e) => {
+                eprintln!("ymx: failed to serialize lint report: {e}");
+                return RunOutcome::LintFailure;
+            }
+        }
+    } else {
+        render_lint_diagnostics(&report)
+    };
+    print!("{rendered}");
+
+    if should_fail(&report, &lint_cfg) {
+        RunOutcome::LintFailure
+    } else {
+        RunOutcome::Success
     }
 }
 
@@ -1299,6 +1359,15 @@ fn render_diags_load_error(diags: &[Diagnostic]) -> RunOutcome {
     RunOutcome::LoadError
 }
 
+/// Render diagnostics that abort a lint run. Lint load/option failures exit
+/// `1`, not the compile mode's `2`.
+fn render_diags_lint_failure(diags: &[Diagnostic]) -> RunOutcome {
+    for diag in diags {
+        eprintln!("{}", render_with_guidance(diag));
+    }
+    RunOutcome::LintFailure
+}
+
 /// Run a single compile cycle for watch mode: load -> extract -> compile -> emit.
 /// Uses the file at `cli.path` directly (not stdin or temp files).
 /// Returns `(RunOutcome, Vec<Diagnostic>, Option<String>)` where the `Vec<Diagnostic>`
@@ -1615,6 +1684,11 @@ mod tests {
             allowed_ipc: None,
             code: None,
             pdf_backend: None,
+            lint: false,
+            deny: None,
+            allow: None,
+            fail_on: None,
+            plain: None,
             watch: None,
         }
     }
@@ -1643,6 +1717,11 @@ mod tests {
             allowed_ipc: None,
             code: None,
             pdf_backend: None,
+            lint: false,
+            deny: None,
+            allow: None,
+            fail_on: None,
+            plain: None,
             watch: None,
         }
     }
@@ -1665,6 +1744,11 @@ mod tests {
             allowed_ipc: None,
             code: None,
             pdf_backend: None,
+            lint: false,
+            deny: None,
+            allow: None,
+            fail_on: None,
+            plain: None,
             watch: None,
         }
     }
@@ -2227,6 +2311,11 @@ mod tests {
             allowed_ipc: None,
             code: Some("main: hello world".to_string()),
             pdf_backend: None,
+            lint: false,
+            deny: None,
+            allow: None,
+            fail_on: None,
+            plain: None,
             watch: None,
         };
         assert_eq!(run(&cli), RunOutcome::Success);
@@ -2252,6 +2341,11 @@ mod tests {
             allowed_ipc: None,
             code: Some("comp1: 20\nmain: ${comp1()}".to_string()),
             pdf_backend: None,
+            lint: false,
+            deny: None,
+            allow: None,
+            fail_on: None,
+            plain: None,
             watch: None,
         };
         assert_eq!(run(&cli), RunOutcome::Success);
@@ -2277,6 +2371,11 @@ mod tests {
             allowed_ipc: None,
             code: Some("comp2: 20\nmain: ${comp1()} + ${comp2()}".to_string()),
             pdf_backend: None,
+            lint: false,
+            deny: None,
+            allow: None,
+            fail_on: None,
+            plain: None,
             watch: None,
         };
         assert_eq!(run(&cli), RunOutcome::Success);
@@ -2307,6 +2406,11 @@ mod tests {
             allowed_ipc: None,
             code: Some("{\"main\": \"${1 + 2}\"}".to_string()),
             pdf_backend: None,
+            lint: false,
+            deny: None,
+            allow: None,
+            fail_on: None,
+            plain: None,
             watch: None,
         };
         assert_eq!(run(&cli), RunOutcome::Success);
@@ -2331,6 +2435,11 @@ mod tests {
             allowed_ipc: None,
             code: Some("main: ${10 / 2}".to_string()),
             pdf_backend: None,
+            lint: false,
+            deny: None,
+            allow: None,
+            fail_on: None,
+            plain: None,
             watch: None,
         };
         assert_eq!(run(&cli), RunOutcome::Success);
@@ -2355,6 +2464,11 @@ mod tests {
             allowed_ipc: None,
             code: Some("greeting: \"hi\"\nmain: ${greeting()}".to_string()),
             pdf_backend: None,
+            lint: false,
+            deny: None,
+            allow: None,
+            fail_on: None,
+            plain: None,
             watch: None,
         };
         assert_eq!(run(&cli), RunOutcome::Success);
@@ -2380,6 +2494,11 @@ mod tests {
             allowed_ipc: None,
             code: Some("{\"comp2\": 20, \"main\": \"${comp1()} + ${comp2()}\"}".to_string()),
             pdf_backend: None,
+            lint: false,
+            deny: None,
+            allow: None,
+            fail_on: None,
+            plain: None,
             watch: None,
         };
         assert_eq!(run(&cli), RunOutcome::Success);
@@ -2405,6 +2524,11 @@ mod tests {
             allowed_ipc: None,
             code: Some("main: ${base() * 3 + 1}".to_string()),
             pdf_backend: None,
+            lint: false,
+            deny: None,
+            allow: None,
+            fail_on: None,
+            plain: None,
             watch: None,
         };
         assert_eq!(run(&cli), RunOutcome::Success);
@@ -2430,6 +2554,11 @@ mod tests {
             allowed_ipc: None,
             code: Some("main: ${greet()}".to_string()),
             pdf_backend: None,
+            lint: false,
+            deny: None,
+            allow: None,
+            fail_on: None,
+            plain: None,
             watch: None,
         };
         assert_eq!(run(&cli), RunOutcome::Success);

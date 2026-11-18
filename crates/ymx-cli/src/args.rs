@@ -4,10 +4,12 @@
 //! parser keeps the dependency tree minimal. Recognises the flag surface in
 //! PRD §CLI:
 //!   `ymx <path> [flags]`
+//!   `ymx lint <path> [flags]`
 //!   -e, --entry <path>  -m, --max-depth <n>   --pretty
 //!   -f, --format <json|diagnostics>
 //!   -o, --output <file>
 //!   -t, --test           -h, --help
+//!   --deny <codes>       --allow <codes>      --fail-on <level>
 //!
 //! Every flag maps to `None` when absent, so the [`ParsedCli`] is a 1:1 source
 //! for `ymx_config::CliOverrides` via [`ParsedCli::overrides`]. The
@@ -18,8 +20,35 @@ use std::fmt::Debug;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use ymx_config::CliOverrides;
-use ymx_lib::ymx_core::project::Format;
+use ymx_config::{CliOverrides, FailOn, L001, L002, L003, L004, L005, L006};
+use ymx_lib::ymx_core::project::{Format, PlainMode};
+
+const LINT_CODES: [&str; 6] = [L001, L002, L003, L004, L005, L006];
+
+fn lint_usage_error(flag: &str) -> ParseError {
+    ParseError {
+        message: format!("`{flag}` is not supported with `ymx lint`"),
+    }
+}
+
+fn parse_lint_codes(
+    flag: &str,
+    raw: &str,
+    target: &mut Option<Vec<String>>,
+) -> Result<(), ParseError> {
+    let codes: Vec<String> = raw.split(',').map(|s| s.trim().to_string()).collect();
+    for code in &codes {
+        if !LINT_CODES.contains(&code.as_str()) {
+            return Err(ParseError {
+                message: format!(
+                    "{flag}: `{code}` is not a lint code (expected L001, L002, L003, L004, L005, or L006)"
+                ),
+            });
+        }
+    }
+    target.get_or_insert_with(Vec::new).extend(codes);
+    Ok(())
+}
 
 /// PDF backend selection for `-f pdf`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +76,11 @@ cfg_if::cfg_if! {
             pub allowed_ipc: Option<Vec<String>>,
             pub code: Option<String>,
             pub pdf_backend: Option<PdfBackendKind>,
+            pub lint: bool,
+            pub deny: Option<Vec<String>>,
+            pub allow: Option<Vec<String>>,
+            pub fail_on: Option<FailOn>,
+            pub plain: Option<PlainMode>,
             pub watch: Option<PathBuf>,
         }
 
@@ -68,6 +102,11 @@ cfg_if::cfg_if! {
                     .field("allowed_ipc", &self.allowed_ipc)
                     .field("code", &self.code)
                     .field("pdf_backend", &self.pdf_backend)
+                    .field("lint", &self.lint)
+                    .field("deny", &self.deny)
+                    .field("allow", &self.allow)
+                    .field("fail_on", &self.fail_on)
+                    .field("plain", &self.plain)
                     .field("watch", &self.watch)
                     .finish()
             }
@@ -91,6 +130,11 @@ cfg_if::cfg_if! {
                     allowed_ipc: self.allowed_ipc.clone(),
                     code: self.code.clone(),
                     pdf_backend: self.pdf_backend,
+                    lint: self.lint,
+                    deny: self.deny.clone(),
+                    allow: self.allow.clone(),
+                    fail_on: self.fail_on,
+                    plain: self.plain.clone(),
                     watch: self.watch.clone(),
                 }
             }
@@ -113,6 +157,11 @@ cfg_if::cfg_if! {
                     && self.allowed_ipc == other.allowed_ipc
                     && self.code == other.code
                     && self.pdf_backend == other.pdf_backend
+                    && self.lint == other.lint
+                    && self.deny == other.deny
+                    && self.allow == other.allow
+                    && self.fail_on == other.fail_on
+                    && self.plain == other.plain
                     && self.watch == other.watch
             }
         }
@@ -133,6 +182,11 @@ cfg_if::cfg_if! {
             pub allowed_ipc: Option<Vec<String>>,
             pub code: Option<String>,
             pub pdf_backend: Option<PdfBackendKind>,
+            pub lint: bool,
+            pub deny: Option<Vec<String>>,
+            pub allow: Option<Vec<String>>,
+            pub fail_on: Option<FailOn>,
+            pub plain: Option<PlainMode>,
         }
 
         impl Debug for ParsedCli {
@@ -153,6 +207,11 @@ cfg_if::cfg_if! {
                     .field("allowed_ipc", &self.allowed_ipc)
                     .field("code", &self.code)
                     .field("pdf_backend", &self.pdf_backend)
+                    .field("lint", &self.lint)
+                    .field("deny", &self.deny)
+                    .field("allow", &self.allow)
+                    .field("fail_on", &self.fail_on)
+                    .field("plain", &self.plain)
                     .finish()
             }
         }
@@ -175,6 +234,11 @@ cfg_if::cfg_if! {
                     allowed_ipc: self.allowed_ipc.clone(),
                     code: self.code.clone(),
                     pdf_backend: self.pdf_backend,
+                    lint: self.lint,
+                    deny: self.deny.clone(),
+                    allow: self.allow.clone(),
+                    fail_on: self.fail_on,
+                    plain: self.plain.clone(),
                 }
             }
         }
@@ -196,6 +260,11 @@ cfg_if::cfg_if! {
                     && self.allowed_ipc == other.allowed_ipc
                     && self.code == other.code
                     && self.pdf_backend == other.pdf_backend
+                    && self.lint == other.lint
+                    && self.deny == other.deny
+                    && self.allow == other.allow
+                    && self.fail_on == other.fail_on
+                    && self.plain == other.plain
             }
         }
     }
@@ -215,19 +284,23 @@ impl ParsedCli {
     // `ParsedCli::overrides`. `dead_code` allowed until task 3 wires it.
     #[allow(dead_code)]
     pub fn overrides(&self) -> CliOverrides {
-        let file_stem = self
-            .path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("main");
-        let component = self.entry.as_deref().unwrap_or("main");
-        let entry = format!("{}.{}", file_stem, component);
+        let entry = if self.lint && self.path.is_dir() {
+            "main.main".to_string()
+        } else {
+            let file_stem = self
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("main");
+            let component = self.entry.as_deref().unwrap_or("main");
+            format!("{file_stem}.{component}")
+        };
         CliOverrides {
             entry: Some(entry),
             max_depth: self.max_depth,
             pretty: self.pretty,
             format: self.format.clone(),
-            plain: None,
+            plain: self.plain.clone(),
             allowed_backends: self.allowed_backends.clone(),
             allowed_ipc: self.allowed_ipc.clone(),
             pdf_backend: self.pdf_backend.map(|k| match k {
@@ -258,13 +331,18 @@ pub enum ParseOutcome {
     Errors,
 }
 
-/// Parse `ymx <path> [flags]`.
+/// Parse `ymx <path> [flags]` or `ymx lint <path> [flags]`.
 ///
 /// Pass `args = &argv[1..]` (the program name is not consumed). The parser
 /// walks left-to-right, recognising flags in any order interspersed with the
 /// single required positional. `--flag value` is the supported form
-/// (`--flag=value` is rejected — keep it simple).
+/// (`--flag=value` is rejected — keep it simple). `lint` is recognized only
+/// as the first argument and selects the lint subcommand.
 pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
+    let (lint, args) = match args.first().map(String::as_str) {
+        Some("lint") => (true, &args[1..]),
+        _ => (false, args),
+    };
     let mut positionals: Vec<PathBuf> = Vec::new();
     let mut entry: Option<String> = None;
     let mut max_depth: Option<u32> = None;
@@ -278,17 +356,55 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     let mut allowed_ipc: Option<Vec<String>> = None;
     let mut code: Option<String> = None;
     let mut pdf_backend: Option<PdfBackendKind> = None;
+    let mut deny: Option<Vec<String>> = None;
+    let mut allow: Option<Vec<String>> = None;
+    let mut fail_on: Option<FailOn> = None;
+    let mut plain: Option<PlainMode> = None;
     #[cfg(feature = "watch")]
     let mut watch: Option<PathBuf> = None;
 
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
+        if lint && arg == "--watch" {
+            return Err(lint_usage_error("--watch"));
+        }
         match arg {
             "-h" | "--help" => return Ok(ParseOutcome::Help),
-            "--errors" => return Ok(ParseOutcome::Errors),
-            "--test" => test = true,
-            "--pretty" => pretty = Some(true),
+            "--errors" => {
+                if lint {
+                    return Err(lint_usage_error("--errors"));
+                }
+                return Ok(ParseOutcome::Errors);
+            }
+            "--test" => {
+                if lint {
+                    return Err(lint_usage_error("--test"));
+                }
+                test = true;
+            }
+            "--pretty" => {
+                if lint {
+                    return Err(lint_usage_error("--pretty"));
+                }
+                pretty = Some(true);
+            }
+            "--plain" => {
+                if plain.is_some() {
+                    return Err(ParseError {
+                        message: "--plain cannot be combined with --plain-template".to_string(),
+                    });
+                }
+                plain = Some(PlainMode::All);
+            }
+            "--plain-template" => {
+                if plain.is_some() {
+                    return Err(ParseError {
+                        message: "--plain cannot be combined with --plain-template".to_string(),
+                    });
+                }
+                plain = Some(PlainMode::TemplatesOnly);
+            }
             "-e" | "--entry" => entry = Some(take_value(args, &mut i, "--entry")?),
             "-m" | "--max-depth" => {
                 let raw = take_value(args, &mut i, "--max-depth")?;
@@ -299,24 +415,65 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
             }
             "-f" | "--format" => {
                 let raw = take_value(args, &mut i, "--format")?;
-                format = Some(match raw.as_str() {
-                    "json" => Format::Json,
-                    "compact" => Format::Compact,
-                    "html" => Format::Html,
-                    "pdf" => Format::Pdf,
-                    "diagnostics" => Format::Diagnostics,
-                    other => {
-                        return Err(ParseError {
-                            message: format!(
-                                "--format: `{other}` is not `json`, `compact`, `html`, `pdf`, or `diagnostics`"
-                            ),
-                        })
+                format = Some(if lint {
+                    match raw.as_str() {
+                        "json" => Format::Json,
+                        "diagnostics" => Format::Diagnostics,
+                        other => {
+                            return Err(ParseError {
+                                message: format!(
+                                    "--format: `{other}` is not supported with `ymx lint` (expected `json` or `diagnostics`)"
+                                ),
+                            })
+                        }
+                    }
+                } else {
+                    match raw.as_str() {
+                        "json" => Format::Json,
+                        "compact" => Format::Compact,
+                        "html" => Format::Html,
+                        "pdf" => Format::Pdf,
+                        "diagnostics" => Format::Diagnostics,
+                        other => {
+                            return Err(ParseError {
+                                message: format!(
+                                    "--format: `{other}` is not `json`, `compact`, `html`, `pdf`, or `diagnostics`"
+                                ),
+                            })
+                        }
                     }
                 });
             }
             "-o" | "--output" => {
+                if lint {
+                    return Err(lint_usage_error("--output"));
+                }
                 let raw = take_value(args, &mut i, "--output")?;
                 output = Some(PathBuf::from(raw));
+            }
+            "--deny" => {
+                let raw = take_value(args, &mut i, "--deny")?;
+                parse_lint_codes("--deny", &raw, &mut deny)?;
+            }
+            "--allow" => {
+                let raw = take_value(args, &mut i, "--allow")?;
+                parse_lint_codes("--allow", &raw, &mut allow)?;
+            }
+            "--fail-on" => {
+                let raw = take_value(args, &mut i, "--fail-on")?;
+                fail_on = Some(match raw.as_str() {
+                    "error" => FailOn::Error,
+                    "warning" => FailOn::Warning,
+                    "info" => FailOn::Info,
+                    "none" => FailOn::None,
+                    other => {
+                        return Err(ParseError {
+                            message: format!(
+                                "--fail-on: `{other}` is not `error`, `warning`, `info`, or `none`"
+                            ),
+                        })
+                    }
+                });
             }
             "--allowed-backends" => {
                 let raw = take_value(args, &mut i, "--allowed-backends")?;
@@ -342,6 +499,9 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
                 allowed_ipc = Some(list);
             }
             "--pdf-backend" => {
+                if lint {
+                    return Err(lint_usage_error("--pdf-backend"));
+                }
                 let raw = take_value(args, &mut i, "--pdf-backend")?;
                 pdf_backend = Some(match raw.as_str() {
                     "system" => PdfBackendKind::System,
@@ -356,7 +516,12 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
                     }
                 });
             }
-            "-c" | "--code" => code = Some(take_value(args, &mut i, "--code")?),
+            "-c" | "--code" => {
+                if lint {
+                    return Err(lint_usage_error("-c/--code"));
+                }
+                code = Some(take_value(args, &mut i, "--code")?);
+            }
             #[cfg(feature = "watch")]
             "--watch" => {
                 let raw = take_value(args, &mut i, "--watch")?;
@@ -379,6 +544,13 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         i += 1;
     }
 
+    if lint && positionals.is_empty() {
+        return Err(ParseError {
+            message: "`ymx lint` requires exactly one <path> (usage: `ymx lint <path> [flags]`)"
+                .to_string(),
+        });
+    }
+
     // When --test is given, 0 positionals is acceptable (defaults to ".")
     // When --test is NOT given, 0 positionals means stdin-as-script (if non-tty).
     // 2+ positionals is always an error.
@@ -388,6 +560,19 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
                 "expected exactly one file, got {} — usage: `ymx <file> [flags]`",
                 positionals.len()
             ),
+        });
+    }
+
+    if !lint && (deny.is_some() || allow.is_some() || fail_on.is_some()) {
+        let flag = if deny.is_some() {
+            "--deny"
+        } else if allow.is_some() {
+            "--allow"
+        } else {
+            "--fail-on"
+        };
+        return Err(ParseError {
+            message: format!("`{flag}` is only supported with `ymx lint`"),
         });
     }
 
@@ -490,6 +675,11 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         code,
         pdf_backend,
         watch,
+        lint,
+        deny,
+        allow,
+        fail_on,
+        plain,
     };
     #[cfg(not(feature = "watch"))]
     let cli = ParsedCli {
@@ -508,6 +698,11 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         allowed_ipc,
         code,
         pdf_backend,
+        lint,
+        deny,
+        allow,
+        fail_on,
+        plain,
     };
     Ok(ParseOutcome::Cli(Box::new(cli)))
 }
@@ -950,5 +1145,160 @@ mod tests {
         assert_eq!(c.watch.as_deref(), Some(std::path::Path::new("watch.yml")));
         assert_eq!(c.path, PathBuf::from("proj/main.yml"));
         assert!(!c.stdin_is_script);
+    }
+
+    #[test]
+    fn lint_subcommand_parses_with_defaults_and_no_stdin() {
+        let c = cli_of(&["lint", "proj/main.yml"]);
+        assert!(c.lint);
+        assert_eq!(c.path, PathBuf::from("proj/main.yml"));
+        assert_eq!(c.format, None);
+        assert_eq!(c.deny, None);
+        assert_eq!(c.allow, None);
+        assert_eq!(c.fail_on, None);
+        assert!(!c.stdin_is_script);
+        assert_eq!(c.overrides().entry.as_deref(), Some("main.main"));
+    }
+
+    #[test]
+    fn lint_requires_exactly_one_path() {
+        let err = err_of(&["lint"]);
+        assert!(err.message.contains("requires exactly one"));
+
+        let err = err_of(&["lint", "a.yml", "b.yml"]);
+        assert!(err.message.contains("exactly one"));
+    }
+
+    #[test]
+    fn lint_directory_uses_main_main_entry() {
+        let dir = std::env::temp_dir();
+        let path = dir.to_string_lossy().to_string();
+        let c = cli_of(&["lint", &path]);
+        assert_eq!(c.overrides().entry.as_deref(), Some("main.main"));
+    }
+
+    #[test]
+    fn lint_deny_and_allow_are_repeatable_and_comma_separated() {
+        let c = cli_of(&[
+            "lint",
+            "--deny",
+            "L001,L002",
+            "--deny",
+            "L003",
+            "--allow",
+            "L004, L005",
+            "--allow",
+            "L006",
+            "proj/main.yml",
+        ]);
+        assert_eq!(
+            c.deny,
+            Some(vec![
+                "L001".to_string(),
+                "L002".to_string(),
+                "L003".to_string()
+            ])
+        );
+        assert_eq!(
+            c.allow,
+            Some(vec![
+                "L004".to_string(),
+                "L005".to_string(),
+                "L006".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn lint_fail_on_parses_all_levels() {
+        for (raw, expected) in [
+            ("error", FailOn::Error),
+            ("warning", FailOn::Warning),
+            ("info", FailOn::Info),
+            ("none", FailOn::None),
+        ] {
+            let c = cli_of(&["lint", "--fail-on", raw, "proj/main.yml"]);
+            assert_eq!(c.fail_on, Some(expected));
+        }
+
+        let err = err_of(&["lint", "--fail-on", "bogus", "proj/main.yml"]);
+        assert!(err.message.contains("--fail-on"));
+    }
+
+    #[test]
+    fn lint_rejects_unknown_lint_codes() {
+        let err = err_of(&["lint", "--deny", "L001,E002", "proj/main.yml"]);
+        assert!(err.message.contains("--deny"));
+        assert!(err.message.contains("E002"));
+
+        let err = err_of(&["lint", "--allow", "L007", "proj/main.yml"]);
+        assert!(err.message.contains("--allow"));
+    }
+
+    #[test]
+    fn lint_format_accepts_only_json_and_diagnostics() {
+        assert_eq!(
+            cli_of(&["lint", "--format", "json", "proj/main.yml"]).format,
+            Some(Format::Json)
+        );
+        assert_eq!(
+            cli_of(&["lint", "--format", "diagnostics", "proj/main.yml"]).format,
+            Some(Format::Diagnostics)
+        );
+
+        for fmt in ["compact", "html", "pdf"] {
+            let err = err_of(&["lint", "--format", fmt, "proj/main.yml"]);
+            assert!(err.message.contains("not supported"), "{fmt}: {err:?}");
+        }
+    }
+
+    #[test]
+    fn lint_rejects_compile_only_flags() {
+        let cases: &[&[&str]] = &[
+            &["-c", "main: 1"],
+            &["--code", "main: 1"],
+            &["--test"],
+            &["--watch", "src/"],
+            &["--output", "out.json"],
+            &["--pretty"],
+            &["--errors"],
+            &["--pdf-backend", "docker"],
+        ];
+        for extra in cases {
+            let mut parts = vec!["lint"];
+            parts.extend_from_slice(extra);
+            parts.push("proj/main.yml");
+            let err = err_of(&parts);
+            assert!(err.message.contains("not supported"), "{parts:?}: {err:?}");
+        }
+    }
+
+    #[test]
+    fn lint_accepts_no_exec_and_no_ipc_as_no_ops() {
+        let c = cli_of(&["lint", "--no-exec", "--no-ipc", "proj/main.yml"]);
+        assert!(c.lint);
+        assert!(c.no_exec);
+        assert!(c.no_ipc);
+    }
+
+    #[test]
+    fn plain_flags_are_mutually_exclusive() {
+        let c = cli_of(&["--plain", "proj/main.yml"]);
+        assert_eq!(c.overrides().plain, Some(PlainMode::All));
+
+        let c = cli_of(&["--plain-template", "proj/main.yml"]);
+        assert_eq!(c.overrides().plain, Some(PlainMode::TemplatesOnly));
+
+        let err = err_of(&["--plain", "--plain-template", "proj/main.yml"]);
+        assert!(err.message.contains("cannot be combined"));
+    }
+
+    #[test]
+    fn lint_flags_are_rejected_in_compile_mode() {
+        let err = err_of(&["--deny", "L001", "proj/main.yml"]);
+        assert!(err.message.contains("only supported with `ymx lint`"));
+
+        let err = err_of(&["--fail-on", "none", "proj/main.yml"]);
+        assert!(err.message.contains("only supported with `ymx lint`"));
     }
 }

@@ -12,6 +12,7 @@ pub const MANUAL: &str = "\
 ymx 0.1.0 — YAML → JSON compiler for YMX v1
 
 Usage: ymx [path] [flags]
+       ymx lint <path> [flags]
        ymx --help | -h
        ymx --errors
 
@@ -31,7 +32,18 @@ Options:
       --errors             Print full diagnostic code reference and exit
   -h, --help               Show this help
 
-Exit codes: 0 success | 1 diagnostic | 2 usage error
+Lint mode (ymx lint <path> [flags]; never reads stdin):
+      --deny <codes>       Repeatable/comma-separated L-codes to emit as errors
+      --allow <codes>      Repeatable/comma-separated L-codes to suppress
+      --fail-on <level>    Fail on error|warning|info|none (default: error)
+      --format <fmt>       Lint output: json or diagnostics (default: diagnostics)
+  Lint accepts --entry, --plain, --plain-template, --max-depth,
+  --allowed-backends, and --allowed-ipc. -c/--code, --test, --watch,
+  --output, --pretty, --errors, and --pdf-backend are usage errors.
+  Lint config lives in the entry file's _ymx.lint block; L### findings are
+  distinct from E### compiler diagnostics.
+
+Exit codes: 0 success | 1 diagnostic/lint failure | 2 usage error
 
 Examples:
   ymx main.yml                       Compile a file
@@ -76,6 +88,10 @@ mod tests {
         "--errors",
         "-h",
         "--help",
+        "lint",
+        "--deny",
+        "--allow",
+        "--fail-on",
     ];
 
     #[test]
