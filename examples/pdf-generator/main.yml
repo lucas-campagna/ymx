@@ -1,0 +1,19 @@
+_use:
+  weasyprint:
+    cmd: "docker run --rm -p 5000:8080 4teamwork/weasyprint:latest"
+    shell: true
+    transport: http
+    url: "http://localhost:5000"
+    method: POST
+    body: "$0"
+    parse: none
+    lazy: false            # spawn at compile start
+    ready: "Listening on"  # wait for this string before first request
+    before_start: "docker stop weasyprint 2>/dev/null || true"
+    after_stop: "docker stop weasyprint 2>/dev/null || true"
+  test:
+    cmd: curl localhost:8000/$0
+
+main:
+  from: test
+  0: 123

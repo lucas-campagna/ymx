@@ -1,0 +1,10 @@
+main: 
+  <main>: hello world
+
+_test:
+  - main:
+      <main>: hello world
+  - main:
+      format: html
+      result: <main>hello world</main>
+
