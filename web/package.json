@@ -1,0 +1,18 @@
+{
+  "name": "ymx-playground",
+  "version": "0.1.0",
+  "description": "YMX Playground - Interactive YMX editor with live preview",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "python3 -m http.server 8080",
+    "build": "echo 'Built via GitHub Actions'",
+    "install:ironpress": "npm install ironpress && mkdir -p vendor && cp node_modules/ironpress/ironpress.js vendor/ && cp node_modules/ironpress/ironpress_bg.wasm vendor/"
+  },
+  "keywords": ["yaml", "ymx", "playground", "editor", "wasm"],
+  "license": "MIT",
+  "dependencies": {
+    "ironpress": "^1.7.0"
+  },
+  "devDependencies": {}
+}

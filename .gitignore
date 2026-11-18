@@ -1,2 +1,8 @@
 /target
 *.rs.bk
+
+# Web build artifacts
+/web/node_modules
+/web/vendor
+/web/pkg
+/web/_site

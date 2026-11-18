@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YMX Playground</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" data-name="vs/editor/editor.main" href="https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs/editor/editor.main.css">
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <h1 class="logo">YMX Playground</h1>
+        </div>
+        <div class="header-center">
+            <div class="view-selector" role="tablist" aria-label="Output format">
+                <button class="view-btn active" role="tab" data-view="html" aria-selected="true">HTML</button>
+                <button class="view-btn" role="tab" data-view="json" aria-selected="false">JSON</button>
+                <button class="view-btn" role="tab" data-view="ymx" aria-selected="false">YMX</button>
+                <button class="view-btn" role="tab" data-view="pdf" aria-selected="false">PDF</button>
+            </div>
+        </div>
+        <div class="header-right">
+            <div class="status" id="status">Ready</div>
+            <button class="btn btn-primary" id="download-btn" title="Download current view">Download</button>
+        </div>
+    </header>
+
+    <div class="main-container">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h2>Explorer</h2>
+                <div class="sidebar-actions">
+                    <button class="icon-btn" id="new-file-btn" title="New File">+</button>
+                    <button class="icon-btn" id="new-folder-btn" title="New Folder">📁</button>
+                </div>
+            </div>
+            <div class="file-tree" id="file-tree"></div>
+        </aside>
+
+        <div class="editor-container">
+            <div class="editor-header">
+                <div class="tabs" id="tabs" role="tablist"></div>
+                <div class="editor-actions">
+                    <span class="file-info" id="file-info">No file selected</span>
+                </div>
+            </div>
+            <div class="editor-wrapper">
+                <div id="editor" class="editor"></div>
+            </div>
+        </div>
+
+        <div class="preview-container" id="preview-container">
+            <div class="preview-header">
+                <h2>Preview</h2>
+                <div class="preview-actions">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="auto-render" checked>
+                        Auto-render
+                    </label>
+                    <button class="btn btn-secondary" id="render-btn" title="Render now">Render</button>
+                </div>
+            </div>
+            <div class="preview-content" id="preview-content">
+                <div class="preview-placeholder">
+                    <p>Select a file and start editing to see the preview</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal-content">
+            <h3 id="modal-title">New File</h3>
+            <form id="modal-form">
+                <div class="form-group">
+                    <label for="modal-input">Name</label>
+                    <input type="text" id="modal-input" required>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="modal-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as ironpress from './vendor/ironpress.js';
+        window.ironpress = ironpress;
+    </script>
+    <script type="module" src="main.js"></script>
+</body>
+</html>
