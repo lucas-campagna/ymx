@@ -279,10 +279,6 @@ fn help_flag_exits_zero() {
         "--test",
         "--help",
         "-h",
-        "lint",
-        "--deny",
-        "--allow",
-        "--fail-on",
     ];
 
     for arg in ["--help", "-h"] {

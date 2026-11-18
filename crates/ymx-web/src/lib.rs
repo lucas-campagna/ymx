@@ -251,8 +251,6 @@ impl Ymx {
                     let value_for_html = value.clone();
                     let value_for_pdf = value.clone();
                     let value_for_json = value.clone();
-                    let value_for_pdf = value.clone();
-                    let value_for_json = value.clone();
                     let ironpress_converter_clone = ironpress_converter.clone();
 
                     // .asHtml() method
@@ -277,10 +275,10 @@ impl Ymx {
                             let global = js_sys::global();
                             let ironpress =
                                 js_sys::Reflect::get(&global, &"ironpress".into()).unwrap();
-                            let HtmlConverter =
+                            let html_converter =
                                 js_sys::Reflect::get(&ironpress, &"HtmlConverter".into()).unwrap();
                             let converter: js_sys::Object = js_sys::Reflect::construct(
-                                &HtmlConverter.dyn_into::<js_sys::Function>().unwrap(),
+                                &html_converter.dyn_into::<js_sys::Function>().unwrap(),
                                 &js_sys::Array::new(),
                             )
                             .unwrap()
