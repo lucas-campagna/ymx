@@ -12,6 +12,13 @@
 
 use std::path::Path;
 
+pub use lint::{
+    extract_lint_config, FailOn, LintConfig, LintOverrides, LintSeverity, L001, L002, L003, L004,
+    L005, L006,
+};
+
+mod lint;
+
 use ymx_core::diag::{Diagnostic, E004, E010};
 use ymx_core::ir::Value;
 use ymx_core::project::{Format, Options, PlainMode, Project};
@@ -236,6 +243,7 @@ pub fn extract_options(project: &Project, cli: &CliOverrides) -> Result<Options,
                                 "expected a list of strings",
                             )),
                         },
+                        "lint" => {}
                         "pdf_backend" => match field_value {
                             Value::String(s) if s == "system" => {
                                 pdf_backend = Some("system".to_string())
