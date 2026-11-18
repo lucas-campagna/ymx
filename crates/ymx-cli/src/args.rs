@@ -536,6 +536,11 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         i += 1;
     }
 
+    // No arguments at all -> show help (unless lint mode which has its own check)
+    if !lint && args.is_empty() {
+        return Ok(ParseOutcome::Help);
+    }
+
     if lint && positionals.is_empty() {
         return Err(ParseError {
             message: "`ymx lint` requires exactly one <path> (usage: `ymx lint <path> [flags]`)"
@@ -546,11 +551,17 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     // When --test is given, 0 positionals is acceptable (defaults to ".")
     // When --test is NOT given, 0 positionals means stdin-as-script (if non-tty).
     // 2+ positionals is always an error.
-    if positionals.len() > 1 {
+    // Filter out "-" from positionals for file path validation
+    let file_positionals: Vec<_> = positionals
+        .iter()
+        .filter(|p| p.as_path() != std::path::Path::new("-"))
+        .collect();
+
+    if file_positionals.len() > 1 {
         return Err(ParseError {
             message: format!(
                 "expected exactly one file, got {} — usage: `ymx <file> [flags]`",
-                positionals.len()
+                file_positionals.len()
             ),
         });
     }
@@ -581,12 +592,20 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         });
     }
 
-    // stdin_is_script: true when no positional AND (no -c OR no stdin arg) AND not --test,
-    // AND (when watch feature is on) no --watch flag. When --watch is given, stdin
-    // is not the script (watch provides the project path).
+    // Determine stdin_is_script:
+    // - If positional is "-", explicitly read from stdin
+    // - If no positional and not -c/--code and not --test, read from stdin
+    // - If no positional and stdin is terminal, error
+    // - If 1 positional (not "-"), use as file path
+    // - 2+ positionals = error
+
+    let stdin_from_dash = positionals.len() == 1 && positionals[0] == PathBuf::from("-");
+
     #[cfg(feature = "watch")]
-    let stdin_is_script = if positionals.is_empty() && !watch.is_some() && code.is_none() && !test {
-        if std::io::stdin().is_terminal() {
+    let stdin_is_script = if stdin_from_dash
+        || (positionals.is_empty() && !watch.is_some() && code.is_none() && !test)
+    {
+        if std::io::stdin().is_terminal() && !stdin_from_dash {
             return Err(ParseError {
                 message: "stdin is a terminal, cannot read script or args".to_string(),
             });
@@ -597,8 +616,9 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
     };
 
     #[cfg(not(feature = "watch"))]
-    let stdin_is_script = if positionals.is_empty() && code.is_none() && !test {
-        if std::io::stdin().is_terminal() {
+    let stdin_is_script = if stdin_from_dash || (positionals.is_empty() && code.is_none() && !test)
+    {
+        if std::io::stdin().is_terminal() && !stdin_from_dash {
             return Err(ParseError {
                 message: "stdin is a terminal, cannot read script or args".to_string(),
             });
@@ -616,7 +636,7 @@ pub fn parse(args: &[String]) -> Result<ParseOutcome, ParseError> {
         });
     }
 
-    let path: PathBuf = if positionals.is_empty() {
+    let path: PathBuf = if file_positionals.is_empty() {
         #[cfg(feature = "watch")]
         {
             if let Some(ref watch_path) = watch {
@@ -1020,13 +1040,20 @@ mod tests {
 
     #[test]
     fn non_test_empty_args_with_non_tty_stdin_succeeds_with_stdin_is_script() {
-        // Without --test, empty args with non-tty stdin → stdin-is-script mode.
+        // Without --test, "-" with non-tty stdin → stdin-is-script mode.
         // (stdin is never a tty in cargo test, so this succeeds.)
-        let c = cli_of(&[]);
+        let c = cli_of(&["-"]);
         assert!(c.stdin_is_script);
         assert_eq!(c.path, PathBuf::from("."));
         assert!(!c.test);
         assert!(c.test_dir.is_none()); // stdin-is-script overrides test_dir
+    }
+
+    #[test]
+    fn no_args_returns_help() {
+        // No args at all -> Help
+        let outcome = parse(&[]);
+        assert!(matches!(outcome, Ok(ParseOutcome::Help)));
     }
 
     #[test]

@@ -244,13 +244,13 @@ fn test_flag_does_not_emit_json() {
 }
 
 #[test]
-fn missing_path_is_usage_error() {
+fn no_args_shows_help() {
     let out = ymx(&[]);
-    assert!(!out.0.status.success(), "non-zero exit on missing path");
+    assert!(out.0.status.success(), "exit 0 on no args");
     assert!(
-        stderr(&out.0).contains("missing"),
-        "stderr: {}",
-        stderr(&out.0)
+        stdout(&out.0).contains("Usage: ymx"),
+        "stdout: {}",
+        stdout(&out.0)
     );
 }
 
@@ -443,10 +443,9 @@ fn exit_code_compile_error_is_one() {
 }
 
 #[test]
-fn exit_code_missing_path_usage_is_two() {
-    // Usage errors (arg-parse stage) use exit 2 to distinguish them from a
-    // runtime diagnostic's exit 1 (see `main.rs`).
-    assert_exit(&[], 2);
+fn exit_code_no_args_is_zero() {
+    // No args shows help with exit 0
+    assert_exit(&[], 0);
 }
 
 #[test]
