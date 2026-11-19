@@ -55,7 +55,7 @@ body {
     flex: 0 0 auto;
 }
 
-.sidebar-toggle {
+.icon-btn.sidebar-toggle {
     display: none;
 }
 
@@ -296,7 +296,7 @@ body {
         min-height: 200px;
     }
     
-    .sidebar-toggle {
+    .icon-btn.sidebar-toggle {
         display: flex;
     }
 }
