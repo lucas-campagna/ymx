@@ -10,7 +10,7 @@ const state = {
     folders: new Set(), // folder paths
     activeFile: null,
     openTabs: [], // array of file paths
-    viewMode: 'html', // html, json, pdf
+    viewMode: 'html', // html, json, page, pdf
     autoRender: true,
     autoLint: true,
     renderDebounce: null,
@@ -874,20 +874,25 @@ function setupEventListeners() {
             
             switch (state.viewMode) {
                 case 'html':
-                    content = result;
+                    content = result.asHtml();
                     filename = 'output.html';
                     mimeType = 'text/html';
                     break;
                 case 'json':
-                    content = JSON.stringify(result, null, 2);
+                    content = JSON.stringify(result.json, null, 2);
                     filename = 'output.json';
                     mimeType = 'application/json';
+                    break;
+                case 'page':
+                    content = result.asHtml();
+                    filename = 'output.html';
+                    mimeType = 'text/html';
                     break;
                 case 'pdf':
                     if (!state.ironpressLoaded) {
                         await loadIronpress();
                     }
-                    const html = result;
+                    const html = result.asHtml();
                     const pdfBytes = await window.ironpress.pdf(html, {
                         format: 'A4',
                         margin: { top: '1cm', right: '1cm', bottom: '1cm', left: '1cm' }
@@ -1269,11 +1274,10 @@ async function renderPreview(result) {
     
     switch (state.viewMode) {
         case 'html': {
+            // Show raw HTML source
             const html = result.asHtml();
             preview.innerHTML = `
-                <div class="preview-html">
-                    ${html}
-                </div>
+                <pre class="preview-html">${escapeHtml(html)}</pre>
             `;
             break;
         }
@@ -1292,11 +1296,13 @@ async function renderPreview(result) {
             break;
         }
         
-        case 'ymx': {
-            // Show the source YMX
-            const fileState = state.files.get(state.activeFile);
+        case 'page': {
+            // Show rendered HTML (page view)
+            const html = result.asHtml();
             preview.innerHTML = `
-                <pre class="preview-ymx">${escapeHtml(fileState.content)}</pre>
+                <div class="preview-page">
+                    ${html}
+                </div>
             `;
             break;
         }
