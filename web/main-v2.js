@@ -32,20 +32,13 @@ const fs = {
     - "Apple"
     - "Banana"
     - "Cherry"
-  user:
-    name: "World"
-    greet: "Hello, \${{user.name}}!"
-
-greeting:
-  from: main
-  message: "Welcome \${{user.name}} to YMX Playground"
 
 html_card:
   from: div
   class: "card"
   children:
     - from: h2
-      children: "\${{main.message}}"
+      children: "Hello, YMX!"
     - from: ul
       children:
         - from: li
@@ -53,7 +46,7 @@ html_card:
         - from: li
           children: "Item 2"
     - from: p
-      children: "\${{greeting.message}}"`);
+      children: "Welcome to YMX Playground"`);
         
         this.createFile('/components.yml', `# Reusable components
 

@@ -34,20 +34,13 @@ const fs = {
     - "Apple"
     - "Banana"
     - "Cherry"
-  user:
-    name: "World"
-    greet: "Hello, \${{user.name}}!"
-
-greeting:
-  from: main
-  message: "Welcome \${{user.name}} to YMX Playground"
 
 html_card:
   from: div
   class: "card"
   children:
     - from: h2
-      children: "\${{main.message}}"
+      children: "Hello, YMX!"
     - from: ul
       children:
         - from: li
@@ -55,7 +48,7 @@ html_card:
         - from: li
           children: "Item 2"
     - from: p
-      children: "\${{greeting.message}}"`);
+      children: "Welcome to YMX Playground"`);
         
         this.createFile('/components.yml', `# Reusable components
 
@@ -891,8 +884,10 @@ async function render() {
             }
         }
         
-        // Call the component
-        const result = state.ymxInstance[mainComponent]();
+        // Call the component using __get__ method
+        const componentFn = state.ymxInstance.__get__.call(state.ymxInstance, mainComponent);
+        // The function expects (this, argsArray) - pass empty array for no args
+        const result = componentFn(undefined, []);
         
         if (typeof result === 'string' && result.startsWith('YMX Error')) {
             throw new Error(result);
@@ -1147,7 +1142,8 @@ elements.downloadBtn.addEventListener('click', async () => {
             }
         }
         
-        const result = state.ymxInstance[mainComponent]();
+        const componentFn = state.ymxInstance.__get__.call(state.ymxInstance, mainComponent);
+        const result = componentFn(undefined, []);
         
         let content, filename, mimeType;
         
