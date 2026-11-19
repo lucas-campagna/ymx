@@ -232,7 +232,8 @@ function initElements() {
         sidebarToggle: document.getElementById('sidebar-toggle'),
         sidebar: document.getElementById('sidebar'),
         sidebarOverlay: document.getElementById('sidebar-overlay'),
-        resizeHandle: document.getElementById('resize-handle'),
+        resizeHandle: document.getElementById('resize-handle-vertical'),
+        resizeHandleHorizontal: document.getElementById('resize-handle-horizontal'),
         previewContainer: document.getElementById('preview-container'),
         editorContainer: document.querySelector('.editor-container'),
     };
@@ -918,106 +919,232 @@ function setupEventListeners() {
 }
 
 function initResizeHandle() {
-    if (!elements.resizeHandle || !elements.editorContainer || !elements.previewContainer) return;
-    
-    const handle = elements.resizeHandle;
     const editorContainer = elements.editorContainer;
     const previewContainer = elements.previewContainer;
     
+    if (!editorContainer || !previewContainer) return;
+    
+    // Initialize both handles
+    initVerticalResizeHandle();
+    initHorizontalResizeHandle();
+}
+
+function initVerticalResizeHandle() {
+    const handle = elements.resizeHandle;
+    if (!handle) return;
+    
+    const isMobile = window.innerWidth <= 900;
+    if (!isMobile) return; // Vertical handle only on mobile
+    
     // Mouse events
-    handle.addEventListener('mousedown', startDrag);
-    handle.addEventListener('touchstart', startDrag, { passive: false });
+    handle.addEventListener('mousedown', (e) => startVerticalDrag(e, handle));
+    handle.addEventListener('touchstart', (e) => startVerticalDrag(e, handle), { passive: false });
     
     // Keyboard support
     handle.addEventListener('keydown', (e) => {
         if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
             e.preventDefault();
             const delta = e.key === 'ArrowUp' ? -20 : 20;
-            adjustSplit(delta);
+            adjustVerticalSplit(delta);
         }
     });
+}
+
+function initHorizontalResizeHandle() {
+    const handle = elements.resizeHandleHorizontal;
+    if (!handle) return;
     
-    function startDrag(e) {
-        if (e.type === 'mousedown' && e.button !== 0) return;
-        
-        e.preventDefault();
-        e.stopPropagation();
-        
-        resizeState.isDragging = true;
-        resizeState.startY = e.type === 'mousedown' ? e.clientY : e.touches[0].clientY;
-        resizeState.editorStartHeight = editorContainer.offsetHeight;
-        resizeState.previewStartHeight = previewContainer.offsetHeight;
-        
-        handle.classList.add('dragging');
-        document.body.style.cursor = 'row-resize';
-        document.body.style.userSelect = 'none';
-        
-        document.addEventListener('mousemove', onDrag);
-        document.addEventListener('mouseup', endDrag);
-        document.addEventListener('touchmove', onDrag, { passive: false });
-        document.addEventListener('touchend', endDrag);
-    }
+    const isDesktop = window.innerWidth > 900;
+    if (!isDesktop) return; // Horizontal handle only on desktop
     
-    function onDrag(e) {
-        if (!resizeState.isDragging) return;
-        
-        e.preventDefault();
-        
-        const currentY = e.type === 'mousemove' ? e.clientY : e.touches[0].clientY;
-        const deltaY = currentY - resizeState.startY;
-        
-        // Calculate new heights
-        const newEditorHeight = resizeState.editorStartHeight - deltaY;
-        const newPreviewHeight = resizeState.previewStartHeight + deltaY;
-        
-        // Minimum heights (responsive)
-        const minEditor = 150;
-        const isMobile = window.innerWidth <= 600;
-        const isTablet = window.innerWidth <= 900;
-        const minPreview = isMobile ? 180 : (isTablet ? 200 : 120);
-        const maxPreview = window.innerHeight * 0.8;
-        
-        if (newEditorHeight >= minEditor && newPreviewHeight >= minPreview && newPreviewHeight <= maxPreview) {
-            editorContainer.style.flex = 'none';
-            editorContainer.style.height = newEditorHeight + 'px';
-            previewContainer.style.flex = 'none';
-            previewContainer.style.height = newPreviewHeight + 'px';
+    // Mouse events
+    handle.addEventListener('mousedown', (e) => startHorizontalDrag(e, handle));
+    handle.addEventListener('touchstart', (e) => startHorizontalDrag(e, handle), { passive: false });
+    
+    // Keyboard support
+    handle.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            e.preventDefault();
+            const delta = e.key === 'ArrowLeft' ? -20 : 20;
+            adjustHorizontalSplit(delta);
         }
-    }
+    });
+}
+
+// State for vertical drag
+const verticalResizeState = {
+    isDragging: false,
+    startY: 0,
+    editorStartHeight: 0,
+    previewStartHeight: 0,
+};
+
+// State for horizontal drag
+const horizontalResizeState = {
+    isDragging: false,
+    startX: 0,
+    editorStartWidth: 0,
+    previewStartWidth: 0,
+};
+
+function startVerticalDrag(e, handle) {
+    if (e.type === 'mousedown' && e.button !== 0) return;
     
-    function endDrag() {
-        if (!resizeState.isDragging) return;
-        
-        resizeState.isDragging = false;
-        handle.classList.remove('dragging');
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-        
-        document.removeEventListener('mousemove', onDrag);
-        document.removeEventListener('mouseup', endDrag);
-        document.removeEventListener('touchmove', onDrag);
-        document.removeEventListener('touchend', endDrag);
-    }
+    e.preventDefault();
+    e.stopPropagation();
     
-    function adjustSplit(delta) {
-        const editorHeight = editorContainer.offsetHeight;
-        const previewHeight = previewContainer.offsetHeight;
-        
-        const newEditorHeight = editorHeight - delta;
-        const newPreviewHeight = previewHeight + delta;
-        
-        const isMobile = window.innerWidth <= 600;
-        const isTablet = window.innerWidth <= 900;
-        const minEditor = 150;
-        const minPreview = isMobile ? 180 : (window.innerWidth <= 900 ? 200 : 120);
-        const maxPreview = window.innerHeight * 0.8;
-        
-        if (newEditorHeight >= minEditor && newPreviewHeight >= minPreview && newPreviewHeight <= maxPreview) {
-            editorContainer.style.flex = 'none';
-            editorContainer.style.height = newEditorHeight + 'px';
-            previewContainer.style.flex = 'none';
-            previewContainer.style.height = newPreviewHeight + 'px';
-        }
+    verticalResizeState.isDragging = true;
+    verticalResizeState.startY = e.type === 'mousedown' ? e.clientY : e.touches[0].clientY;
+    verticalResizeState.editorStartHeight = elements.editorContainer.offsetHeight;
+    verticalResizeState.previewStartHeight = elements.previewContainer.offsetHeight;
+    
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+    
+    document.addEventListener('mousemove', onVerticalDrag);
+    document.addEventListener('mouseup', endVerticalDrag);
+    document.addEventListener('touchmove', onVerticalDrag, { passive: false });
+    document.addEventListener('touchend', endVerticalDrag);
+}
+
+function onVerticalDrag(e) {
+    if (!verticalResizeState.isDragging) return;
+    
+    e.preventDefault();
+    
+    const currentY = e.type === 'mousemove' ? e.clientY : e.touches[0].clientY;
+    const deltaY = currentY - verticalResizeState.startY;
+    
+    const newEditorHeight = verticalResizeState.editorStartHeight - deltaY;
+    const newPreviewHeight = verticalResizeState.previewStartHeight + deltaY;
+    
+    const minEditor = 150;
+    const isMobile = window.innerWidth <= 600;
+    const isTablet = window.innerWidth <= 900;
+    const minPreview = isMobile ? 180 : (isTablet ? 200 : 120);
+    const maxPreview = window.innerHeight * 0.8;
+    
+    if (newEditorHeight >= minEditor && newPreviewHeight >= minPreview && newPreviewHeight <= maxPreview) {
+        elements.editorContainer.style.flex = 'none';
+        elements.editorContainer.style.height = newEditorHeight + 'px';
+        elements.previewContainer.style.flex = 'none';
+        elements.previewContainer.style.height = newPreviewHeight + 'px';
+    }
+}
+
+function endVerticalDrag() {
+    if (!verticalResizeState.isDragging) return;
+    
+    verticalResizeState.isDragging = false;
+    const handle = elements.resizeHandle;
+    if (handle) handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    
+    document.removeEventListener('mousemove', onVerticalDrag);
+    document.removeEventListener('mouseup', endVerticalDrag);
+    document.removeEventListener('touchmove', onVerticalDrag);
+    document.removeEventListener('touchend', endVerticalDrag);
+}
+
+function adjustVerticalSplit(delta) {
+    const editorHeight = elements.editorContainer.offsetHeight;
+    const previewHeight = elements.previewContainer.offsetHeight;
+    
+    const newEditorHeight = editorHeight - delta;
+    const newPreviewHeight = previewHeight + delta;
+    
+    const isMobile = window.innerWidth <= 600;
+    const isTablet = window.innerWidth <= 900;
+    const minEditor = 150;
+    const minPreview = isMobile ? 180 : (window.innerWidth <= 900 ? 200 : 120);
+    const maxPreview = window.innerHeight * 0.8;
+    
+    if (newEditorHeight >= minEditor && newPreviewHeight >= minPreview && newPreviewHeight <= maxPreview) {
+        elements.editorContainer.style.flex = 'none';
+        elements.editorContainer.style.height = newEditorHeight + 'px';
+        elements.previewContainer.style.flex = 'none';
+        elements.previewContainer.style.height = newPreviewHeight + 'px';
+    }
+}
+
+function startHorizontalDrag(e, handle) {
+    if (e.type === 'mousedown' && e.button !== 0) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    horizontalResizeState.isDragging = true;
+    horizontalResizeState.startX = e.type === 'mousedown' ? e.clientX : e.touches[0].clientX;
+    horizontalResizeState.editorStartWidth = elements.editorContainer.offsetWidth;
+    horizontalResizeState.previewStartWidth = elements.previewContainer.offsetWidth;
+    
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    
+    document.addEventListener('mousemove', onHorizontalDrag);
+    document.addEventListener('mouseup', endHorizontalDrag);
+    document.addEventListener('touchmove', onHorizontalDrag, { passive: false });
+    document.addEventListener('touchend', endHorizontalDrag);
+}
+
+function onHorizontalDrag(e) {
+    if (!horizontalResizeState.isDragging) return;
+    
+    e.preventDefault();
+    
+    const currentX = e.type === 'mousemove' ? e.clientX : e.touches[0].clientX;
+    const deltaX = currentX - horizontalResizeState.startX;
+    
+    // On desktop, dragging right increases preview width
+    const newPreviewWidth = horizontalResizeState.previewStartWidth + deltaX;
+    const newEditorWidth = horizontalResizeState.editorStartWidth - deltaX;
+    
+    const minEditor = 300;
+    const minPreview = 200;
+    const maxPreview = window.innerWidth * 0.8;
+    
+    if (newEditorWidth >= minEditor && newPreviewWidth >= minPreview && newPreviewWidth <= maxPreview) {
+        elements.editorContainer.style.flex = 'none';
+        elements.editorContainer.style.width = newEditorWidth + 'px';
+        elements.previewContainer.style.flex = 'none';
+        elements.previewContainer.style.width = newPreviewWidth + 'px';
+    }
+}
+
+function endHorizontalDrag() {
+    if (!horizontalResizeState.isDragging) return;
+    
+    horizontalResizeState.isDragging = false;
+    const handle = elements.resizeHandleHorizontal;
+    if (handle) handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    
+    document.removeEventListener('mousemove', onHorizontalDrag);
+    document.removeEventListener('mouseup', endHorizontalDrag);
+    document.removeEventListener('touchmove', onHorizontalDrag);
+    document.removeEventListener('touchend', endHorizontalDrag);
+}
+
+function adjustHorizontalSplit(delta) {
+    const editorWidth = elements.editorContainer.offsetWidth;
+    const previewWidth = elements.previewContainer.offsetWidth;
+    
+    const newPreviewWidth = previewWidth + delta;
+    const newEditorWidth = editorWidth - delta;
+    
+    const minEditor = 300;
+    const minPreview = 200;
+    const maxPreview = window.innerWidth * 0.8;
+    
+    if (newEditorWidth >= minEditor && newPreviewWidth >= minPreview && newPreviewWidth <= maxPreview) {
+        elements.editorContainer.style.flex = 'none';
+        elements.editorContainer.style.width = newEditorWidth + 'px';
+        elements.previewContainer.style.flex = 'none';
+        elements.previewContainer.style.width = newPreviewWidth + 'px';
     }
 }
 
@@ -1031,12 +1158,27 @@ window.addEventListener('resize', () => {
         if (elements.editorContainer) {
             elements.editorContainer.style.flex = '';
             elements.editorContainer.style.height = '';
+            elements.editorContainer.style.width = '';
+        }
+        if (elements.previewContainer) {
+            elements.previewContainer.style.flex = '';
+            elements.previewContainer.style.height = '';
+            elements.previewContainer.style.width = '';
+        }
+    } else {
+        // Reset styles on mobile
+        if (elements.editorContainer) {
+            elements.editorContainer.style.flex = '';
+            elements.editorContainer.style.height = '';
         }
         if (elements.previewContainer) {
             elements.previewContainer.style.flex = '';
             elements.previewContainer.style.height = '';
         }
     }
+    
+    // Reinitialize resize handles on breakpoint change
+    initResizeHandle();
 });
 
 // ============================================================================
