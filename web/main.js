@@ -22,6 +22,7 @@ const state = {
 // Drag and drop state
 let dragSourcePath = null;
 
+
 // Track created Monaco models to reuse them
 const models = new Map(); // path -> monaco.editor.ITextModel
 
@@ -420,7 +421,7 @@ function renderFolder(path, displayPath, depth) {
             
             el.appendChild(row);
             el.appendChild(childrenContainer);
-            addDragHandlers(row, item.path, "folder");
+            fs.addDragHandlers(row, item.path, "folder");
             renderFolderIntoContainer(item.path, item.path, depth + 1, childrenContainer);
         } else {
             const isActive = state.activeFile === item.path;
@@ -433,66 +434,11 @@ function renderFolder(path, displayPath, depth) {
             
             row.addEventListener('click', () => openFile(item.path));
             row.addEventListener('dblclick', () => renameItem(item.path));
+            fs.addDragHandlers(row, item.path, "file");
             
             el.appendChild(row);
         }
         
-        
-// Drag and drop state
-let dragSourcePath = null;
-
-function addDragHandlers(row, itemPath, itemType) {
-    row.draggable = true;
-    
-    row.addEventListener('dragstart', (e) => {
-        dragSourcePath = itemPath;
-        row.classList.add('dragging');
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', itemPath);
-    });
-    
-    row.addEventListener('dragend', () => {
-        row.classList.remove('dragging');
-        document.querySelectorAll('.file-tree-item-row.drag-over').forEach(r => r.classList.remove('drag-over'));
-        dragSourcePath = null;
-    });
-    
-    row.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        
-        // Only allow dropping on folders
-        if (itemType === 'folder' && itemPath !== dragSourcePath) {
-            row.classList.add('drag-over');
-        }
-    });
-    
-    row.addEventListener('dragleave', () => {
-        row.classList.remove('drag-over');
-    });
-    
-    row.addEventListener('drop', (e) => {
-        e.preventDefault();
-        row.classList.remove('drag-over');
-        
-        if (itemType === 'folder' && dragSourcePath && dragSourcePath !== itemPath) {
-            // Check if not moving into self or descendant
-            if (!itemPath.startsWith(dragSourcePath + '/')) {
-                if (fs.moveItem(dragSourcePath, itemPath)) {
-                    renderFileTree();
-                }
-            }
-        }
-    });
-}
-
-
-// Context menu
-        el.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            showContextMenu(e.clientX, e.clientY, item.path, item.type);
-        });
         
         if (depth === 0) {
             elements.fileTree.appendChild(el);
@@ -539,7 +485,7 @@ function renderFolderIntoContainer(path, displayPath, depth, container) {
             container.appendChild(el);
             el.appendChild(row);
             el.appendChild(childrenContainer);
-            addDragHandlers(row, item.path, "folder");
+            fs.addDragHandlers(row, item.path, "folder");
             renderFolderIntoContainer(item.path, item.path, depth + 1, childrenContainer);
         } else {
             const isActive = state.activeFile === item.path;
@@ -553,6 +499,7 @@ function renderFolderIntoContainer(path, displayPath, depth, container) {
             row.addEventListener('click', () => openFile(item.path));
             row.addEventListener('dblclick', () => renameItem(item.path));
             
+            fs.addDragHandlers(row, item.path, "file");
             container.appendChild(el);
             el.appendChild(row);
         }
