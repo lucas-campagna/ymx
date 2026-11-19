@@ -730,7 +730,8 @@ function updateFileInfo() {
 }
 
 function getFileName(path) {
-    return path.split('/').pop() || path;
+    const name = path.split("/").pop() || path;
+    return name.replace(/\.(yml|yaml)$/, "");
 }
 
 // ============================================================================
