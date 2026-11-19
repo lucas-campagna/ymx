@@ -215,6 +215,11 @@ impl Ymx {
         Ok(())
     }
 
+    /// Clear all parsed components and reset the project.
+    pub fn clear(&mut self) {
+        self.project = Arc::new(RwLock::new(Project::new()));
+    }
+
     /// Get a callable proxy for a component.
     /// Usage: `ymx.greet({ name: "World" })` or `ymx.add(1, 2)`
     /// Returns a result object with `.asHtml()` and `.asPdf()` methods.

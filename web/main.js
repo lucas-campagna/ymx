@@ -839,12 +839,19 @@ function scheduleLint() {
 async function lint() {
     if (!state.activeFile || !state.ymxInstance) return;
     
+    const fileState = state.files.get(state.activeFile);
+    if (!fileState) return;
+    
+    // Sync editor content to fileState
+    if (editor.getModel()) {
+        fileState.content = editor.getValue();
+    }
+    
     try {
-        // Parse all open files into the YMX instance
-        for (const [path, fState] of state.files) {
-            if (fState.content.trim()) {
-                state.ymxInstance.parse(fState.content);
-            }
+        // Clear the YMX instance and parse only the active file
+        state.ymxInstance.clear();
+        if (fileState.content.trim()) {
+            state.ymxInstance.parse(fileState.content);
         }
         
         const result = state.ymxInstance.lint();
@@ -861,27 +868,27 @@ async function render() {
     const fileState = state.files.get(state.activeFile);
     if (!fileState) return;
     
+    // Sync editor content to fileState (in case it was set programmatically)
+    if (editor.getModel()) {
+        fileState.content = editor.getValue();
+    }
+    
     updateStatus('Rendering...');
     
     try {
-        // Parse all open files into the YMX instance
-        for (const [path, fState] of state.files) {
-            if (fState.content.trim()) {
-                state.ymxInstance.parse(fState.content);
-            }
+        // Clear the YMX instance and parse only the active file
+        state.ymxInstance.clear();
+        if (fileState.content.trim()) {
+            state.ymxInstance.parse(fileState.content);
         }
         
-        // Get the main component to render
+        // Get the main component to render - must be named 'main'
         const components = state.ymxInstance.components();
-        let mainComponent = 'main';
+        const mainComponent = 'main';
         
-        // Try to find a suitable component
-        for (let i = 0; i < components.length; i++) {
-            const name = components[i];
-            if (name === 'main' || name === 'html_card' || name.endsWith('_card')) {
-                mainComponent = name;
-                break;
-            }
+        // Check if main component exists
+        if (!components.includes(mainComponent)) {
+            throw new Error('No "main" component found. Please define a "main" component in your YAML to render.');
         }
         
         // Call the component using __get__ method
@@ -1125,21 +1132,17 @@ elements.downloadBtn.addEventListener('click', async () => {
     if (!fileState) return;
     
     try {
-        // Parse all files
-        for (const [path, fState] of state.files) {
-            if (fState.content.trim()) {
-                state.ymxInstance.parse(fState.content);
-            }
+        // Clear the YMX instance and parse only the active file
+        state.ymxInstance.clear();
+        if (fileState.content.trim()) {
+            state.ymxInstance.parse(fileState.content);
         }
         
         const components = state.ymxInstance.components();
-        let mainComponent = 'main';
-        for (let i = 0; i < components.length; i++) {
-            const name = components[i];
-            if (name === 'main' || name === 'html_card' || name.endsWith('_card')) {
-                mainComponent = name;
-                break;
-            }
+        const mainComponent = 'main';
+        
+        if (!components.includes(mainComponent)) {
+            throw new Error('No "main" component found. Please define a "main" component in your YAML to render.');
         }
         
         const componentFn = state.ymxInstance.__get__.call(state.ymxInstance, mainComponent);
