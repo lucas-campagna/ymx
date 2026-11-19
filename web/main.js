@@ -251,7 +251,7 @@ formatter:
             e.preventDefault();
             e.dataTransfer.dropEffect = "move";
             
-            if (itemType === "folder" && itemPath !== dragSourcePath) {
+            if (itemPath !== dragSourcePath) {
                 row.classList.add("drag-over");
             }
         });
@@ -508,6 +508,13 @@ function renderFolder(path, displayPath, depth) {
         } else {
             // This is handled by the parent folder's childrenContainer
         }
+        
+        // Context menu for root level items
+        el.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showContextMenu(e.clientX, e.clientY, item.path, item.type);
+        });
     }
 }
 
