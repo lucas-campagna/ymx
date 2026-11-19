@@ -1016,8 +1016,9 @@ function onVerticalDrag(e) {
     const currentY = e.type === 'mousemove' ? e.clientY : e.touches[0].clientY;
     const deltaY = currentY - verticalResizeState.startY;
     
-    const newEditorHeight = verticalResizeState.editorStartHeight - deltaY;
-    const newPreviewHeight = verticalResizeState.previewStartHeight + deltaY;
+    // Handle is on bottom edge of editor: dragging DOWN makes editor TALLER
+    const newEditorHeight = verticalResizeState.editorStartHeight + deltaY;
+    const newPreviewHeight = verticalResizeState.previewStartHeight - deltaY;
     
     const minEditor = 150;
     const isMobile = window.innerWidth <= 600;
@@ -1052,8 +1053,9 @@ function adjustVerticalSplit(delta) {
     const editorHeight = elements.editorContainer.offsetHeight;
     const previewHeight = elements.previewContainer.offsetHeight;
     
-    const newEditorHeight = editorHeight - delta;
-    const newPreviewHeight = previewHeight + delta;
+    // ArrowUp (negative delta) = editor shorter, ArrowDown (positive delta) = editor taller
+    const newEditorHeight = editorHeight + delta;
+    const newPreviewHeight = previewHeight - delta;
     
     const isMobile = window.innerWidth <= 600;
     const isTablet = window.innerWidth <= 900;
@@ -1098,9 +1100,9 @@ function onHorizontalDrag(e) {
     const currentX = e.type === 'mousemove' ? e.clientX : e.touches[0].clientX;
     const deltaX = currentX - horizontalResizeState.startX;
     
-    // On desktop, dragging right increases preview width
-    const newPreviewWidth = horizontalResizeState.previewStartWidth + deltaX;
-    const newEditorWidth = horizontalResizeState.editorStartWidth - deltaX;
+    // Handle is on right edge of editor: dragging RIGHT makes editor WIDER
+    const newEditorWidth = horizontalResizeState.editorStartWidth + deltaX;
+    const newPreviewWidth = horizontalResizeState.previewStartWidth - deltaX;
     
     const minEditor = 300;
     const minPreview = 200;
@@ -1133,8 +1135,9 @@ function adjustHorizontalSplit(delta) {
     const editorWidth = elements.editorContainer.offsetWidth;
     const previewWidth = elements.previewContainer.offsetWidth;
     
-    const newPreviewWidth = previewWidth + delta;
-    const newEditorWidth = editorWidth - delta;
+    // ArrowLeft (negative delta) = editor narrower, ArrowRight (positive delta) = editor wider
+    const newEditorWidth = editorWidth + delta;
+    const newPreviewWidth = previewWidth - delta;
     
     const minEditor = 300;
     const minPreview = 200;
