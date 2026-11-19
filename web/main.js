@@ -10,7 +10,7 @@ const state = {
     folders: new Set(), // folder paths
     activeFile: null,
     openTabs: [], // array of file paths
-    viewMode: 'html', // html, json, ymx, pdf
+    viewMode: 'html', // html, json, pdf
     autoRender: true,
     autoLint: true,
     renderDebounce: null,
@@ -882,11 +882,6 @@ function setupEventListeners() {
                     content = JSON.stringify(result, null, 2);
                     filename = 'output.json';
                     mimeType = 'application/json';
-                    break;
-                case 'ymx':
-                    content = fileState.content;
-                    filename = 'output.yml';
-                    mimeType = 'text/yaml';
                     break;
                 case 'pdf':
                     if (!state.ironpressLoaded) {
