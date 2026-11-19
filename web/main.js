@@ -207,31 +207,36 @@ formatter:
 // DOM Elements
 // ============================================================================
 
-const elements = {
-    fileTree: document.getElementById('file-tree'),
-    tabs: document.getElementById('tabs'),
-    editor: document.getElementById('editor'),
-    previewContent: document.getElementById('preview-content'),
-    viewButtons: document.querySelectorAll('.view-btn'),
-    autoRender: document.getElementById('auto-render'),
-    renderBtn: document.getElementById('render-btn'),
-    downloadBtn: document.getElementById('download-btn'),
-    status: document.getElementById('status'),
-    fileInfo: document.getElementById('file-info'),
-    modal: document.getElementById('modal'),
-    modalTitle: document.getElementById('modal-title'),
-    modalInput: document.getElementById('modal-input'),
-    modalForm: document.getElementById('modal-form'),
-    modalCancel: document.getElementById('modal-cancel'),
-    newFileBtn: document.getElementById('new-file-btn'),
-    newFolderBtn: document.getElementById('new-folder-btn'),
-    sidebarToggle: document.getElementById('sidebar-toggle'),
-    sidebar: document.getElementById('sidebar'),
-    sidebarOverlay: document.getElementById('sidebar-overlay'),
-    resizeHandle: document.getElementById('resize-handle'),
-    previewContainer: document.getElementById('preview-container'),
-    editorContainer: document.querySelector('.editor-container'),
-};
+// Elements will be initialized after DOM is ready
+let elements = {};
+
+function initElements() {
+    elements = {
+        fileTree: document.getElementById('file-tree'),
+        tabs: document.getElementById('tabs'),
+        editor: document.getElementById('editor'),
+        previewContent: document.getElementById('preview-content'),
+        viewButtons: document.querySelectorAll('.view-btn'),
+        autoRender: document.getElementById('auto-render'),
+        renderBtn: document.getElementById('render-btn'),
+        downloadBtn: document.getElementById('download-btn'),
+        status: document.getElementById('status'),
+        fileInfo: document.getElementById('file-info'),
+        modal: document.getElementById('modal'),
+        modalTitle: document.getElementById('modal-title'),
+        modalInput: document.getElementById('modal-input'),
+        modalForm: document.getElementById('modal-form'),
+        modalCancel: document.getElementById('modal-cancel'),
+        newFileBtn: document.getElementById('new-file-btn'),
+        newFolderBtn: document.getElementById('new-folder-btn'),
+        sidebarToggle: document.getElementById('sidebar-toggle'),
+        sidebar: document.getElementById('sidebar'),
+        sidebarOverlay: document.getElementById('sidebar-overlay'),
+        resizeHandle: document.getElementById('resize-handle'),
+        previewContainer: document.getElementById('preview-container'),
+        editorContainer: document.querySelector('.editor-container'),
+    };
+}
 
 // ============================================================================
 // Monaco Editor Setup
@@ -815,6 +820,9 @@ let resizeState = {
 };
 
 function initResizeHandle() {
+    // Initialize elements if not already done
+    if (!elements.resizeHandle) initElements();
+    
     if (!elements.resizeHandle || !elements.editorContainer || !elements.previewContainer) return;
     
     const handle = elements.resizeHandle;
@@ -1389,6 +1397,9 @@ document.addEventListener('keydown', (e) => {
 // ============================================================================
 
 async function init() {
+    // Initialize DOM elements first
+    initElements();
+    
     // Wait for monaco to load
     await waitForMonaco();
     
