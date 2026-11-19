@@ -13,11 +13,11 @@ use js_sys::JSON;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 
-use ymx_core::diag::{Diagnostic, FileId};
+use ymx_core::diag::{Diagnostic, E001, E002, E004, E005, E007, E009, E010, E015, FileId};
 use ymx_core::exec::{CommandExecutor, ExecError, ExecOutput};
 use ymx_core::ir::{Args, Value};
-use ymx_core::namespace::Definition;
-use ymx_core::parse::{Key, Node};
+use ymx_core::namespace::{Definition, extract_document, DefClass};
+use ymx_core::parse::{Key, Node, parse_document};
 use ymx_core::project::{Format, Options, PlainMode, Project};
 use ymx_core::render::{DefaultHtmlRenderer, HtmlRenderer};
 use ymx_core::resolve::compile_component;
@@ -213,6 +213,228 @@ impl Ymx {
         }
 
         Ok(())
+    }
+
+    /// Parse multiple files from a Map<path, content> for _use resolution.
+    /// Entry point is main.yml (or main.yaml). All .yml files in the map are candidates.
+    /// _use imports are resolved from main.yml.
+    pub fn parse_map(&mut self, file_map: js_sys::Map) -> Result<(), JsValue> {
+        // Convert JS Map to Rust HashMap
+        let mut files: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let keys = js_sys::Object::keys(&file_map);
+        for i in 0..keys.length() {
+            let key = keys.get(i).as_string().unwrap_or_default();
+            let js_key = JsValue::from_str(&key);
+            let value = file_map.get(&js_key).as_string().unwrap_or_default();
+            files.insert(key, value);
+        }
+
+        // Find entry file (main.yml or main.yaml)
+        let entry_path = if files.contains_key("main.yml") {
+            "main.yml"
+        } else if files.contains_key("main.yaml") {
+            "main.yaml"
+        } else {
+            // No main file - treat all files as global (legacy behavior)
+            return self.parse_map_all_files(files);
+        };
+
+        // Resolve _use graph from entry file
+        let file_paths = match Ymx::resolve_use_graph(entry_path, &files) {
+            Ok(paths) => paths,
+            Err(diags) => return Err(self.diagnostics_to_js(diags)),
+        };
+
+        // Create new project (simpler than clearing)
+        let mut project = Project::new();
+
+        for (file_idx, path) in file_paths.iter().enumerate() {
+            let file_id = FileId(file_idx as u32);
+            project.files.push(std::path::PathBuf::from(path));
+
+            let contents = match files.get(path) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            let node = match parse_document(contents) {
+                Ok(n) => n,
+                Err(e) => return Err(self.diagnostic_to_js(e.into_diagnostic(std::path::PathBuf::from(path)))),
+            };
+
+            let extract = extract_document(file_id, &node);
+
+            // Check for invalid names
+            for class in &extract.rejections {
+                match class {
+                    DefClass::InvalidName(span) => {
+                        let diag = Diagnostic {
+                            file: Some(std::path::PathBuf::from(path)),
+                            line: span.line,
+                            col: span.col,
+                            component: None,
+                            code: E001,
+                            message: "invalid top-level name (must match `[$]*[A-Za-z_][A-Za-z0-9_]*`; a non-string key cannot name a component or template)".to_string(),
+                        };
+                        return Err(self.diagnostic_to_js(diag));
+                    }
+                    class => {
+                        if let Some(d) = class.clone().into_diagnostic(std::path::PathBuf::from(path)) {
+                            return Err(self.diagnostic_to_js(d));
+                        }
+                    }
+                }
+            }
+
+            // Register all definitions in global namespace (register_override never fails)
+            for def in extract.defs {
+                project.namespaces.register_override("", def);
+            }
+        }
+
+        // Replace the project
+        *self.project.write().unwrap() = project;
+
+        Ok(())
+    }
+
+    fn parse_map_all_files(&mut self, files: std::collections::HashMap<String, String>) -> Result<(), JsValue> {
+        let mut project = Project::new();
+
+        for (file_idx, (path, contents)) in files.iter().enumerate() {
+            let file_id = FileId(file_idx as u32);
+            project.files.push(std::path::PathBuf::from(path));
+
+            let node = match parse_document(contents) {
+                Ok(n) => n,
+                Err(e) => return Err(self.diagnostic_to_js(e.into_diagnostic(std::path::PathBuf::from(path)))),
+            };
+
+            if let Node::Object(entries, _span) = node {
+                for entry in entries {
+                    let name = Self::key_to_name(&entry.key);
+                    if name.is_empty() || name == "_ymx" || name == "_test" || name == "_use" {
+                        continue;
+                    }
+
+                    let def = Definition {
+                        file: file_id,
+                        full_name: name,
+                        span: entry.key_span,
+                        body: entry.value,
+                        math_shorthand: false,
+                        trailing_question: false,
+                        exec_backend: None,
+                    };
+
+                    project.namespaces.register_override("", def);
+                }
+            }
+        }
+
+        *self.project.write().unwrap() = project;
+        Ok(())
+    }
+
+    /// Resolve the _use graph starting from entry file.
+    /// Returns sorted list of file paths that should be loaded.
+    fn resolve_use_graph(
+        entry_path: &str,
+        files: &std::collections::HashMap<String, String>,
+    ) -> Result<Vec<String>, Vec<Diagnostic>> {
+        let mut diags = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        let mut result = Vec::new();
+
+        // Helper to resolve file stem to actual path
+        let resolve_stem = |stem: &str| -> Option<String> {
+            // Try exact match first
+            if files.contains_key(stem) {
+                return Some(stem.to_string());
+            }
+            // Try with .yml
+            let with_yml = format!("{}.yml", stem);
+            if files.contains_key(&with_yml) {
+                return Some(with_yml);
+            }
+            // Try with .yaml
+            let with_yaml = format!("{}.yaml", stem);
+            if files.contains_key(&with_yaml) {
+                return Some(with_yaml);
+            }
+            None
+        };
+
+        // Recursive function to follow _use imports
+        fn visit(
+            path: &str,
+            files: &std::collections::HashMap<String, String>,
+            visited: &mut std::collections::HashSet<String>,
+            result: &mut Vec<String>,
+            diags: &mut Vec<Diagnostic>,
+            resolve_stem: &dyn Fn(&str) -> Option<String>,
+        ) {
+            if visited.contains(path) {
+                return;
+            }
+            visited.insert(path.to_string());
+
+            // Parse to extract _use
+            let contents = match files.get(path) {
+                Some(c) => c,
+                None => return,
+            };
+
+            let node = match parse_document(contents) {
+                Ok(n) => n,
+                Err(e) => {
+                    diags.push(e.into_diagnostic(std::path::PathBuf::from(path)));
+                    return;
+                }
+            };
+
+            // Extract _use from the document
+            let extract = extract_document(FileId(0), &node);
+            if let Some(meta_use) = extract.meta_use {
+                let raw_use = parse_raw_use(&meta_use.value);
+                if let Some(raw_use) = raw_use {
+                    match raw_use {
+                        RawUse::WildcardAll => {
+                            // Import all files
+                            for file_path in files.keys() {
+                                visit(file_path, files, visited, result, diags, resolve_stem);
+                            }
+                        }
+                        RawUse::WildcardFile(stem) => {
+                            if let Some(target) = resolve_stem(&stem) {
+                                visit(&target, files, visited, result, diags, resolve_stem);
+                            }
+                        }
+                        RawUse::NamedImports(imports) => {
+                            for (_alias, file_stem, _component) in imports {
+                                if let Some(target) = resolve_stem(&file_stem) {
+                                    visit(&target, files, visited, result, diags, resolve_stem);
+                                }
+                            }
+                        }
+                        RawUse::IpcDeclarations(_) => {
+                            // IPC declarations don't import files
+                        }
+                    }
+                }
+            }
+
+            // Add this file to result after visiting its imports (so imports come first)
+            result.push(path.to_string());
+        }
+
+        visit(entry_path, files, &mut visited, &mut result, &mut diags, &resolve_stem);
+
+        if !diags.is_empty() {
+            return Err(diags);
+        }
+
+        Ok(result)
     }
 
     /// Clear all parsed components and reset the project.
@@ -508,6 +730,59 @@ impl Ymx {
             diag.message
         );
         JsValue::from_str(&msg)
+    }
+
+    fn diagnostics_to_js(&self, diags: Vec<Diagnostic>) -> JsValue {
+        let arr = js_sys::Array::new();
+        for diag in diags {
+            arr.push(&self.diagnostic_to_js(diag));
+        }
+        arr.into()
+    }
+}
+
+/// Raw _use directive variants.
+#[derive(Debug)]
+enum RawUse {
+    WildcardAll,
+    WildcardFile(String),
+    NamedImports(Vec<(String, String, String)>), // (alias, file_stem, component)
+    IpcDeclarations(Vec<(String, Value)>),
+}
+
+/// Parse a raw _use value into a RawUse enum.
+fn parse_raw_use(value: &Value) -> Option<RawUse> {
+    match value {
+        Value::String(s) if s == "*" => Some(RawUse::WildcardAll),
+        Value::String(s) => Some(RawUse::WildcardFile(s.clone())),
+        Value::Object(map) => {
+            // Check if it's IPC declarations or named imports
+            let has_ipc = map.values().any(|v| {
+                matches!(v, Value::Object(obj) if obj.contains_key("cmd") || obj.contains_key("transport"))
+            });
+            if has_ipc {
+                let mut decls = Vec::new();
+                for (alias, spec) in map {
+                    decls.push((alias.clone(), spec.clone()));
+                }
+                Some(RawUse::IpcDeclarations(decls))
+            } else {
+                let mut imports = Vec::new();
+                for (alias, target) in map {
+                    if let Value::String(target_str) = target {
+                        // target can be "file.component" or just "file"
+                        let parts: Vec<&str> = target_str.split('.').collect();
+                        if parts.len() >= 2 {
+                            imports.push((alias.clone(), parts[0].to_string(), parts[1..].join(".")));
+                        } else {
+                            imports.push((alias.clone(), parts[0].to_string(), String::new()));
+                        }
+                    }
+                }
+                Some(RawUse::NamedImports(imports))
+            }
+        }
+        _ => None,
     }
 }
 

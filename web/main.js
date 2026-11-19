@@ -882,11 +882,17 @@ function setupEventListeners() {
         if (!fileState) return;
         
         try {
-            // Clear the YMX instance and parse only the active file
-            state.ymxInstance.clear();
-            if (fileState.content.trim()) {
-                state.ymxInstance.parse(fileState.content);
+            // Build a Map of all .yml files in the virtual filesystem
+            const fileMap = new Map();
+            for (const [path, f] of state.files) {
+                if (path.endsWith('.yml') || path.endsWith('.yaml')) {
+                    fileMap.set(path, f.content);
+                }
             }
+            
+            // Clear and parse all files (handles _use imports)
+            state.ymxInstance.clear();
+            state.ymxInstance.parse_map(fileMap);
             
             const components = state.ymxInstance.components();
             const mainComponent = 'main';
@@ -1290,11 +1296,17 @@ async function lint() {
     }
     
     try {
-        // Clear the YMX instance and parse only the active file
-        state.ymxInstance.clear();
-        if (fileState.content.trim()) {
-            state.ymxInstance.parse(fileState.content);
+        // Build a Map of all .yml files in the virtual filesystem
+        const fileMap = new Map();
+        for (const [path, f] of state.files) {
+            if (path.endsWith('.yml') || path.endsWith('.yaml')) {
+                fileMap.set(path, f.content);
+            }
         }
+        
+        // Clear and parse all files (handles _use imports)
+        state.ymxInstance.clear();
+        state.ymxInstance.parse_map(fileMap);
         
         const result = state.ymxInstance.lint();
         updateLintMarkers(result);
@@ -1318,11 +1330,17 @@ async function render() {
     updateStatus('Rendering...');
     
     try {
-        // Clear the YMX instance and parse only the active file
-        state.ymxInstance.clear();
-        if (fileState.content.trim()) {
-            state.ymxInstance.parse(fileState.content);
+        // Build a Map of all .yml files in the virtual filesystem
+        const fileMap = new Map();
+        for (const [path, f] of state.files) {
+            if (path.endsWith('.yml') || path.endsWith('.yaml')) {
+                fileMap.set(path, f.content);
+            }
         }
+        
+        // Clear and parse all files (handles _use imports)
+        state.ymxInstance.clear();
+        state.ymxInstance.parse_map(fileMap);
         
         // Get the main component to render - must be named 'main'
         const components = state.ymxInstance.components();
