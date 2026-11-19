@@ -721,9 +721,9 @@ function renameItem(path) {
 function handleRename(oldPath, newName, type) {
     if (!newName || newName === oldPath.split('/').pop()) return;
     
-    // Force .yml extension for files (strip any existing extension)
+    // Force .yml extension (take first word before first dot)
     if (type === 'rename-file') {
-        newName = newName.replace(/\.[^.]+$/, '') + '.yml';
+        newName = newName.split('.')[0] + '.yml';
     }
     
     const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/')) || '/';
@@ -811,9 +811,9 @@ function setupEventListeners() {
             return;
         }
         
-        // Force .yml extension for files (strip any existing extension)
+        // Force .yml extension (take first word before first dot)
         if (type === 'file') {
-            name = name.replace(/\.[^.]+$/, '') + '.yml';
+            name = name.split('.')[0] + '.yml';
         }
         
         const newPath = parentPath === '/' ? '/' + name : parentPath + '/' + name;
