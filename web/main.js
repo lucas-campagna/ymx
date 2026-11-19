@@ -27,6 +27,7 @@ const fs = {
     '/': { type: 'folder', children: {} },
     
     init() {
+        console.log('fs.init: starting');
         // Create default example files
         this.createFile('/main.yml', `main:
   message: "Hello, YMX!"
@@ -83,6 +84,7 @@ formatter:
   name: "YMX"
   version: 1
   display: "\${upper(name)} v\${version}"`);
+    console.log('fs.init: completed, state.files keys =', Array.from(state.files.keys()));
     },
 
     createFolder(path) {
@@ -101,6 +103,7 @@ formatter:
     },
 
     createFile(path, content = '') {
+        console.log('createFile: path =', path);
         const parts = path.split('/').filter(Boolean);
         const fileName = parts.pop();
         const folderPath = '/' + parts.join('/');
@@ -114,6 +117,7 @@ formatter:
         
         current.children[fileName] = { type: 'file', content };
         state.files.set(path, { content, dirty: false, language: this.getLanguage(fileName) });
+        console.log('createFile: state.files.set done, path =', path, 'state.files size =', state.files.size);
     },
 
     deleteItem(path) {
@@ -1271,6 +1275,7 @@ function scheduleRender() {
     
     clearTimeout(state.renderDebounce);
     state.renderDebounce = setTimeout(() => {
+        console.log('scheduleRender: calling render, state.files keys =', Array.from(state.files.keys()));
         render();
     }, 300);
 }
@@ -1327,6 +1332,8 @@ async function render() {
         fileState.content = editor.getValue();
     }
     
+    console.log('render: state.files keys =', Array.from(state.files.keys()));
+    
     updateStatus('Rendering...');
     
     try {
@@ -1337,6 +1344,7 @@ async function render() {
                 fileMap.set(path, f.content);
             }
         }
+        console.log('render: fileMap size =', fileMap.size, 'keys =', Array.from(fileMap.keys()));
         
         // Clear and parse all files (handles _use imports)
         state.ymxInstance.clear();
