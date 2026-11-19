@@ -252,9 +252,16 @@ formatter:
             e.preventDefault();
             row.classList.remove("drag-over");
             
-            if (itemType === "folder" && dragSourcePath && dragSourcePath !== itemPath) {
-                if (!itemPath.startsWith(dragSourcePath + "/")) {
-                    if (fs.moveItem(dragSourcePath, itemPath)) {
+            if (dragSourcePath && dragSourcePath !== itemPath) {
+                let targetPath = itemPath;
+                if (itemType === "file") {
+                    // Move to file's parent folder
+                    const parts = itemPath.split('/').filter(Boolean);
+                    parts.pop();
+                    targetPath = '/' + parts.join('/');
+                }
+                if (!targetPath.startsWith(dragSourcePath + '/')) {
+                    if (fs.moveItem(dragSourcePath, targetPath)) {
                         renderFileTree();
                     }
                 }
