@@ -219,14 +219,15 @@ impl Ymx {
     /// Entry point is main.yml (or main.yaml). All .yml files in the map are candidates.
     /// _use imports are resolved from main.yml.
     pub fn parse_map(&mut self, file_map: js_sys::Map) -> Result<(), JsValue> {
-        // Convert JS Map to Rust HashMap
+        // Convert JS Map to Rust HashMap (normalize paths by stripping leading /)
         let mut files: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         let keys = js_sys::Object::keys(&file_map);
         for i in 0..keys.length() {
             let key = keys.get(i).as_string().unwrap_or_default();
+            let normalized_key = key.strip_prefix('/').unwrap_or(&key);
             let js_key = JsValue::from_str(&key);
             let value = file_map.get(&js_key).as_string().unwrap_or_default();
-            files.insert(key, value);
+            files.insert(normalized_key.to_string(), value);
         }
 
         // Find entry file (main.yml or main.yaml)
