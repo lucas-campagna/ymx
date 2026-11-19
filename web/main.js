@@ -301,9 +301,9 @@ function renderFolder(path, displayPath, depth) {
         el.dataset.path = item.path;
         
         if (item.type === 'folder') {
-            const isCollapsed = !el.classList.contains('expanded');
+            const isCollapsed = el.classList.contains('collapsed');
             el.innerHTML = `
-                <span class="icon">${isCollapsed ? '▶' : '▼'}</span>
+                <span class="icon">📁</span>
                 <span class="name">${item.name}</span>
             `;
             
@@ -311,20 +311,11 @@ function renderFolder(path, displayPath, depth) {
             childrenContainer.className = 'file-tree-children';
             if (isCollapsed) childrenContainer.style.display = 'none';
             
-            el.querySelector('.icon').addEventListener('click', (e) => {
-                e.stopPropagation();
-                el.classList.toggle('collapsed');
-                el.classList.toggle('expanded');
-                childrenContainer.style.display = el.classList.contains('collapsed') ? 'none' : 'block';
-                el.querySelector('.icon').textContent = el.classList.contains('collapsed') ? '▶' : '▼';
-            });
-            
+            // Click on folder name or icon toggles expand/collapse
             el.addEventListener('click', (e) => {
-                if (e.target === el || e.target === el.querySelector('.name')) {
-                    el.classList.toggle('collapsed');
-                    el.classList.toggle('expanded');
-                    childrenContainer.style.display = el.classList.contains('collapsed') ? 'none' : 'block';
-                    el.querySelector('.icon').textContent = el.classList.contains('collapsed') ? '▶' : '▼';
+                if (e.target === el || e.target === el.querySelector('.name') || e.target === el.querySelector('.icon')) {
+                    const isCollapsed = el.classList.toggle('collapsed');
+                    childrenContainer.style.display = isCollapsed ? 'none' : 'block';
                 }
             });
             
@@ -370,9 +361,9 @@ function renderFolderIntoContainer(path, displayPath, depth, container) {
         el.dataset.path = item.path;
         
         if (item.type === 'folder') {
-            const isCollapsed = !el.classList.contains('expanded');
+            const isCollapsed = el.classList.contains('collapsed');
             el.innerHTML = `
-                <span class="icon">${isCollapsed ? '▶' : '▼'}</span>
+                <span class="icon">📁</span>
                 <span class="name">${item.name}</span>
             `;
             
@@ -380,25 +371,16 @@ function renderFolderIntoContainer(path, displayPath, depth, container) {
             childrenContainer.className = 'file-tree-children';
             if (isCollapsed) childrenContainer.style.display = 'none';
             
-            el.querySelector('.icon').addEventListener('click', (e) => {
-                e.stopPropagation();
-                el.classList.toggle('collapsed');
-                el.classList.toggle('expanded');
-                childrenContainer.style.display = el.classList.contains('collapsed') ? 'none' : 'block';
-                el.querySelector('.icon').textContent = el.classList.contains('collapsed') ? '▶' : '▼';
-            });
-            
+            // Click on folder name or icon toggles expand/collapse
             el.addEventListener('click', (e) => {
-                if (e.target === el || e.target === el.querySelector('.name')) {
-                    el.classList.toggle('collapsed');
-                    el.classList.toggle('expanded');
-                    childrenContainer.style.display = el.classList.contains('collapsed') ? 'none' : 'block';
-                    el.querySelector('.icon').textContent = el.classList.contains('collapsed') ? '▶' : '▼';
+                if (e.target === el || e.target === el.querySelector('.name') || e.target === el.querySelector('.icon')) {
+                    const isCollapsed = el.classList.toggle('collapsed');
+                    childrenContainer.style.display = isCollapsed ? 'none' : 'block';
                 }
             });
             
-            el.appendChild(childrenContainer);
             container.appendChild(el);
+            el.appendChild(childrenContainer);
             renderFolderIntoContainer(item.path, item.path, depth + 1, childrenContainer);
         } else {
             const isActive = state.activeFile === item.path;
@@ -411,14 +393,14 @@ function renderFolderIntoContainer(path, displayPath, depth, container) {
             
             el.addEventListener('click', () => openFile(item.path));
             el.addEventListener('dblclick', () => renameItem(item.path));
+            
+            container.appendChild(el);
         }
         
         el.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             showContextMenu(e.clientX, e.clientY, item.path, item.type);
         });
-        
-        container.appendChild(el);
     }
 }
 
