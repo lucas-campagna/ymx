@@ -1048,9 +1048,14 @@ async function initWasm() {
         
         state.ymxInstance = new wasmModule.Ymx();
         
-        // Check for ironpress
-        if (typeof ironpress !== 'undefined') {
-            state.ironpressLoaded = true;
+        // Initialize ironpress if available
+        if (typeof ironpress !== 'undefined' && typeof ironpress.default === 'function') {
+            try {
+                await ironpress.default();
+                state.ironpressLoaded = true;
+            } catch (e) {
+                console.warn('Failed to initialize ironpress:', e);
+            }
         }
         
         updateStatus('Ready');
