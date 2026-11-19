@@ -221,20 +221,8 @@ formatter:
 
     addDragHandlers(row, itemPath, itemType) {
         row.draggable = true;
-        let dragStartX = 0;
-        let dragStartY = 0;
-        
-        row.addEventListener("mousedown", (e) => {
-            dragStartX = e.clientX;
-            dragStartY = e.clientY;
-        });
         
         row.addEventListener("dragstart", (e) => {
-            // Only allow drag if mouse moved more than 5px
-            if (Math.abs(e.clientX - dragStartX) < 5 && Math.abs(e.clientY - dragStartY) < 5) {
-                e.preventDefault();
-                return;
-            }
             dragSourcePath = itemPath;
             row.classList.add("dragging");
             e.dataTransfer.effectAllowed = "move";
