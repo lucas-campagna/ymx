@@ -19,6 +19,9 @@ const state = {
     ironpressLoaded: false,
 };
 
+// Drag and drop state
+let dragSourcePath = null;
+
 // Track created Monaco models to reuse them
 const models = new Map(); // path -> monaco.editor.ITextModel
 
