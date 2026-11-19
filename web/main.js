@@ -782,47 +782,39 @@ function deleteItem(path) {
     scheduleRender();
 }
 
-elements.newFileBtn.addEventListener('click', () => showNewFileModal('/'));
-elements.newFolderBtn.addEventListener('click', () => showNewFolderModal('/'));
+function setupEventListeners() {
+    // Sidebar toggle for mobile
+    elements.sidebarToggle.addEventListener('click', () => {
+        elements.sidebar.classList.toggle('open');
+        elements.sidebarOverlay.classList.toggle('open');
+    });
 
-// Sidebar toggle for mobile
-elements.sidebarToggle.addEventListener('click', () => {
-    elements.sidebar.classList.toggle('open');
-    elements.sidebarOverlay.classList.toggle('open');
-});
+    elements.sidebarOverlay.addEventListener('click', () => {
+        elements.sidebar.classList.remove('open');
+        elements.sidebarOverlay.classList.remove('open');
+    });
 
-elements.sidebarOverlay.addEventListener('click', () => {
-    elements.sidebar.classList.remove('open');
-    elements.sidebarOverlay.classList.remove('open');
-});
-
-// Close sidebar on file click (mobile)
-document.addEventListener('click', (e) => {
-    if (window.innerWidth <= 900 && elements.sidebar.classList.contains('open')) {
-        const sidebar = elements.sidebar;
-        const toggle = elements.sidebarToggle;
-        if (!sidebar.contains(e.target) && !toggle.contains(e.target)) {
-            elements.sidebar.classList.remove('open');
-            elements.sidebarOverlay.classList.remove('open');
+    // Close sidebar on file click (mobile)
+    document.addEventListener('click', (e) => {
+        if (window.innerWidth <= 900 && elements.sidebar.classList.contains('open')) {
+            const sidebar = elements.sidebar;
+            const toggle = elements.sidebarToggle;
+            if (!sidebar.contains(e.target) && !toggle.contains(e.target)) {
+                elements.sidebar.classList.remove('open');
+                elements.sidebarOverlay.classList.remove('open');
+            }
         }
-    }
-});
+    });
 
-// ============================================================================
-// Resize Handle (Mobile Preview Panel)
-// ============================================================================
+    // New file/folder buttons
+    elements.newFileBtn.addEventListener('click', () => showNewFileModal('/'));
+    elements.newFolderBtn.addEventListener('click', () => showNewFolderModal('/'));
 
-let resizeState = {
-    isDragging: false,
-    startY: 0,
-    editorStartHeight: 0,
-    previewStartHeight: 0,
-};
+    // Resize handle for mobile preview
+    initResizeHandle();
+}
 
 function initResizeHandle() {
-    // Initialize elements if not already done
-    if (!elements.resizeHandle) initElements();
-    
     if (!elements.resizeHandle || !elements.editorContainer || !elements.previewContainer) return;
     
     const handle = elements.resizeHandle;
@@ -1399,6 +1391,9 @@ document.addEventListener('keydown', (e) => {
 async function init() {
     // Initialize DOM elements first
     initElements();
+    
+    // Setup all event listeners after elements are initialized
+    setupEventListeners();
     
     // Wait for monaco to load
     await waitForMonaco();
