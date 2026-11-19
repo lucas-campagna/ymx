@@ -300,9 +300,12 @@ function renderFolder(path, displayPath, depth) {
         el.className = `file-tree-item ${item.type === 'folder' ? 'file-tree-folder' : ''}`;
         el.dataset.path = item.path;
         
+        const row = document.createElement('div');
+        row.className = 'file-tree-item-row';
+        
         if (item.type === 'folder') {
             const isCollapsed = el.classList.contains('collapsed');
-            el.innerHTML = `
+            row.innerHTML = `
                 <span class="icon">📁</span>
                 <span class="name">${item.name}</span>
             `;
@@ -312,26 +315,29 @@ function renderFolder(path, displayPath, depth) {
             if (isCollapsed) childrenContainer.style.display = 'none';
             
             // Click on folder name or icon toggles expand/collapse
-            el.addEventListener('click', (e) => {
-                if (e.target === el || e.target === el.querySelector('.name') || e.target === el.querySelector('.icon')) {
+            row.addEventListener('click', (e) => {
+                if (e.target === row || e.target === row.querySelector('.name') || e.target === row.querySelector('.icon')) {
                     const isCollapsed = el.classList.toggle('collapsed');
                     childrenContainer.style.display = isCollapsed ? 'none' : 'block';
                 }
             });
             
+            el.appendChild(row);
             el.appendChild(childrenContainer);
             renderFolderIntoContainer(item.path, item.path, depth + 1, childrenContainer);
         } else {
             const isActive = state.activeFile === item.path;
             const isDirty = state.files.get(item.path)?.dirty;
-            el.innerHTML = `
+            row.innerHTML = `
                 <span class="icon">📄</span>
                 <span class="name ${isDirty ? 'dirty' : ''}">${item.name}</span>
             `;
             if (isActive) el.classList.add('active');
             
-            el.addEventListener('click', () => openFile(item.path));
-            el.addEventListener('dblclick', () => renameItem(item.path));
+            row.addEventListener('click', () => openFile(item.path));
+            row.addEventListener('dblclick', () => renameItem(item.path));
+            
+            el.appendChild(row);
         }
         
         // Context menu
@@ -360,9 +366,12 @@ function renderFolderIntoContainer(path, displayPath, depth, container) {
         el.className = `file-tree-item ${item.type === 'folder' ? 'file-tree-folder' : ''}`;
         el.dataset.path = item.path;
         
+        const row = document.createElement('div');
+        row.className = 'file-tree-item-row';
+        
         if (item.type === 'folder') {
             const isCollapsed = el.classList.contains('collapsed');
-            el.innerHTML = `
+            row.innerHTML = `
                 <span class="icon">📁</span>
                 <span class="name">${item.name}</span>
             `;
@@ -372,29 +381,31 @@ function renderFolderIntoContainer(path, displayPath, depth, container) {
             if (isCollapsed) childrenContainer.style.display = 'none';
             
             // Click on folder name or icon toggles expand/collapse
-            el.addEventListener('click', (e) => {
-                if (e.target === el || e.target === el.querySelector('.name') || e.target === el.querySelector('.icon')) {
+            row.addEventListener('click', (e) => {
+                if (e.target === row || e.target === row.querySelector('.name') || e.target === row.querySelector('.icon')) {
                     const isCollapsed = el.classList.toggle('collapsed');
                     childrenContainer.style.display = isCollapsed ? 'none' : 'block';
                 }
             });
             
             container.appendChild(el);
+            el.appendChild(row);
             el.appendChild(childrenContainer);
             renderFolderIntoContainer(item.path, item.path, depth + 1, childrenContainer);
         } else {
             const isActive = state.activeFile === item.path;
             const isDirty = state.files.get(item.path)?.dirty;
-            el.innerHTML = `
+            row.innerHTML = `
                 <span class="icon">📄</span>
                 <span class="name ${isDirty ? 'dirty' : ''}">${item.name}</span>
             `;
             if (isActive) el.classList.add('active');
             
-            el.addEventListener('click', () => openFile(item.path));
-            el.addEventListener('dblclick', () => renameItem(item.path));
+            row.addEventListener('click', () => openFile(item.path));
+            row.addEventListener('dblclick', () => renameItem(item.path));
             
             container.appendChild(el);
+            el.appendChild(row);
         }
         
         el.addEventListener('contextmenu', (e) => {

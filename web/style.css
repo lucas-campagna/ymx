@@ -208,8 +208,8 @@ body {
 
 .file-tree-item {
     display: flex;
-    align-items: center;
-    padding: 6px 8px;
+    flex-direction: column;
+    padding: 2px 0;
     border-radius: 4px;
     cursor: pointer;
     transition: background 0.15s ease;
@@ -224,7 +224,18 @@ body {
     background: var(--bg-hover);
 }
 
-.file-tree-item .icon {
+.file-tree-item-row {
+    display: flex;
+    align-items: center;
+    padding: 6px 8px;
+    border-radius: 4px;
+}
+
+.file-tree-item-row:hover {
+    background: var(--bg-hover);
+}
+
+.file-tree-item-row .icon {
     width: 18px;
     height: 18px;
     margin-right: 8px;
@@ -234,7 +245,7 @@ body {
     font-size: 0.85rem;
 }
 
-.file-tree-item .name {
+.file-tree-item-row .name {
     flex: 1;
     font-size: 0.85rem;
     white-space: nowrap;
@@ -242,12 +253,12 @@ body {
     text-overflow: ellipsis;
 }
 
-.file-tree-item .name.dirty::after {
+.file-tree-item-row .name.dirty::after {
     content: " ●";
     color: var(--warning);
 }
 
-.file-tree-folder > .file-tree-item .icon {
+.file-tree-folder > .file-tree-item > .file-tree-item-row .icon {
     color: var(--warning);
 }
 
