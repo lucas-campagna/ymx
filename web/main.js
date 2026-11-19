@@ -679,7 +679,7 @@ function hideContextMenu() {
 function showNewFileModal(parentPath = '/') {
     elements.modalTitle.textContent = 'New File';
     elements.modalInput.value = '';
-    elements.modalInput.placeholder = 'filename.yml';
+    elements.modalInput.placeholder = 'filename (without .yml)';
     elements.modal.dataset.parentPath = parentPath;
     elements.modalInput.dataset.type = 'file';
     showModal();
@@ -705,36 +705,50 @@ function hideModal() {
 
 function renameItem(path) {
     const name = path.split('/').pop();
-    const newName = prompt('Rename to:', name);
-    if (!newName || newName === name) return;
+    const isFile = state.files.has(path);
+    const baseName = isFile ? name.replace(/\.(yml|yaml)$/, '') : name;
     
-    const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
+    elements.modalTitle.textContent = 'Rename';
+    elements.modalInput.value = baseName;
+    elements.modalInput.placeholder = isFile ? 'filename (without .yml)' : 'folder-name';
+    elements.modal.dataset.parentPath = path;
+    elements.modalInput.dataset.type = isFile ? 'rename-file' : 'rename-folder';
+    elements.modalInput.dataset.oldPath = path;
+    
+    showModal();
+}
+
+function handleRename(oldPath, newName, type) {
+    if (!newName || newName === oldPath.split('/').pop()) return;
+    
+    // Auto-append .yml for files
+    if (type === 'rename-file' && !newName.endsWith('.yml') && !newName.endsWith('.yaml')) {
+        newName += '.yml';
+    }
+    
+    const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/')) || '/';
     const newPath = parentPath === '/' ? '/' + newName : parentPath + '/' + newName;
     
     // For files, we need to update state.files
-    if (state.files.has(path)) {
-        const fileState = state.files.get(path);
-        state.files.delete(path);
+    if (state.files.has(oldPath)) {
+        const fileState = state.files.get(oldPath);
+        state.files.delete(oldPath);
         state.files.set(newPath, fileState);
         
         // Update open tabs
-        const tabIndex = state.openTabs.indexOf(path);
+        const tabIndex = state.openTabs.indexOf(oldPath);
         if (tabIndex !== -1) {
             state.openTabs[tabIndex] = newPath;
         }
-        if (state.activeFile === path) {
+        if (state.activeFile === oldPath) {
             state.activeFile = newPath;
         }
     }
     
-    // For folders, we need to update all nested paths
-    // This is simplified - in a real app you'd want a more robust approach
-    
     // Update virtual FS
-    // This is a simplified implementation
-    const content = fs.readFile(path);
+    const content = fs.readFile(oldPath);
     if (content !== null) {
-        fs.deleteItem(path);
+        fs.deleteItem(oldPath);
         fs.createFile(newPath, content);
     }
     
@@ -783,11 +797,24 @@ function setupEventListeners() {
     // Modal event listeners
     elements.modalForm.addEventListener('submit', (e) => {
         e.preventDefault();
-        const name = elements.modalInput.value.trim();
-        const parentPath = elements.modal.dataset.parentPath || '/';
+        let name = elements.modalInput.value.trim();
         const type = elements.modalInput.dataset.type;
+        const parentPath = elements.modal.dataset.parentPath || '/';
         
         if (!name) return;
+        
+        // Handle rename operations
+        if (type === 'rename-file' || type === 'rename-folder') {
+            const oldPath = elements.modalInput.dataset.oldPath;
+            handleRename(oldPath, name, type);
+            hideModal();
+            return;
+        }
+        
+        // Auto-append .yml for new files
+        if (type === 'file' && !name.endsWith('.yml') && !name.endsWith('.yaml')) {
+            name += '.yml';
+        }
         
         const newPath = parentPath === '/' ? '/' + name : parentPath + '/' + name;
         
