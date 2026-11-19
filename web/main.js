@@ -218,6 +218,50 @@ formatter:
         
         return true;
     },
+
+    addDragHandlers(row, itemPath, itemType) {
+        row.draggable = true;
+        
+        row.addEventListener("dragstart", (e) => {
+            dragSourcePath = itemPath;
+            row.classList.add("dragging");
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", itemPath);
+        });
+        
+        row.addEventListener("dragend", () => {
+            row.classList.remove("dragging");
+            document.querySelectorAll(".file-tree-item-row.drag-over").forEach(r => r.classList.remove("drag-over"));
+            dragSourcePath = null;
+        });
+        
+        row.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            
+            if (itemType === "folder" && itemPath !== dragSourcePath) {
+                row.classList.add("drag-over");
+            }
+        });
+        
+        row.addEventListener("dragleave", () => {
+            row.classList.remove("drag-over");
+        });
+        
+        row.addEventListener("drop", (e) => {
+            e.preventDefault();
+            row.classList.remove("drag-over");
+            
+            if (itemType === "folder" && dragSourcePath && dragSourcePath !== itemPath) {
+                if (!itemPath.startsWith(dragSourcePath + "/")) {
+                    if (fs.moveItem(dragSourcePath, itemPath)) {
+                        renderFileTree();
+                    }
+                }
+            }
+        });
+    },
+
     
     removeFolderRecursive(path) {
         for (const [filePath] of state.files) {
