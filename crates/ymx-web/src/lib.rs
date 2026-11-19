@@ -222,9 +222,10 @@ impl Ymx {
     pub fn parse_map(&mut self, file_map: js_sys::Map) -> Result<(), JsValue> {
         // Convert JS Map to Rust HashMap (normalize paths by stripping leading /)
         let mut files: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-        let keys = js_sys::Object::keys(&file_map);
-        for i in 0..keys.length() {
-            let key = keys.get(i).as_string().unwrap_or_default();
+        let keys = file_map.keys();
+        let keys_array = js_sys::Array::from(&keys);
+        for i in 0..keys_array.length() {
+            let key = keys_array.get(i).as_string().unwrap_or_default();
             let normalized_key = key.strip_prefix('/').unwrap_or(&key);
             let js_key = JsValue::from_str(&key);
             let value = file_map.get(&js_key).as_string().unwrap_or_default();
