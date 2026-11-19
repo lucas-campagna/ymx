@@ -225,6 +225,9 @@ const elements = {
     modalCancel: document.getElementById('modal-cancel'),
     newFileBtn: document.getElementById('new-file-btn'),
     newFolderBtn: document.getElementById('new-folder-btn'),
+    sidebarToggle: document.getElementById('sidebar-toggle'),
+    sidebar: document.getElementById('sidebar'),
+    sidebarOverlay: document.getElementById('sidebar-overlay'),
 };
 
 // ============================================================================
@@ -773,6 +776,29 @@ function deleteItem(path) {
 
 elements.newFileBtn.addEventListener('click', () => showNewFileModal('/'));
 elements.newFolderBtn.addEventListener('click', () => showNewFolderModal('/'));
+
+// Sidebar toggle for mobile
+elements.sidebarToggle.addEventListener('click', () => {
+    elements.sidebar.classList.toggle('open');
+    elements.sidebarOverlay.classList.toggle('open');
+});
+
+elements.sidebarOverlay.addEventListener('click', () => {
+    elements.sidebar.classList.remove('open');
+    elements.sidebarOverlay.classList.remove('open');
+});
+
+// Close sidebar on file click (mobile)
+document.addEventListener('click', (e) => {
+    if (window.innerWidth <= 900 && elements.sidebar.classList.contains('open')) {
+        const sidebar = elements.sidebar;
+        const toggle = elements.sidebarToggle;
+        if (!sidebar.contains(e.target) && !toggle.contains(e.target)) {
+            elements.sidebar.classList.remove('open');
+            elements.sidebarOverlay.classList.remove('open');
+        }
+    }
+});
 
 // ============================================================================
 // WASM Integration
