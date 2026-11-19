@@ -361,6 +361,7 @@ function renderFolder(path, displayPath, depth) {
         // Context menu
         el.addEventListener('contextmenu', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             showContextMenu(e.clientX, e.clientY, item.path, item.type);
         });
         
@@ -428,6 +429,7 @@ function renderFolderIntoContainer(path, displayPath, depth, container) {
         
         el.addEventListener('contextmenu', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             showContextMenu(e.clientX, e.clientY, item.path, item.type);
         });
     }
@@ -801,6 +803,7 @@ function setupEventListeners() {
     // Modal event listeners
     elements.modalForm.addEventListener('submit', (e) => {
         e.preventDefault();
+            e.stopPropagation();
         let name = elements.modalInput.value.trim();
         const type = elements.modalInput.dataset.type;
         const parentPath = elements.modal.dataset.parentPath || '/';
@@ -981,6 +984,7 @@ function initVerticalResizeHandle() {
     handle.addEventListener('keydown', (e) => {
         if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
             e.preventDefault();
+            e.stopPropagation();
             const delta = e.key === 'ArrowUp' ? -20 : 20;
             adjustVerticalSplit(delta);
         }
@@ -1002,6 +1006,7 @@ function initHorizontalResizeHandle() {
     handle.addEventListener('keydown', (e) => {
         if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
             e.preventDefault();
+            e.stopPropagation();
             const delta = e.key === 'ArrowLeft' ? -20 : 20;
             adjustHorizontalSplit(delta);
         }
@@ -1028,6 +1033,7 @@ function startVerticalDrag(e, handle) {
     if (e.type === 'mousedown' && e.button !== 0) return;
     
     e.preventDefault();
+            e.stopPropagation();
     e.stopPropagation();
     
     verticalResizeState.isDragging = true;
@@ -1049,6 +1055,7 @@ function onVerticalDrag(e) {
     if (!verticalResizeState.isDragging) return;
     
     e.preventDefault();
+            e.stopPropagation();
     
     const currentY = e.type === 'mousemove' ? e.clientY : e.touches[0].clientY;
     const deltaY = currentY - verticalResizeState.startY;
@@ -1112,6 +1119,7 @@ function startHorizontalDrag(e, handle) {
     if (e.type === 'mousedown' && e.button !== 0) return;
     
     e.preventDefault();
+            e.stopPropagation();
     e.stopPropagation();
     
     horizontalResizeState.isDragging = true;
@@ -1133,6 +1141,7 @@ function onHorizontalDrag(e) {
     if (!horizontalResizeState.isDragging) return;
     
     e.preventDefault();
+            e.stopPropagation();
     
     const currentX = e.type === 'mousemove' ? e.clientX : e.touches[0].clientX;
     const deltaX = currentX - horizontalResizeState.startX;
@@ -1564,6 +1573,7 @@ document.addEventListener('keydown', (e) => {
     // Ctrl/Cmd + S to save (mark as not dirty)
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
+            e.stopPropagation();
         if (state.activeFile) {
             const fileState = state.files.get(state.activeFile);
             if (fileState && fileState.dirty) {
@@ -1577,6 +1587,7 @@ document.addEventListener('keydown', (e) => {
     // Ctrl/Cmd + Enter to render
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault();
+            e.stopPropagation();
         render();
     }
     
@@ -1642,6 +1653,7 @@ window.addEventListener('beforeunload', (e) => {
     const hasDirty = Array.from(state.files.values()).some(f => f.dirty);
     if (hasDirty) {
         e.preventDefault();
+            e.stopPropagation();
         e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
         return e.returnValue;
     }
