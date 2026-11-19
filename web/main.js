@@ -1,5 +1,5 @@
 // YMX Playground - Main Application
-import * as monaco from 'https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs/editor/editor.api.min.js';
+// monaco is loaded globally via AMD loader in index.html
 
 // ============================================================================
 // State Management
@@ -329,7 +329,7 @@ function renderFolder(path, displayPath, depth) {
             });
             
             el.appendChild(childrenContainer);
-            renderFolder(item.path, item.path, depth + 1, childrenContainer);
+            renderFolderIntoContainer(item.path, item.path, depth + 1, childrenContainer);
         } else {
             const isActive = state.activeFile === item.path;
             const isDirty = state.files.get(item.path)?.dirty;
@@ -358,7 +358,7 @@ function renderFolder(path, displayPath, depth) {
 }
 
 // Helper to render into a specific container
-function renderFolder(path, displayPath, depth, container) {
+function renderFolderIntoContainer(path, displayPath, depth, container) {
     const items = fs.listItems(path).sort((a, b) => {
         if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
         return a.name.localeCompare(b.name);
@@ -399,7 +399,7 @@ function renderFolder(path, displayPath, depth, container) {
             
             el.appendChild(childrenContainer);
             container.appendChild(el);
-            renderFolder(item.path, item.path, depth + 1, childrenContainer);
+            renderFolderIntoContainer(item.path, item.path, depth + 1, childrenContainer);
         } else {
             const isActive = state.activeFile === item.path;
             const isDirty = state.files.get(item.path)?.dirty;
@@ -1089,6 +1089,9 @@ document.addEventListener('keydown', (e) => {
 // ============================================================================
 
 async function init() {
+    // Wait for monaco to load
+    await waitForMonaco();
+    
     // Initialize virtual filesystem
     fs.init();
     
@@ -1108,6 +1111,21 @@ async function init() {
     }
     
     console.log('YMX Playground initialized');
+}
+
+function waitForMonaco() {
+    return new Promise((resolve) => {
+        if (window.monaco) {
+            resolve();
+        } else {
+            const checkMonaco = setInterval(() => {
+                if (window.monaco) {
+                    clearInterval(checkMonaco);
+                    resolve();
+                }
+            }, 100);
+        }
+    });
 }
 
 // Handle page unload

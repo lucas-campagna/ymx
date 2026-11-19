@@ -3,9 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>YMX Playground</title>
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" data-name="vs/editor/editor.main" href="https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs/editor/editor.main.css">
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs/loader.js"></script>
+    <script>
+        require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs' }});
+        require(['vs/editor/editor.main'], function(monaco) {
+            window.monaco = monaco;
+            window.monacoLoaded = true;
+        });
+    </script>
 </head>
 <body>
     <header class="header">
@@ -89,6 +100,6 @@
         import * as ironpress from './vendor/ironpress.js';
         window.ironpress = ironpress;
     </script>
-    <script type="module" src="main.js"></script>
+    <script type="module" src="main-v2.js?t=20241119"></script>
 </body>
 </html>
