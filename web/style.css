@@ -674,10 +674,11 @@ body {
         padding: 10px;
     }
     
-    .preview-html {
+    .preview-page {
         padding: 10px;
     }
     
+    .preview-html,
     .preview-json,
     .preview-ymx {
         font-size: 0.65rem;
@@ -761,13 +762,26 @@ body {
 }
 
 /* Preview Content Styles */
-.preview-html {
+.preview-page {
     background: white;
     color: #1a1a1a;
     border-radius: 6px;
     padding: 20px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
     min-height: 300px;
+}
+
+.preview-html {
+    background: var(--bg-tertiary);
+    color: var(--fg-primary);
+    border-radius: 6px;
+    padding: 16px;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.8rem;
+    line-height: 1.6;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 .preview-json {
@@ -1033,6 +1047,11 @@ body {
         padding: 20px;
         min-width: 90vw;
         max-width: 90vw;
+    }
+    
+    .preview-page {
+        padding: 12px;
+        min-height: 200px;
     }
     
     .preview-html {
