@@ -339,9 +339,6 @@ body {
     user-select: none;
 }
 
-.file-tree-item:hover {
-    background: var(--bg-hover);
-}
 
 .file-tree-item.active {
     background: var(--bg-hover);
