@@ -140,6 +140,81 @@ formatter:
         }
     },
 
+    
+    moveItem(fromPath, toPath) {
+        const fromParts = fromPath.split('/').filter(Boolean);
+        const toParts = toPath.split('/').filter(Boolean);
+        const name = fromParts.pop();
+        
+        let fromParent = this['/'];
+        for (const part of fromParts) {
+            fromParent = fromParent.children[part];
+        }
+        
+        let toParent = this['/'];
+        for (const part of toParts) {
+            toParent = toParent.children[part];
+        }
+        
+        const item = fromParent.children[name];
+        if (!item) return false;
+        
+        if (item.type === 'folder') {
+            if (toPath.startsWith(fromPath + '/')) return false;
+        }
+        
+        delete fromParent.children[name];
+        toParent.children[name] = item;
+        
+        if (item.type === 'file') {
+            const oldFullPath = fromPath === '/' ? '/' + name : fromPath + '/' + name;
+            const newFullPath = toPath === '/' ? '/' + name : toPath + '/' + name;
+            
+            const fileState = state.files.get(oldFullPath);
+            if (fileState) {
+                state.files.delete(oldFullPath);
+                state.files.set(newFullPath, fileState);
+                
+                const tabIndex = state.openTabs.indexOf(oldFullPath);
+                if (tabIndex !== -1) {
+                    state.openTabs[tabIndex] = newFullPath;
+                }
+                if (state.activeFile === oldFullPath) {
+                    state.activeFile = newFullPath;
+                }
+            }
+        } else {
+            const oldPrefix = fromPath === '/' ? '/' + name : fromPath + '/' + name;
+            const newPrefix = toPath === '/' ? '/' + name : toPath + '/' + name;
+            
+            const filesToMove = [];
+            for (const [filePath, fileState] of state.files) {
+                if (filePath.startsWith(oldPrefix + '/')) {
+                    filesToMove.push({ filePath, fileState });
+                }
+            }
+            for (const { filePath, fileState } of filesToMove) {
+                const newPath = filePath.replace(oldPrefix, newPrefix);
+                state.files.delete(filePath);
+                state.files.set(newPath, fileState);
+            }
+            
+            const foldersToMove = [];
+            for (const folderPath of state.folders) {
+                if (folderPath.startsWith(oldPrefix + '/')) {
+                    foldersToMove.push(folderPath);
+                }
+            }
+            for (const folderPath of foldersToMove) {
+                const newPath = folderPath.replace(oldPrefix, newPrefix);
+                state.folders.delete(folderPath);
+                state.folders.add(newPath);
+            }
+        }
+        
+        return true;
+    },
+    
     removeFolderRecursive(path) {
         for (const [filePath] of state.files) {
             if (filePath.startsWith(path + '/')) {
@@ -342,6 +417,7 @@ function renderFolder(path, displayPath, depth) {
             
             el.appendChild(row);
             el.appendChild(childrenContainer);
+            addDragHandlers(row, item.path, "folder");
             renderFolderIntoContainer(item.path, item.path, depth + 1, childrenContainer);
         } else {
             const isActive = state.activeFile === item.path;
@@ -358,7 +434,57 @@ function renderFolder(path, displayPath, depth) {
             el.appendChild(row);
         }
         
-        // Context menu
+        
+// Drag and drop state
+let dragSourcePath = null;
+
+function addDragHandlers(row, itemPath, itemType) {
+    row.draggable = true;
+    
+    row.addEventListener('dragstart', (e) => {
+        dragSourcePath = itemPath;
+        row.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', itemPath);
+    });
+    
+    row.addEventListener('dragend', () => {
+        row.classList.remove('dragging');
+        document.querySelectorAll('.file-tree-item-row.drag-over').forEach(r => r.classList.remove('drag-over'));
+        dragSourcePath = null;
+    });
+    
+    row.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        
+        // Only allow dropping on folders
+        if (itemType === 'folder' && itemPath !== dragSourcePath) {
+            row.classList.add('drag-over');
+        }
+    });
+    
+    row.addEventListener('dragleave', () => {
+        row.classList.remove('drag-over');
+    });
+    
+    row.addEventListener('drop', (e) => {
+        e.preventDefault();
+        row.classList.remove('drag-over');
+        
+        if (itemType === 'folder' && dragSourcePath && dragSourcePath !== itemPath) {
+            // Check if not moving into self or descendant
+            if (!itemPath.startsWith(dragSourcePath + '/')) {
+                if (fs.moveItem(dragSourcePath, itemPath)) {
+                    renderFileTree();
+                }
+            }
+        }
+    });
+}
+
+
+// Context menu
         el.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -410,6 +536,7 @@ function renderFolderIntoContainer(path, displayPath, depth, container) {
             container.appendChild(el);
             el.appendChild(row);
             el.appendChild(childrenContainer);
+            addDragHandlers(row, item.path, "folder");
             renderFolderIntoContainer(item.path, item.path, depth + 1, childrenContainer);
         } else {
             const isActive = state.activeFile === item.path;
