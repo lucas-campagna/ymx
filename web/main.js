@@ -702,33 +702,6 @@ function hideModal() {
     elements.modal.classList.remove('open');
 }
 
-elements.modalForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const name = elements.modalInput.value.trim();
-    const parentPath = elements.modal.dataset.parentPath || '/';
-    const type = elements.modalInput.dataset.type;
-    
-    if (!name) return;
-    
-    const newPath = parentPath === '/' ? '/' + name : parentPath + '/' + name;
-    
-    if (type === 'folder') {
-        fs.createFolder(newPath);
-    } else {
-        fs.createFile(newPath, '');
-        // Auto-open the new file
-        setTimeout(() => openFile(newPath), 0);
-    }
-    
-    renderFileTree();
-    hideModal();
-});
-
-elements.modalCancel.addEventListener('click', hideModal);
-elements.modal.addEventListener('click', (e) => {
-    if (e.target === elements.modal) hideModal();
-});
-
 function renameItem(path) {
     const name = path.split('/').pop();
     const newName = prompt('Rename to:', name);
@@ -806,12 +779,142 @@ function setupEventListeners() {
         }
     });
 
+    // Modal event listeners
+    elements.modalForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const name = elements.modalInput.value.trim();
+        const parentPath = elements.modal.dataset.parentPath || '/';
+        const type = elements.modalInput.dataset.type;
+        
+        if (!name) return;
+        
+        const newPath = parentPath === '/' ? '/' + name : parentPath + '/' + name;
+        
+        if (type === 'folder') {
+            fs.createFolder(newPath);
+        } else {
+            fs.createFile(newPath, '');
+            // Auto-open the new file
+            setTimeout(() => openFile(newPath), 0);
+        }
+        
+        renderFileTree();
+        hideModal();
+    });
+
+    elements.modalCancel.addEventListener('click', hideModal);
+    elements.modal.addEventListener('click', (e) => {
+        if (e.target === elements.modal) hideModal();
+    });
+
     // New file/folder buttons
     elements.newFileBtn.addEventListener('click', () => showNewFileModal('/'));
     elements.newFolderBtn.addEventListener('click', () => showNewFolderModal('/'));
 
     // Resize handle for mobile preview
     initResizeHandle();
+
+    // View mode buttons
+    elements.viewButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            elements.viewButtons.forEach(b => {
+                b.classList.remove('active');
+                b.setAttribute('aria-selected', 'false');
+            });
+            btn.classList.add('active');
+            btn.setAttribute('aria-selected', 'true');
+            state.viewMode = btn.dataset.view;
+            scheduleRender();
+        });
+    });
+
+    // Auto-render checkbox
+    elements.autoRender.addEventListener('change', (e) => {
+        state.autoRender = e.target.checked;
+        if (state.autoRender) scheduleRender();
+    });
+
+    // Auto-lint checkbox and lint/render buttons
+    elements.autoLint = document.getElementById('auto-lint');
+    elements.lintBtn = document.getElementById('lint-btn');
+
+    elements.autoLint.addEventListener('change', (e) => {
+        state.autoLint = e.target.checked;
+        if (state.autoLint) scheduleLint();
+    });
+
+    elements.lintBtn.addEventListener('click', lint);
+    elements.renderBtn.addEventListener('click', render);
+
+    // Download button
+    elements.downloadBtn.addEventListener('click', async () => {
+        if (!state.activeFile || !state.ymxInstance) return;
+        
+        const fileState = state.files.get(state.activeFile);
+        if (!fileState) return;
+        
+        try {
+            // Clear the YMX instance and parse only the active file
+            state.ymxInstance.clear();
+            if (fileState.content.trim()) {
+                state.ymxInstance.parse(fileState.content);
+            }
+            
+            const components = state.ymxInstance.components();
+            const mainComponent = 'main';
+            
+            if (!components.includes(mainComponent)) {
+                throw new Error('No "main" component found. Please define a "main" component in your YAML to render.');
+            }
+            
+            const componentFn = state.ymxInstance.__get__.call(state.ymxInstance, mainComponent);
+            const result = componentFn(undefined, []);
+            
+            let content, filename, mimeType;
+            
+            switch (state.viewMode) {
+                case 'html':
+                    content = result;
+                    filename = 'output.html';
+                    mimeType = 'text/html';
+                    break;
+                case 'json':
+                    content = JSON.stringify(result, null, 2);
+                    filename = 'output.json';
+                    mimeType = 'application/json';
+                    break;
+                case 'ymx':
+                    content = fileState.content;
+                    filename = 'output.yml';
+                    mimeType = 'text/yaml';
+                    break;
+                case 'pdf':
+                    if (!state.ironpressLoaded) {
+                        await loadIronpress();
+                    }
+                    const html = result;
+                    const pdfBytes = await window.ironpress.pdf(html, {
+                        format: 'A4',
+                        margin: { top: '1cm', right: '1cm', bottom: '1cm', left: '1cm' }
+                    });
+                    content = pdfBytes;
+                    filename = 'output.pdf';
+                    mimeType = 'application/pdf';
+                    break;
+            }
+            
+            const blob = new Blob([content], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error('Download failed:', err);
+            showToast('Download failed: ' + err.message);
+        }
+    });
 }
 
 function initResizeHandle() {
@@ -1248,110 +1351,6 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
-
-// ============================================================================
-// View Mode Switching
-// ============================================================================
-
-elements.viewButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-        elements.viewButtons.forEach(b => {
-            b.classList.remove('active');
-            b.setAttribute('aria-selected', 'false');
-        });
-        btn.classList.add('active');
-        btn.setAttribute('aria-selected', 'true');
-        state.viewMode = btn.dataset.view;
-        scheduleRender();
-    });
-});
-
-elements.autoRender.addEventListener('change', (e) => {
-    state.autoRender = e.target.checked;
-    if (state.autoRender) scheduleRender();
-});
-
-elements.autoLint = document.getElementById('auto-lint');
-elements.lintBtn = document.getElementById('lint-btn');
-
-elements.autoLint.addEventListener('change', (e) => {
-    state.autoLint = e.target.checked;
-    if (state.autoLint) scheduleLint();
-});
-
-elements.lintBtn.addEventListener('click', lint);
-
-elements.renderBtn.addEventListener('click', render);
-
-// ============================================================================
-// Download
-// ============================================================================
-
-elements.downloadBtn.addEventListener('click', async () => {
-    if (!state.activeFile || !state.ymxInstance) return;
-    
-    const fileState = state.files.get(state.activeFile);
-    if (!fileState) return;
-    
-    try {
-        // Clear the YMX instance and parse only the active file
-        state.ymxInstance.clear();
-        if (fileState.content.trim()) {
-            state.ymxInstance.parse(fileState.content);
-        }
-        
-        const components = state.ymxInstance.components();
-        const mainComponent = 'main';
-        
-        if (!components.includes(mainComponent)) {
-            throw new Error('No "main" component found. Please define a "main" component in your YAML to render.');
-        }
-        
-        const componentFn = state.ymxInstance.__get__.call(state.ymxInstance, mainComponent);
-        const result = componentFn(undefined, []);
-        
-        let content, filename, mimeType;
-        
-        switch (state.viewMode) {
-            case 'html':
-                content = result.asHtml();
-                filename = getFileName(state.activeFile).replace(/\.yml?$/, '.html');
-                mimeType = 'text/html';
-                break;
-            case 'json':
-                content = result.json;
-                filename = getFileName(state.activeFile).replace(/\.yml?$/, '.json');
-                mimeType = 'application/json';
-                break;
-            case 'ymx':
-                content = fileState.content;
-                filename = getFileName(state.activeFile);
-                mimeType = 'text/yaml';
-                break;
-            case 'pdf':
-                if (!state.ironpressLoaded) {
-                    showToast('PDF requires ironpress');
-                    return;
-                }
-                const pdfBytes = result.asPdf();
-                content = pdfBytes;
-                filename = getFileName(state.activeFile).replace(/\.yml?$/, '.pdf');
-                mimeType = 'application/pdf';
-                break;
-        }
-        
-        const blob = new Blob([content], { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(url);
-    } catch (error) {
-        console.error('Download error:', error);
-        showToast('Download failed: ' + error.message);
-    }
-});
 
 // ============================================================================
 // Keyboard Shortcuts
