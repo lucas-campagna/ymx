@@ -163,14 +163,22 @@ formatter:
         const item = fromParent.children[name];
         if (!item) return false;
         
+        // Prevent moving into itself (both files and folders)
+        if (toPath === fromPath) return false;
+        
+        // Prevent moving folder into itself or its descendant
         if (item.type === 'folder') {
             if (toPath.startsWith(fromPath + '/')) return false;
         }
         
         // Check for file name conflict
         if (item.type === 'file' && toParent.children[name]) {
-            // Conflict! Need user confirmation
-            return { conflict: true, name, fromPath, toPath, item };
+            return { conflict: true, name, fromPath, toPath, item, conflictType: 'file' };
+        }
+        
+        // Check for folder name conflict
+        if (item.type === 'folder' && toParent.children[name] && toParent.children[name].type === 'folder') {
+            return { conflict: true, name, fromPath, toPath, item, conflictType: 'folder' };
         }
         
         delete fromParent.children[name];
@@ -269,7 +277,7 @@ formatter:
                 if (!targetPath.startsWith(dragSourcePath + '/')) {
                     const result = fs.moveItem(dragSourcePath, targetPath);
                     if (result && result.conflict) {
-                        showOverwriteModal(result.name, result.fromPath, result.toPath, result.item);
+                        showOverwriteModal(result.name, result.fromPath, result.toPath, result.item, result.conflictType);
                     } else if (result === true) {
                         renderFileTree();
                     }
@@ -908,14 +916,18 @@ function handleRename(oldPath, newName, type) {
     updateFileTreeSelection();
 }
 
-function showOverwriteModal(fileName, fromPath, toPath, item) {
-    elements.modalTitle.textContent = 'File Exists';
-    elements.modalInput.value = fileName;
-    elements.modalInput.placeholder = 'File name';
+function showOverwriteModal(fileName, fromPath, toPath, item, conflictType) {
+    const isFolder = conflictType === 'folder';
+    elements.modalTitle.textContent = isFolder ? 'Folder Exists' : 'File Exists';
+    // Hide input, show message
+    elements.modalInput.style.display = 'none';
+    elements.modal.querySelector('label').style.display = 'none';
+    elements.modal.querySelector('.form-group').innerHTML = '<p>A ' + (isFolder ? 'folder' : 'file') + ' named <strong>' + fileName + '</strong> already exists in the destination.</p><p>Do you want to overwrite it? This will replace the existing ' + (isFolder ? 'folder (and its contents)' : 'file') + ' with the one you are moving.</p>';
     elements.modal.dataset.fromPath = fromPath;
     elements.modal.dataset.toPath = toPath;
-    elements.modalInput.dataset.type = 'overwrite-file';
+    elements.modalInput.dataset.type = isFolder ? 'overwrite-folder' : 'overwrite-file';
     elements.modalInput.dataset.item = JSON.stringify(item);
+    elements.modalInput.dataset.conflictType = conflictType;
     // Change modal buttons
     const submitBtn = elements.modalForm.querySelector('button[type="submit"]');
     submitBtn.textContent = 'Overwrite';
@@ -937,7 +949,7 @@ function executeMove(fromPath, toPath, item) {
         toParent = toParent.children[part];
     }
     
-    // Remove existing file
+    // Remove existing item
     delete toParent.children[name];
     
     // Move the item
@@ -948,10 +960,14 @@ function executeMove(fromPath, toPath, item) {
         const oldFullPath = fromPath === '/' ? '/' + name : fromPath + '/' + name;
         const newFullPath = toPath === '/' ? '/' + name : toPath + '/' + name;
         
+        // Copy content from source file
+        const sourceContent = fs.readFile(oldFullPath);
+        
+        // Update state with new path and copied content
         const fileState = state.files.get(oldFullPath);
         if (fileState) {
             state.files.delete(oldFullPath);
-            state.files.set(newFullPath, fileState);
+            state.files.set(newFullPath, { ...fileState, content: sourceContent });
             
             const tabIndex = state.openTabs.indexOf(oldFullPath);
             if (tabIndex !== -1) {
@@ -960,37 +976,66 @@ function executeMove(fromPath, toPath, item) {
             if (state.activeFile === oldFullPath) {
                 state.activeFile = newFullPath;
             }
+        } else {
+            // Create new file state with copied content
+            state.files.set(newFullPath, { content: sourceContent, dirty: false, language: fs.getLanguage(name) });
         }
     } else {
+        // Folder: recursively merge contents
         const oldPrefix = fromPath === '/' ? '/' + name : fromPath + '/' + name;
         const newPrefix = toPath === '/' ? '/' + name : toPath + '/' + name;
         
-        const filesToMove = [];
+        // Merge files
+        const filesToMerge = [];
         for (const [filePath, fileState] of state.files) {
             if (filePath.startsWith(oldPrefix + '/')) {
-                filesToMove.push({ filePath, fileState });
+                filesToMerge.push({ filePath, fileState });
             }
         }
-        for (const { filePath, fileState } of filesToMove) {
+        for (const { filePath, fileState } of filesToMerge) {
             const newPath = filePath.replace(oldPrefix, newPrefix);
             state.files.delete(filePath);
             state.files.set(newPath, fileState);
         }
         
-        const foldersToMove = [];
+        // Merge folders
+        const foldersToMerge = [];
         for (const folderPath of state.folders) {
             if (folderPath.startsWith(oldPrefix + '/')) {
-                foldersToMove.push(folderPath);
+                foldersToMerge.push(folderPath);
             }
         }
-        for (const folderPath of foldersToMove) {
+        for (const folderPath of foldersToMerge) {
             const newPath = folderPath.replace(oldPrefix, newPrefix);
             state.folders.delete(folderPath);
             state.folders.add(newPath);
         }
+        
+        // Recursively merge virtual FS children
+        mergeFolderContents(fromParent.children[name], toParent.children[name]);
     }
     
     return true;
+}
+
+function mergeFolderContents(source, dest) {
+    for (const [name, child] of Object.entries(source.children)) {
+        if (dest.children[name]) {
+            if (dest.children[name].type === 'folder' && child.type === 'folder') {
+                // Recursively merge subfolders
+                mergeFolderContents(child, dest.children[name]);
+            } else if (dest.children[name].type === 'file' && child.type === 'file') {
+                // Overwrite file content
+                dest.children[name].content = child.content;
+            } else {
+                // Type mismatch - overwrite
+                dest.children[name] = child;
+            }
+        } else {
+            // New item - just copy
+            dest.children[name] = child;
+        }
+    }
 }
 
 function deleteItem(path) {
@@ -1048,14 +1093,17 @@ function setupEventListeners() {
             return;
         }
         
-        if (type === 'overwrite-file') {
+        if (type === 'overwrite-file' || type === 'overwrite-folder') {
             const fromPath = elements.modal.dataset.fromPath;
             const toPath = elements.modal.dataset.toPath;
             const item = JSON.parse(elements.modalInput.dataset.item);
             executeMove(fromPath, toPath, item);
             renderFileTree();
             hideModal();
-            // Reset submit button text
+            // Reset modal UI
+            elements.modalInput.style.display = '';
+            elements.modal.querySelector('label').style.display = '';
+            elements.modal.querySelector('.form-group').innerHTML = '<label for="modal-input">Name</label><input type="text" id="modal-input" required>';
             const submitBtn = elements.modalForm.querySelector('button[type="submit"]');
             submitBtn.textContent = 'Create';
             return;
