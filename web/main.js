@@ -860,6 +860,18 @@ function showModal() {
 
 function hideModal() {
     elements.modal.classList.remove('open');
+    // Reset modal state for next use
+    elements.modalInput.style.display = '';
+    elements.modal.querySelector('label').style.display = '';
+    elements.modal.querySelector('.form-group').innerHTML = '<label for="modal-input">Name</label><input type="text" id="modal-input" required>';
+    elements.modalInput.dataset.type = '';
+    elements.modalInput.dataset.oldPath = '';
+    elements.modalInput.dataset.item = '';
+    elements.modalInput.dataset.conflictType = '';
+    elements.modal.dataset.fromPath = '';
+    elements.modal.dataset.toPath = '';
+    const submitBtn = elements.modalForm.querySelector('button[type="submit"]');
+    submitBtn.textContent = 'Create';
 }
 
 function renameItem(path) {
