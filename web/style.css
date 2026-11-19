@@ -517,6 +517,7 @@ body {
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
+    height: 100%;
 }
 
 /* Resize Handle (Mobile) */
@@ -769,6 +770,8 @@ body {
     padding: 20px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
     min-height: 300px;
+    height: 100%;
+    box-sizing: border-box;
 }
 
 .preview-html {
@@ -813,6 +816,8 @@ body {
     align-items: center;
     justify-content: center;
     min-height: 300px;
+    height: 100%;
+    box-sizing: border-box;
 }
 
 .preview-pdf embed,
@@ -823,6 +828,7 @@ body {
     border: none;
     border-radius: 6px;
     background: white;
+    flex: 1;
 }
 
 @media (max-width: 600px) {
@@ -1052,6 +1058,8 @@ body {
     .preview-page {
         padding: 12px;
         min-height: 200px;
+        height: 100%;
+        box-sizing: border-box;
     }
     
     .preview-html {
