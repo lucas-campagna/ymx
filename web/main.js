@@ -167,6 +167,12 @@ formatter:
             if (toPath.startsWith(fromPath + '/')) return false;
         }
         
+        // Check for file name conflict
+        if (item.type === 'file' && toParent.children[name]) {
+            // Conflict! Need user confirmation
+            return { conflict: true, name, fromPath, toPath, item };
+        }
+        
         delete fromParent.children[name];
         toParent.children[name] = item;
         
@@ -261,7 +267,10 @@ formatter:
                     targetPath = '/' + parts.join('/');
                 }
                 if (!targetPath.startsWith(dragSourcePath + '/')) {
-                    if (fs.moveItem(dragSourcePath, targetPath)) {
+                    const result = fs.moveItem(dragSourcePath, targetPath);
+                    if (result && result.conflict) {
+                        showOverwriteModal(result.name, result.fromPath, result.toPath, result.item);
+                    } else if (result === true) {
                         renderFileTree();
                     }
                 }
@@ -899,6 +908,91 @@ function handleRename(oldPath, newName, type) {
     updateFileTreeSelection();
 }
 
+function showOverwriteModal(fileName, fromPath, toPath, item) {
+    elements.modalTitle.textContent = 'File Exists';
+    elements.modalInput.value = fileName;
+    elements.modalInput.placeholder = 'File name';
+    elements.modal.dataset.fromPath = fromPath;
+    elements.modal.dataset.toPath = toPath;
+    elements.modalInput.dataset.type = 'overwrite-file';
+    elements.modalInput.dataset.item = JSON.stringify(item);
+    // Change modal buttons
+    const submitBtn = elements.modalForm.querySelector('button[type="submit"]');
+    submitBtn.textContent = 'Overwrite';
+    showModal();
+}
+
+function executeMove(fromPath, toPath, item) {
+    const fromParts = fromPath.split('/').filter(Boolean);
+    const toParts = toPath.split('/').filter(Boolean);
+    const name = fromParts.pop();
+    
+    let fromParent = fs['/'];
+    for (const part of fromParts) {
+        fromParent = fromParent.children[part];
+    }
+    
+    let toParent = fs['/'];
+    for (const part of toParts) {
+        toParent = toParent.children[part];
+    }
+    
+    // Remove existing file
+    delete toParent.children[name];
+    
+    // Move the item
+    delete fromParent.children[name];
+    toParent.children[name] = item;
+    
+    if (item.type === 'file') {
+        const oldFullPath = fromPath === '/' ? '/' + name : fromPath + '/' + name;
+        const newFullPath = toPath === '/' ? '/' + name : toPath + '/' + name;
+        
+        const fileState = state.files.get(oldFullPath);
+        if (fileState) {
+            state.files.delete(oldFullPath);
+            state.files.set(newFullPath, fileState);
+            
+            const tabIndex = state.openTabs.indexOf(oldFullPath);
+            if (tabIndex !== -1) {
+                state.openTabs[tabIndex] = newFullPath;
+            }
+            if (state.activeFile === oldFullPath) {
+                state.activeFile = newFullPath;
+            }
+        }
+    } else {
+        const oldPrefix = fromPath === '/' ? '/' + name : fromPath + '/' + name;
+        const newPrefix = toPath === '/' ? '/' + name : toPath + '/' + name;
+        
+        const filesToMove = [];
+        for (const [filePath, fileState] of state.files) {
+            if (filePath.startsWith(oldPrefix + '/')) {
+                filesToMove.push({ filePath, fileState });
+            }
+        }
+        for (const { filePath, fileState } of filesToMove) {
+            const newPath = filePath.replace(oldPrefix, newPrefix);
+            state.files.delete(filePath);
+            state.files.set(newPath, fileState);
+        }
+        
+        const foldersToMove = [];
+        for (const folderPath of state.folders) {
+            if (folderPath.startsWith(oldPrefix + '/')) {
+                foldersToMove.push(folderPath);
+            }
+        }
+        for (const folderPath of foldersToMove) {
+            const newPath = folderPath.replace(oldPrefix, newPrefix);
+            state.folders.delete(folderPath);
+            state.folders.add(newPath);
+        }
+    }
+    
+    return true;
+}
+
 function deleteItem(path) {
     if (!confirm(`Delete ${getFileName(path)}?`)) return;
     
@@ -951,6 +1045,19 @@ function setupEventListeners() {
             const oldPath = elements.modalInput.dataset.oldPath;
             handleRename(oldPath, name, type);
             hideModal();
+            return;
+        }
+        
+        if (type === 'overwrite-file') {
+            const fromPath = elements.modal.dataset.fromPath;
+            const toPath = elements.modal.dataset.toPath;
+            const item = JSON.parse(elements.modalInput.dataset.item);
+            executeMove(fromPath, toPath, item);
+            renderFileTree();
+            hideModal();
+            // Reset submit button text
+            const submitBtn = elements.modalForm.querySelector('button[type="submit"]');
+            submitBtn.textContent = 'Create';
             return;
         }
         
