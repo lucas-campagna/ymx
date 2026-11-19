@@ -228,6 +228,9 @@ const elements = {
     sidebarToggle: document.getElementById('sidebar-toggle'),
     sidebar: document.getElementById('sidebar'),
     sidebarOverlay: document.getElementById('sidebar-overlay'),
+    resizeHandle: document.getElementById('resize-handle'),
+    previewContainer: document.getElementById('preview-container'),
+    editorContainer: document.querySelector('.editor-container'),
 };
 
 // ============================================================================
@@ -796,6 +799,135 @@ document.addEventListener('click', (e) => {
         if (!sidebar.contains(e.target) && !toggle.contains(e.target)) {
             elements.sidebar.classList.remove('open');
             elements.sidebarOverlay.classList.remove('open');
+        }
+    }
+});
+
+// ============================================================================
+// Resize Handle (Mobile Preview Panel)
+// ============================================================================
+
+let resizeState = {
+    isDragging: false,
+    startY: 0,
+    editorStartHeight: 0,
+    previewStartHeight: 0,
+};
+
+function initResizeHandle() {
+    if (!elements.resizeHandle || !elements.editorContainer || !elements.previewContainer) return;
+    
+    const handle = elements.resizeHandle;
+    const editorContainer = elements.editorContainer;
+    const previewContainer = elements.previewContainer;
+    
+    // Mouse events
+    handle.addEventListener('mousedown', startDrag);
+    handle.addEventListener('touchstart', startDrag, { passive: false });
+    
+    // Keyboard support
+    handle.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            const delta = e.key === 'ArrowUp' ? -20 : 20;
+            adjustSplit(delta);
+        }
+    });
+    
+    function startDrag(e) {
+        if (e.type === 'mousedown' && e.button !== 0) return;
+        
+        e.preventDefault();
+        e.stopPropagation();
+        
+        resizeState.isDragging = true;
+        resizeState.startY = e.type === 'mousedown' ? e.clientY : e.touches[0].clientY;
+        resizeState.editorStartHeight = editorContainer.offsetHeight;
+        resizeState.previewStartHeight = previewContainer.offsetHeight;
+        
+        handle.classList.add('dragging');
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+        
+        document.addEventListener('mousemove', onDrag);
+        document.addEventListener('mouseup', endDrag);
+        document.addEventListener('touchmove', onDrag, { passive: false });
+        document.addEventListener('touchend', endDrag);
+    }
+    
+    function onDrag(e) {
+        if (!resizeState.isDragging) return;
+        
+        e.preventDefault();
+        
+        const currentY = e.type === 'mousemove' ? e.clientY : e.touches[0].clientY;
+        const deltaY = currentY - resizeState.startY;
+        
+        // Calculate new heights
+        const newEditorHeight = resizeState.editorStartHeight - deltaY;
+        const newPreviewHeight = resizeState.previewStartHeight + deltaY;
+        
+        // Minimum heights
+        const minEditor = 150;
+        const minPreview = 120;
+        const maxPreview = window.innerHeight * 0.75;
+        
+        if (newEditorHeight >= minEditor && newPreviewHeight >= minPreview && newPreviewHeight <= maxPreview) {
+            editorContainer.style.flex = 'none';
+            editorContainer.style.height = newEditorHeight + 'px';
+            previewContainer.style.flex = 'none';
+            previewContainer.style.height = newPreviewHeight + 'px';
+        }
+    }
+    
+    function endDrag() {
+        if (!resizeState.isDragging) return;
+        
+        resizeState.isDragging = false;
+        handle.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        
+        document.removeEventListener('mousemove', onDrag);
+        document.removeEventListener('mouseup', endDrag);
+        document.removeEventListener('touchmove', onDrag);
+        document.removeEventListener('touchend', endDrag);
+    }
+    
+    function adjustSplit(delta) {
+        const editorHeight = editorContainer.offsetHeight;
+        const previewHeight = previewContainer.offsetHeight;
+        
+        const newEditorHeight = editorHeight - delta;
+        const newPreviewHeight = previewHeight + delta;
+        
+        const minEditor = 150;
+        const minPreview = 120;
+        const maxPreview = window.innerHeight * 0.75;
+        
+        if (newEditorHeight >= minEditor && newPreviewHeight >= minPreview && newPreviewHeight <= maxPreview) {
+            editorContainer.style.flex = 'none';
+            editorContainer.style.height = newEditorHeight + 'px';
+            previewContainer.style.flex = 'none';
+            previewContainer.style.height = newPreviewHeight + 'px';
+        }
+    }
+}
+
+// Initialize on load
+document.addEventListener('DOMContentLoaded', initResizeHandle);
+
+// Re-init on window resize
+window.addEventListener('resize', () => {
+    if (window.innerWidth > 900) {
+        // Reset styles on desktop
+        if (elements.editorContainer) {
+            elements.editorContainer.style.flex = '';
+            elements.editorContainer.style.height = '';
+        }
+        if (elements.previewContainer) {
+            elements.previewContainer.style.flex = '';
+            elements.previewContainer.style.height = '';
         }
     }
 });
