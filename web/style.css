@@ -530,11 +530,11 @@ body {
     .preview-container {
         width: 100%;
         max-height: none;
-        flex: 0 0 35vh;
+        flex: 0 0 50vh;
         border-left: none;
         border-top: 1px solid var(--border);
-        min-height: 150px;
-        max-height: 70vh;
+        min-height: 200px;
+        max-height: 80vh;
     }
     
     .editor-container {
@@ -545,9 +545,9 @@ body {
 
 @media (max-width: 600px) {
     .preview-container {
-        flex: 0 0 40vh;
-        min-height: 120px;
-        max-height: 75vh;
+        flex: 0 0 55vh;
+        min-height: 180px;
+        max-height: 80vh;
     }
     
     .editor-container {
@@ -555,12 +555,12 @@ body {
     }
     
     .resize-handle {
-        height: 10px;
+        height: 12px;
     }
     
     .resize-handle::before {
-        width: 40px;
-        height: 5px;
+        width: 48px;
+        height: 6px;
     }
 }
     .editor-header {

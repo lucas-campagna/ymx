@@ -867,10 +867,12 @@ function initResizeHandle() {
         const newEditorHeight = resizeState.editorStartHeight - deltaY;
         const newPreviewHeight = resizeState.previewStartHeight + deltaY;
         
-        // Minimum heights
+        // Minimum heights (responsive)
         const minEditor = 150;
-        const minPreview = 120;
-        const maxPreview = window.innerHeight * 0.75;
+        const isMobile = window.innerWidth <= 600;
+        const isTablet = window.innerWidth <= 900;
+        const minPreview = isMobile ? 180 : (isTablet ? 200 : 120);
+        const maxPreview = window.innerHeight * 0.8;
         
         if (newEditorHeight >= minEditor && newPreviewHeight >= minPreview && newPreviewHeight <= maxPreview) {
             editorContainer.style.flex = 'none';
@@ -901,9 +903,11 @@ function initResizeHandle() {
         const newEditorHeight = editorHeight - delta;
         const newPreviewHeight = previewHeight + delta;
         
+        const isMobile = window.innerWidth <= 600;
+        const isTablet = window.innerWidth <= 900;
         const minEditor = 150;
-        const minPreview = 120;
-        const maxPreview = window.innerHeight * 0.75;
+        const minPreview = isMobile ? 180 : (window.innerWidth <= 900 ? 200 : 120);
+        const maxPreview = window.innerHeight * 0.8;
         
         if (newEditorHeight >= minEditor && newPreviewHeight >= minPreview && newPreviewHeight <= maxPreview) {
             editorContainer.style.flex = 'none';
