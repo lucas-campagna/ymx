@@ -56,7 +56,7 @@ body {
 }
 
 .sidebar-toggle {
-    display: block;
+    display: none;
 }
 
 .logo {
