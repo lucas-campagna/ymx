@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ymx-core = { path = "../ymx-core" }
+ymx-lint = { path = "../ymx-lint" }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 wee_alloc = "0.4"

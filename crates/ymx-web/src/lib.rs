@@ -21,6 +21,7 @@ use ymx_core::parse::{Key, Node};
 use ymx_core::project::{Format, Options, PlainMode, Project};
 use ymx_core::render::{DefaultHtmlRenderer, HtmlRenderer};
 use ymx_core::resolve::compile_component;
+use ymx_lint::{lint_project, LintConfig};
 
 // Minimal allocator for WASM
 #[global_allocator]
@@ -334,6 +335,60 @@ impl Ymx {
             }
         }
         arr
+    }
+
+    /// Lint the current project and return findings as a JavaScript object.
+    /// Returns an object with `findings` array and `diagnostics` array.
+    pub fn lint(&self) -> JsValue {
+        let project = self.project.read().unwrap();
+        let options = self.options.clone();
+        let config = LintConfig::default();
+        
+        let report = lint_project(&project, &options, &config);
+        
+        let result = js_sys::Object::new();
+        
+        // Convert findings
+        let findings_arr = js_sys::Array::new();
+        for finding in report.findings {
+            let finding_obj = js_sys::Object::new();
+            js_sys::Reflect::set(&finding_obj, &"code".into(), &finding.code.into()).unwrap();
+            js_sys::Reflect::set(&finding_obj, &"severity".into(), &format!("{:?}", finding.severity).into()).unwrap();
+            if let Some(file) = finding.file {
+                js_sys::Reflect::set(&finding_obj, &"file".into(), &file.to_string_lossy().to_string().into()).unwrap();
+            }
+            js_sys::Reflect::set(&finding_obj, &"line".into(), &finding.line.into()).unwrap();
+            js_sys::Reflect::set(&finding_obj, &"col".into(), &finding.col.into()).unwrap();
+            if let Some(component) = finding.component {
+                js_sys::Reflect::set(&finding_obj, &"component".into(), &component.into()).unwrap();
+            }
+            js_sys::Reflect::set(&finding_obj, &"message".into(), &finding.message.into()).unwrap();
+            if let Some(help) = finding.help {
+                js_sys::Reflect::set(&finding_obj, &"help".into(), &help.into()).unwrap();
+            }
+            findings_arr.push(&finding_obj);
+        }
+        js_sys::Reflect::set(&result, &"findings".into(), &findings_arr).unwrap();
+        
+        // Convert diagnostics
+        let diagnostics_arr = js_sys::Array::new();
+        for diag in report.diagnostics {
+            let diag_obj = js_sys::Object::new();
+            js_sys::Reflect::set(&diag_obj, &"code".into(), &diag.code.into()).unwrap();
+            if let Some(file) = diag.file {
+                js_sys::Reflect::set(&diag_obj, &"file".into(), &file.to_string_lossy().to_string().into()).unwrap();
+            }
+            js_sys::Reflect::set(&diag_obj, &"line".into(), &diag.line.into()).unwrap();
+            js_sys::Reflect::set(&diag_obj, &"col".into(), &diag.col.into()).unwrap();
+            if let Some(component) = diag.component {
+                js_sys::Reflect::set(&diag_obj, &"component".into(), &component.into()).unwrap();
+            }
+            js_sys::Reflect::set(&diag_obj, &"message".into(), &diag.message.into()).unwrap();
+            diagnostics_arr.push(&diag_obj);
+        }
+        js_sys::Reflect::set(&result, &"diagnostics".into(), &diagnostics_arr).unwrap();
+        
+        result.into()
     }
 
     fn key_to_name(key: &Key) -> String {

@@ -69,7 +69,12 @@
                         <input type="checkbox" id="auto-render" checked>
                         Auto-render
                     </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="auto-lint" checked>
+                        Auto-lint
+                    </label>
                     <button class="btn btn-secondary" id="render-btn" title="Render now">Render</button>
+                    <button class="btn btn-secondary" id="lint-btn" title="Lint now">Lint</button>
                 </div>
             </div>
             <div class="preview-content" id="preview-content">
@@ -100,6 +105,6 @@
         import * as ironpress from './vendor/ironpress.js';
         window.ironpress = ironpress;
     </script>
-    <script type="module" src="main.js?t=20241119b"></script>
+    <script type="module" src="main.js?t=20241119d"></script>
 </body>
 </html>

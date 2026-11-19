@@ -12,7 +12,9 @@ const state = {
     openTabs: [], // array of file paths
     viewMode: 'html', // html, json, ymx, pdf
     autoRender: true,
+    autoLint: true,
     renderDebounce: null,
+    lintDebounce: null,
     ymxInstance: null,
     ironpressLoaded: false,
 };
@@ -34,25 +36,26 @@ const fs = {
     - "Cherry"
   user:
     name: "World"
-    greet: "Hello, {{user.name}}!"
+    greet: "Hello, \${{user.name}}!"
 
 greeting:
   from: main
-  message: "Welcome {{user.name}} to YMX Playground"
+  message: "Welcome \${{user.name}} to YMX Playground"
 
 html_card:
   from: div
   class: "card"
   children:
     - from: h2
-      children: "{{main.message}}"
+      children: "\${{main.message}}"
     - from: ul
       children:
-        $map(main.items, $item:
-          from: li
-          children: "{{$item}}")
+        - from: li
+          children: "Item 1"
+        - from: li
+          children: "Item 2"
     - from: p
-      children: "{{greeting.message}}"`);
+      children: "\${{greeting.message}}"`);
         
         this.createFile('/components.yml', `# Reusable components
 
@@ -267,6 +270,8 @@ function initEditor() {
         insertSpaces: true,
         bracketPairColorization: { enabled: true },
         guides: { bracketPairs: true },
+        glyphMargin: true,
+        lineDecorationsWidth: 10,
     });
 
     editor.onDidChangeModelContent(() => {
@@ -277,6 +282,7 @@ function initEditor() {
                 fileState.dirty = true;
                 updateTabDirty(state.activeFile, true);
                 scheduleRender();
+                scheduleLint();
             }
         }
     });
@@ -828,6 +834,34 @@ function scheduleRender() {
     }, 300);
 }
 
+function scheduleLint() {
+    if (!state.autoLint) return;
+    
+    clearTimeout(state.lintDebounce);
+    state.lintDebounce = setTimeout(() => {
+        lint();
+    }, 500);
+}
+
+async function lint() {
+    if (!state.activeFile || !state.ymxInstance) return;
+    
+    try {
+        // Parse all open files into the YMX instance
+        for (const [path, fState] of state.files) {
+            if (fState.content.trim()) {
+                state.ymxInstance.parse(fState.content);
+            }
+        }
+        
+        const result = state.ymxInstance.lint();
+        updateLintMarkers(result);
+        updateLintPreview(result);
+    } catch (error) {
+        console.error('Lint error:', error);
+    }
+}
+
 async function render() {
     if (!state.activeFile || !state.ymxInstance) return;
     
@@ -872,6 +906,95 @@ async function render() {
         renderError(error.message);
         updateStatus('Error');
     }
+}
+
+function updateLintMarkers(result) {
+    if (!state.activeFile) return;
+    
+    const model = models.get(state.activeFile);
+    if (!model) return;
+    
+    // Clear existing markers
+    const markers = model.deltaDecorations([], []);
+    
+    // Group findings by file - normalize file paths to match active file
+    const findingsByFile = new Map();
+    for (const finding of result.findings) {
+        let filePath = finding.file || state.activeFile;
+        // Normalize <inline> to match active file
+        if (filePath === '<inline>' && state.activeFile) {
+            filePath = state.activeFile;
+        }
+        if (!findingsByFile.has(filePath)) {
+            findingsByFile.set(filePath, []);
+        }
+        findingsByFile.get(filePath).push(finding);
+    }
+    
+    // Add markers for active file
+    const activeFindings = findingsByFile.get(state.activeFile) || [];
+    const decorations = [];
+    
+    for (const finding of activeFindings) {
+        const lineNumber = Math.max(1, finding.line);
+        const column = Math.max(1, finding.col);
+        
+        const severityClass = finding.severity === 'Error' ? 'lint-error' : 
+                             finding.severity === 'Warning' ? 'lint-warning' : 'lint-info';
+        
+        decorations.push({
+            range: new monaco.Range(lineNumber, column, lineNumber, column + 1),
+            options: {
+                glyphMarginClassName: severityClass,
+                linesDecorationsClassName: severityClass + '-line',
+                stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+                hoverMessage: { value: `${finding.code}: ${finding.message}` + (finding.help ? `\n${finding.help}` : '') }
+            }
+        });
+    }
+    
+    model.deltaDecorations(markers, decorations);
+}
+
+function updateLintPreview(result) {
+    const preview = elements.previewContent;
+    const hasErrors = result.findings.some(f => f.severity === 'Error');
+    const hasWarnings = result.findings.some(f => f.severity === 'Warning');
+    
+    if (!hasErrors && !hasWarnings) {
+        // No lint issues, don't override preview
+        return;
+    }
+    
+    let html = '<div class="lint-preview">';
+    
+    if (hasErrors) {
+        html += '<h3 style="color: var(--error);">Errors</h3>';
+    }
+    if (hasWarnings) {
+        html += '<h3 style="color: var(--warning);">Warnings</h3>';
+    }
+    
+    html += '<ul style="list-style: none; padding: 0;">';
+    
+    for (const finding of result.findings) {
+        const severityColor = finding.severity === 'Error' ? 'var(--error)' : 
+                             finding.severity === 'Warning' ? 'var(--warning)' : 'var(--success)';
+        
+        html += `
+            <li style="margin-bottom: 8px; padding: 8px; background: var(--bg-tertiary); border-radius: 4px; border-left: 3px solid ${severityColor};">
+                <strong style="color: ${severityColor};">${finding.code}</strong> 
+                ${finding.component ? `<span style="color: var(--fg-muted);"> in ${finding.component}</span>` : ''}
+                <br>
+                <span>${finding.message}</span>
+                ${finding.help ? `<br><small style="color: var(--fg-muted);">${finding.help}</small>` : ''}
+                ${finding.file ? `<br><small style="color: var(--fg-muted);">${finding.file}:${finding.line}:${finding.col}</small>` : ''}
+            </li>
+        `;
+    }
+    
+    html += '</ul></div>';
+    preview.innerHTML = html;
 }
 
 async function renderPreview(result) {
@@ -983,6 +1106,16 @@ elements.autoRender.addEventListener('change', (e) => {
     state.autoRender = e.target.checked;
     if (state.autoRender) scheduleRender();
 });
+
+elements.autoLint = document.getElementById('auto-lint');
+elements.lintBtn = document.getElementById('lint-btn');
+
+elements.autoLint.addEventListener('change', (e) => {
+    state.autoLint = e.target.checked;
+    if (state.autoLint) scheduleLint();
+});
+
+elements.lintBtn.addEventListener('click', lint);
 
 elements.renderBtn.addEventListener('click', render);
 

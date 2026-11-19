@@ -649,3 +649,56 @@ body {
     gap: 12px;
     color: var(--fg-muted);
 }
+
+/* Lint styles */
+.lint-error {
+    border-bottom: 2px solid var(--error);
+}
+
+.lint-error-line {
+    background-color: rgba(244, 71, 71, 0.1);
+}
+
+.lint-warning {
+    border-bottom: 2px solid var(--warning);
+}
+
+.lint-warning-line {
+    background-color: rgba(204, 167, 0, 0.1);
+}
+
+.lint-info {
+    border-bottom: 2px solid var(--success);
+}
+
+.lint-info-line {
+    background-color: rgba(78, 201, 176, 0.1);
+}
+
+.lint-preview {
+    padding: 12px;
+}
+
+.lint-preview h3 {
+    margin-bottom: 8px;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.lint-preview ul {
+    margin: 0;
+}
+
+.lint-preview li {
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.lint-preview strong {
+    font-weight: 600;
+}
+
+.lint-preview small {
+    font-size: 0.7rem;
+}

@@ -34,25 +34,26 @@ const fs = {
     - "Cherry"
   user:
     name: "World"
-    greet: "Hello, {{user.name}}!"
+    greet: "Hello, \${{user.name}}!"
 
 greeting:
   from: main
-  message: "Welcome {{user.name}} to YMX Playground"
+  message: "Welcome \${{user.name}} to YMX Playground"
 
 html_card:
   from: div
   class: "card"
   children:
     - from: h2
-      children: "{{main.message}}"
+      children: "\${{main.message}}"
     - from: ul
       children:
-        $map(main.items, $item:
-          from: li
-          children: "{{$item}}")
+        - from: li
+          children: "Item 1"
+        - from: li
+          children: "Item 2"
     - from: p
-      children: "{{greeting.message}}"`);
+      children: "\${{greeting.message}}"`);
         
         this.createFile('/components.yml', `# Reusable components
 
