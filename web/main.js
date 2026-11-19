@@ -17,6 +17,9 @@ const state = {
     ironpressLoaded: false,
 };
 
+// Track created Monaco models to reuse them
+const models = new Map(); // path -> monaco.editor.ITextModel
+
 // Virtual file system (in-memory)
 const fs = {
     '/': { type: 'folder', children: {} },
@@ -435,12 +438,14 @@ function openFile(path) {
     state.activeFile = path;
     fileState.dirty = false;
 
-    // Create model if needed
-    if (!currentModel || currentModel.uri.path !== path) {
+    // Reuse existing model or create new one
+    let model = models.get(path);
+    if (!model) {
         const language = fileState.language;
-        currentModel = monaco.editor.createModel(fileState.content, language, monaco.Uri.file(path));
-        editor.setModel(currentModel);
+        model = monaco.editor.createModel(fileState.content, language, monaco.Uri.file(path));
+        models.set(path, model);
     }
+    editor.setModel(model);
 
     updateTabs();
     updateFileTreeSelection();
@@ -464,12 +469,13 @@ function switchTab(path) {
     const fileState = state.files.get(path);
     
     if (fileState) {
-        if (currentModel && currentModel.uri.path === path) {
-            editor.setModel(currentModel);
-        } else {
-            currentModel = monaco.editor.createModel(fileState.content, fileState.language, monaco.Uri.file(path));
-            editor.setModel(currentModel);
+        // Reuse existing model or create new one
+        let model = models.get(path);
+        if (!model) {
+            model = monaco.editor.createModel(fileState.content, fileState.language, monaco.Uri.file(path));
+            models.set(path, model);
         }
+        editor.setModel(model);
     }
 
     updateTabs();
@@ -483,6 +489,13 @@ function closeTab(path) {
     if (index === -1) return;
 
     state.openTabs.splice(index, 1);
+    
+    // Dispose model if no other tabs reference it
+    const model = models.get(path);
+    if (model && !state.openTabs.includes(path)) {
+        model.dispose();
+        models.delete(path);
+    }
     
     if (state.activeFile === path) {
         if (state.openTabs.length > 0) {
