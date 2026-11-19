@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, Once, RwLock};
 use js_sys::JSON;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
+use web_sys::console;
 
 use ymx_core::diag::{Diagnostic, E001, E002, E004, E005, E007, E009, E010, E015, FileId};
 use ymx_core::exec::{CommandExecutor, ExecError, ExecOutput};
@@ -230,15 +231,19 @@ impl Ymx {
             files.insert(normalized_key.to_string(), value);
         }
 
+        console::log_1(&format!("parse_map: files keys = {:?}", files.keys().collect::<Vec<_>>()).into());
+
         // Find entry file (main.yml or main.yaml)
         let entry_path = if files.contains_key("main.yml") {
             "main.yml"
         } else if files.contains_key("main.yaml") {
             "main.yaml"
         } else {
+            console::log_1(&"parse_map: no main.yml, falling back to all files".into());
             // No main file - treat all files as global (legacy behavior)
             return self.parse_map_all_files(files);
         };
+        console::log_1(&format!("parse_map: entry_path = {}", entry_path).into());
 
         // Resolve _use graph from entry file
         let file_paths = match Ymx::resolve_use_graph(entry_path, &files) {
@@ -343,6 +348,8 @@ impl Ymx {
         entry_path: &str,
         files: &std::collections::HashMap<String, String>,
     ) -> Result<Vec<String>, Vec<Diagnostic>> {
+        console::log_1(&format!("resolve_use_graph: entry_path = {}, files = {:?}", entry_path, files.keys().collect::<Vec<_>>()).into());
+        
         let mut diags = Vec::new();
         let mut visited = std::collections::HashSet::new();
         let mut result = Vec::new();
@@ -375,6 +382,8 @@ impl Ymx {
             diags: &mut Vec<Diagnostic>,
             resolve_stem: &dyn Fn(&str) -> Option<String>,
         ) {
+            console::log_1(&format!("visit: path = {}", path).into());
+            
             if visited.contains(path) {
                 return;
             }
@@ -383,7 +392,10 @@ impl Ymx {
             // Parse to extract _use
             let contents = match files.get(path) {
                 Some(c) => c,
-                None => return,
+                None => {
+                    console::log_1(&format!("visit: file not found in map: {}", path).into());
+                    return;
+                }
             };
 
             let node = match parse_document(contents) {
@@ -430,6 +442,8 @@ impl Ymx {
         }
 
         visit(entry_path, files, &mut visited, &mut result, &mut diags, &resolve_stem);
+
+        console::log_1(&format!("resolve_use_graph: result = {:?}", result).into());
 
         if !diags.is_empty() {
             return Err(diags);
