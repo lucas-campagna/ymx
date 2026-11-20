@@ -11,8 +11,6 @@ const state = {
     activeFile: null,
     openTabs: [], // array of file paths
     viewMode: 'html', // html, json, page, pdf
-    autoRender: true,
-    autoLint: true,
     renderDebounce: null,
     lintDebounce: null,
     ymxInstance: null,
@@ -368,8 +366,6 @@ function initElements() {
         editor: document.getElementById('editor'),
         previewContent: document.getElementById('preview-content'),
         viewButtons: document.querySelectorAll('.view-btn'),
-        autoRender: document.getElementById('auto-render'),
-        renderBtn: document.getElementById('render-btn'),
         downloadBtn: document.getElementById('download-btn'),
         status: document.getElementById('status'),
         fileInfo: document.getElementById('file-info'),
@@ -1291,30 +1287,7 @@ function setupEventListeners() {
             });
             btn.classList.add('active');
             btn.setAttribute('aria-selected', 'true');
-            state.viewMode = btn.dataset.view;
-            scheduleRender();
-        });
-    });
-
-    // Auto-render checkbox
-    elements.autoRender.addEventListener('change', (e) => {
-        state.autoRender = e.target.checked;
-        if (state.autoRender) scheduleRender();
-    });
-
-    // Auto-lint checkbox and lint/render buttons
-    elements.autoLint = document.getElementById('auto-lint');
-    elements.lintBtn = document.getElementById('lint-btn');
-
-    elements.autoLint.addEventListener('change', (e) => {
-        state.autoLint = e.target.checked;
-        if (state.autoLint) scheduleLint();
-    });
-
-    elements.lintBtn.addEventListener('click', lint);
-    elements.renderBtn.addEventListener('click', render);
-
-    // Download button
+            // Download button
     elements.downloadBtn.addEventListener('click', async () => {
         if (!state.activeFile || !state.ymxInstance) return;
         
@@ -1713,8 +1686,6 @@ function showToast(message) {
 // ============================================================================
 
 function scheduleRender() {
-    if (!state.autoRender) return;
-    
     clearTimeout(state.renderDebounce);
     state.renderDebounce = setTimeout(() => {
         console.log('scheduleRender: calling render, state.files keys =', Array.from(state.files.keys()));
@@ -1723,8 +1694,6 @@ function scheduleRender() {
 }
 
 function scheduleLint() {
-    if (!state.autoLint) return;
-    
     clearTimeout(state.lintDebounce);
     state.lintDebounce = setTimeout(() => {
         lint();
