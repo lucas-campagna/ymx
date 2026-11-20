@@ -400,6 +400,9 @@ function initElements() {
         lintMessage: document.getElementById('lint-message'),
         lintHelp: document.getElementById('lint-help'),
         lintSource: document.getElementById('lint-source'),
+        lintContainer: document.getElementById('lint-container'),
+        lintContent: document.getElementById('lint-content'),
+        lintClosePanel: document.getElementById('lint-close-panel'),
     };
 }
 
@@ -1263,6 +1266,11 @@ function setupEventListeners() {
         if (e.target === elements.lintModal) hideLintModal();
     });
 
+    // Lint panel close button
+    elements.lintClosePanel.addEventListener('click', () => {
+        elements.lintContainer.classList.remove('open');
+    });
+
     // Keyboard navigation for lint modal
     document.addEventListener('keydown', (e) => {
         if (!elements.lintModal.classList.contains('open')) return;
@@ -1895,12 +1903,15 @@ function updateLintMarkers(result) {
 }
 
 function updateLintPreview(result) {
-    const preview = elements.previewContent;
     const hasErrors = result.findings.some(f => f.severity === 'Error');
     const hasWarnings = result.findings.some(f => f.severity === 'Warning');
     
+    // Always show/hide the lint container based on whether there are issues
     if (!hasErrors && !hasWarnings) {
-        // No lint issues, don't override preview
+        // No lint issues - hide the container
+        if (elements.lintContainer) {
+            elements.lintContainer.classList.remove('open');
+        }
         return;
     }
     
@@ -1934,7 +1945,11 @@ function updateLintPreview(result) {
     }
     
     html += '</ul></div>';
-    preview.innerHTML = html;
+    
+    if (elements.lintContent) {
+        elements.lintContent.innerHTML = html;
+        elements.lintContainer.classList.add('open');
+    }
     
     // Expose function globally for onclick handlers
     window.openLintModalAt = (index) => {

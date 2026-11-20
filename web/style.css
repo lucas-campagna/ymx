@@ -1509,3 +1509,63 @@ pre.preview-page {
         font-size: 0.6rem;
     }
 }
+
+/* Lint Container (below editor) */
+.lint-container {
+    display: none;
+    border-top: 1px solid var(--border);
+    background: var(--bg-secondary);
+    max-height: 30vh;
+    flex-shrink: 0;
+}
+
+.lint-container.open {
+    display: flex;
+    flex-direction: column;
+}
+
+.lint-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.lint-header h3 {
+    margin: 0;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--fg-muted);
+}
+
+.btn-sm {
+    padding: 4px 8px;
+    font-size: 0.7rem;
+}
+
+.lint-content {
+    flex: 1;
+    overflow: auto;
+    padding: 8px 12px;
+}
+
+@media (max-width: 600px) {
+    .lint-container {
+        max-height: 25vh;
+    }
+    
+    .lint-header {
+        padding: 6px 10px;
+    }
+    
+    .lint-header h3 {
+        font-size: 0.7rem;
+    }
+    
+    .lint-content {
+        padding: 6px 10px;
+    }
+}
