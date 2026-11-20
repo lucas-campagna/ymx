@@ -254,6 +254,37 @@ body {
     
     .main-container {
         padding-left: var(--sidebar-width);
+        flex-direction: column;
+    }
+    
+    .editor-container {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+    
+    .editor-wrapper {
+        flex: 1;
+        min-height: 0;
+    }
+    
+    .preview-container {
+        width: 100%;
+        max-width: none;
+        flex: 0 0 45vh;
+        border-left: none;
+        border-top: 1px solid var(--border);
+        min-height: 300px;
+        max-height: 60vh;
+    }
+    
+    .resize-handle {
+        display: block;
+    }
+    
+    .resize-handle-horizontal {
+        display: none;
     }
 }
 
@@ -778,26 +809,7 @@ body {
     outline-offset: -2px;
 }
 
-@media (min-width: 901px) {
-    .resize-handle-horizontal {
-        display: block;
-    }
-    
-    .main-container {
-        flex-direction: row;
-    }
-    
-    .editor-container {
-        flex: 1 1 auto;
-        min-width: 300px;
-    }
-    
-    .preview-container {
-        flex: 0 0 420px;
-        max-width: 100%;
-        min-width: 200px;
-    }
-}
+
 
 @media (max-width: 900px) {
     .preview-container {
