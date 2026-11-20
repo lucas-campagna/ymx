@@ -110,6 +110,32 @@
         </div>
     </div>
 
+    <div class="modal" id="lint-modal" role="dialog" aria-modal="true" aria-labelledby="lint-modal-title">
+        <div class="modal-content modal-large">
+            <div class="lint-modal-header">
+                <h3 id="lint-modal-title">Lint Details</h3>
+                <div class="lint-nav">
+                    <span id="lint-counter">1 / 5</span>
+                    <button class="icon-btn" id="lint-prev" title="Previous" aria-label="Previous">‹</button>
+                    <button class="icon-btn" id="lint-next" title="Next" aria-label="Next">›</button>
+                    <button class="icon-btn" id="lint-close" title="Close" aria-label="Close">✕</button>
+                </div>
+            </div>
+            <div class="lint-modal-body">
+                <div class="lint-detail">
+                    <div class="lint-meta">
+                        <span class="lint-severity" id="lint-severity"></span>
+                        <span class="lint-code" id="lint-code"></span>
+                        <span class="lint-location" id="lint-location"></span>
+                    </div>
+                    <div class="lint-message" id="lint-message"></div>
+                    <div class="lint-help" id="lint-help"></div>
+                    <div class="lint-source" id="lint-source"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script type="module">
         import * as ironpress from './vendor/ironpress.js';
         window.ironpress = ironpress;

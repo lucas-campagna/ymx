@@ -1038,6 +1038,33 @@ pre.preview-page {
         padding: 12px;
         font-size: 0.9rem;
     }
+    
+    .modal-large {
+        width: 100%;
+        max-width: 100%;
+        border-radius: 12px 12px 0 0;
+    }
+    
+    .lint-modal-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+    
+    .lint-nav {
+        width: 100%;
+        justify-content: space-between;
+    }
+    
+    .lint-counter {
+        margin-right: 0;
+    }
+    
+    .lint-meta {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+    }
 }
 
 .form-group {
@@ -1070,6 +1097,131 @@ pre.preview-page {
     display: flex;
     justify-content: flex-end;
     gap: 8px;
+}
+
+/* Lint Modal */
+.modal-large {
+    max-width: 700px;
+    width: 80vw;
+}
+
+.lint-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.lint-modal-header h3 {
+    margin: 0;
+    font-size: 1rem;
+}
+
+.lint-nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.lint-counter {
+    font-size: 0.85rem;
+    color: var(--fg-muted);
+    margin-right: 8px;
+}
+
+.lint-nav .icon-btn {
+    width: 28px;
+    height: 28px;
+    font-size: 1rem;
+}
+
+.lint-nav .icon-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.lint-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.lint-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.lint-severity {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.lint-severity.error {
+    background: rgba(244, 71, 71, 0.2);
+    color: var(--error);
+}
+
+.lint-severity.warning {
+    background: rgba(204, 167, 0, 0.2);
+    color: var(--warning);
+}
+
+.lint-severity.info {
+    background: rgba(78, 201, 176, 0.2);
+    color: var(--success);
+}
+
+.lint-code {
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.85rem;
+    background: var(--bg-tertiary);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.lint-location {
+    font-size: 0.8rem;
+    color: var(--fg-muted);
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+.lint-message {
+    font-size: 0.9rem;
+    line-height: 1.5;
+    padding: 12px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+    border-left: 3px solid var(--accent);
+}
+
+.lint-help {
+    font-size: 0.8rem;
+    color: var(--fg-muted);
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+    border-left: 3px solid var(--fg-muted);
+    font-style: italic;
+}
+
+.lint-source {
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    padding: 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow-x: auto;
+    white-space: pre;
+    tab-size: 2;
 }
 
 /* Scrollbars */

@@ -389,6 +389,17 @@ function initElements() {
         resizeHandleHorizontal: document.getElementById('resize-handle-horizontal'),
         previewContainer: document.getElementById('preview-container'),
         editorContainer: document.querySelector('.editor-container'),
+        lintModal: document.getElementById('lint-modal'),
+        lintCounter: document.getElementById('lint-counter'),
+        lintPrev: document.getElementById('lint-prev'),
+        lintNext: document.getElementById('lint-next'),
+        lintClose: document.getElementById('lint-close'),
+        lintSeverity: document.getElementById('lint-severity'),
+        lintCode: document.getElementById('lint-code'),
+        lintLocation: document.getElementById('lint-location'),
+        lintMessage: document.getElementById('lint-message'),
+        lintHelp: document.getElementById('lint-help'),
+        lintSource: document.getElementById('lint-source'),
     };
 }
 
@@ -876,6 +887,76 @@ function hideModal() {
     submitBtn.textContent = 'Create';
 }
 
+function showLintModal() {
+    elements.lintModal.classList.add('open');
+    updateLintModal();
+}
+
+function hideLintModal() {
+    elements.lintModal.classList.remove('open');
+    state.lintCurrentIndex = 0;
+}
+
+function updateLintModal() {
+    const findings = state.lintFindings || [];
+    if (findings.length === 0) {
+        hideLintModal();
+        return;
+    }
+    
+    const index = Math.max(0, Math.min(state.lintCurrentIndex, findings.length - 1));
+    const finding = findings[index];
+    
+    // Update counter
+    elements.lintCounter.textContent = `${index + 1} / ${findings.length}`;
+    
+    // Update severity badge
+    const severityEl = elements.lintSeverity;
+    severityEl.textContent = finding.severity;
+    severityEl.className = 'lint-severity ' + finding.severity.toLowerCase();
+    
+    // Update code
+    elements.lintCode.textContent = finding.code || '';
+    
+    // Update location
+    const file = finding.file || state.activeFile;
+    elements.lintLocation.textContent = `${file}:${finding.line}:${finding.col}`;
+    
+    // Update message
+    elements.lintMessage.textContent = finding.message || '';
+    
+    // Update help
+    const helpEl = elements.lintHelp;
+    if (finding.help) {
+        helpEl.textContent = finding.help;
+        helpEl.style.display = 'block';
+    } else {
+        helpEl.style.display = 'none';
+    }
+    
+    // Update source code line
+    const fileState = state.files.get(state.activeFile);
+    if (fileState) {
+        const lines = fileState.content.split('\n');
+        const lineIndex = Math.max(0, finding.line - 1);
+        const sourceLine = lines[lineIndex] || '';
+        elements.lintSource.textContent = sourceLine;
+        elements.lintSource.dataset.line = finding.line;
+    }
+    
+    // Update nav buttons
+    elements.lintPrev.disabled = index === 0;
+    elements.lintNext.disabled = index === findings.length - 1;
+}
+
+function navigateLint(delta) {
+    const findings = state.lintFindings || [];
+    if (findings.length === 0) return;
+    
+    state.lintCurrentIndex = Math.max(0, Math.min(state.lintCurrentIndex + delta, findings.length - 1));
+    updateLintModal();
+}
+
 function renameItem(path) {
     const name = path.split('/').pop();
     const isFile = state.files.has(path);
@@ -1173,6 +1254,22 @@ function setupEventListeners() {
     // New file/folder buttons
     elements.newFileBtn.addEventListener('click', () => showNewFileModal('/'));
     elements.newFolderBtn.addEventListener('click', () => showNewFolderModal('/'));
+
+    // Lint modal event listeners
+    elements.lintClose.addEventListener('click', hideLintModal);
+    elements.lintPrev.addEventListener('click', () => navigateLint(-1));
+    elements.lintNext.addEventListener('click', () => navigateLint(1));
+    elements.lintModal.addEventListener('click', (e) => {
+        if (e.target === elements.lintModal) hideLintModal();
+    });
+
+    // Keyboard navigation for lint modal
+    document.addEventListener('keydown', (e) => {
+        if (!elements.lintModal.classList.contains('open')) return;
+        if (e.key === 'ArrowLeft') navigateLint(-1);
+        if (e.key === 'ArrowRight') navigateLint(1);
+        if (e.key === 'Escape') hideLintModal();
+    });
 
     // Resize handle for mobile preview
     initResizeHandle();
@@ -1653,6 +1750,13 @@ async function lint() {
         const result = state.ymxInstance.lint();
         updateLintMarkers(result);
         updateLintPreview(result);
+        
+        // If there are lint findings, show the first one in modal
+        if (result.findings && result.findings.length > 0) {
+            state.lintFindings = result.findings;
+            state.lintCurrentIndex = 0;
+            showLintModal();
+        }
     } catch (error) {
         console.error('Lint error:', error);
     }
@@ -1721,14 +1825,10 @@ function updateLintMarkers(result) {
     const model = models.get(state.activeFile);
     if (!model) return;
     
-    // Clear existing markers
-    const markers = model.deltaDecorations([], []);
-    
-    // Group findings by file - normalize file paths to match active file
+    // Store all findings for modal navigation
     const findingsByFile = new Map();
     for (const finding of result.findings) {
         let filePath = finding.file || state.activeFile;
-        // Normalize <inline> to match active file
         if (filePath === '<inline>' && state.activeFile) {
             filePath = state.activeFile;
         }
@@ -1738,8 +1838,15 @@ function updateLintMarkers(result) {
         findingsByFile.get(filePath).push(finding);
     }
     
+    // Store findings for modal
+    state.lintFindings = findingsByFile.get(state.activeFile) || [];
+    state.lintCurrentIndex = 0;
+    
+    // Clear existing markers
+    const markers = model.deltaDecorations([], []);
+    
     // Add markers for active file
-    const activeFindings = findingsByFile.get(state.activeFile) || [];
+    const activeFindings = state.lintFindings;
     const decorations = [];
     
     for (const finding of activeFindings) {
@@ -1761,6 +1868,30 @@ function updateLintMarkers(result) {
     }
     
     model.deltaDecorations(markers, decorations);
+    
+    // Add click handler on editor to open lint modal when clicking on a line with lint markers
+    if (editor && activeFindings.length > 0) {
+        // Remove existing listener if any
+        if (editor._lintClickListener) {
+            editor.removeListener(editor._lintClickListener);
+        }
+        editor._lintClickListener = editor.onMouseDown((e) => {
+            if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN || 
+                e.target.type === monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS ||
+                e.target.type === monaco.editor.MouseTargetType.CONTENT_TEXT) {
+                const position = e.target.position;
+                if (position) {
+                    const lineNumber = position.lineNumber;
+                    // Find finding on this line
+                    const finding = activeFindings.find(f => f.line === lineNumber);
+                    if (finding) {
+                        state.lintCurrentIndex = activeFindings.indexOf(finding);
+                        showLintModal();
+                    }
+                }
+            }
+        });
+    }
 }
 
 function updateLintPreview(result) {
@@ -1784,12 +1915,14 @@ function updateLintPreview(result) {
     
     html += '<ul style="list-style: none; padding: 0;">';
     
-    for (const finding of result.findings) {
+    for (let i = 0; i < result.findings.length; i++) {
+        const finding = result.findings[i];
         const severityColor = finding.severity === 'Error' ? 'var(--error)' : 
                              finding.severity === 'Warning' ? 'var(--warning)' : 'var(--success)';
         
         html += `
-            <li style="margin-bottom: 8px; padding: 8px; background: var(--bg-tertiary); border-radius: 4px; border-left: 3px solid ${severityColor};">
+            <li style="margin-bottom: 8px; padding: 8px; background: var(--bg-tertiary); border-radius: 4px; border-left: 3px solid ${severityColor}; cursor: pointer;"
+                onclick="window.openLintModalAt(${i})">
                 <strong style="color: ${severityColor};">${finding.code}</strong> 
                 ${finding.component ? `<span style="color: var(--fg-muted);"> in ${finding.component}</span>` : ''}
                 <br>
@@ -1802,6 +1935,13 @@ function updateLintPreview(result) {
     
     html += '</ul></div>';
     preview.innerHTML = html;
+    
+    // Expose function globally for onclick handlers
+    window.openLintModalAt = (index) => {
+        state.lintFindings = result.findings;
+        state.lintCurrentIndex = index;
+        showLintModal();
+    };
 }
 
 async function renderPreview(result) {
