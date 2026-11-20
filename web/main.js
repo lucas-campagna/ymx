@@ -385,6 +385,7 @@ function initElements() {
         previewOverlay: document.getElementById('preview-overlay'),
         resizeHandle: document.getElementById('resize-handle-vertical'),
         resizeHandleHorizontal: document.getElementById('resize-handle-horizontal'),
+        resizeHandleLint: document.getElementById('resize-handle-lint'),
         previewContainer: document.getElementById('preview-container'),
         editorContainer: document.querySelector('.editor-container'),
         lintModal: document.getElementById('lint-modal'),
@@ -1267,6 +1268,9 @@ function setupEventListeners() {
     // Lint panel close button
     elements.lintClosePanel.addEventListener('click', () => {
         elements.lintContainer.classList.remove('open');
+        if (elements.resizeHandleLint) {
+            elements.resizeHandleLint.classList.remove('open');
+        }
     });
 
     // Keyboard navigation for lint modal
@@ -1374,12 +1378,14 @@ function setupEventListeners() {
 function initResizeHandle() {
     const editorContainer = elements.editorContainer;
     const previewContainer = elements.previewContainer;
+    const lintContainer = elements.lintContainer;
     
     if (!editorContainer || !previewContainer) return;
     
-    // Initialize both handles
+    // Initialize all handles
     initVerticalResizeHandle();
     initHorizontalResizeHandle();
+    initLintResizeHandle();
 }
 
 function initVerticalResizeHandle() {
@@ -1426,6 +1432,25 @@ function initHorizontalResizeHandle() {
     });
 }
 
+function initLintResizeHandle() {
+    const handle = elements.resizeHandleLint;
+    if (!handle) return;
+    
+    // Mouse events
+    handle.addEventListener('mousedown', (e) => startLintDrag(e, handle));
+    handle.addEventListener('touchstart', (e) => startLintDrag(e, handle), { passive: false });
+    
+    // Keyboard support
+    handle.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            e.stopPropagation();
+            const delta = e.key === 'ArrowUp' ? -20 : 20;
+            adjustLintSplit(delta);
+        }
+    });
+}
+
 // State for vertical drag
 const verticalResizeState = {
     isDragging: false,
@@ -1440,6 +1465,14 @@ const horizontalResizeState = {
     startX: 0,
     editorStartWidth: 0,
     previewStartWidth: 0,
+};
+
+// State for lint drag
+const lintResizeState = {
+    isDragging: false,
+    startY: 0,
+    editorStartHeight: 0,
+    lintStartHeight: 0,
 };
 
 function startVerticalDrag(e, handle) {
@@ -1525,6 +1558,87 @@ function adjustVerticalSplit(delta) {
         elements.editorContainer.style.height = newEditorHeight + 'px';
         elements.previewContainer.style.flex = 'none';
         elements.previewContainer.style.height = newPreviewHeight + 'px';
+    }
+}
+
+function startLintDrag(e, handle) {
+    if (e.type === 'mousedown' && e.button !== 0) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    lintResizeState.isDragging = true;
+    lintResizeState.startY = e.type === 'mousedown' ? e.clientY : e.touches[0].clientY;
+    lintResizeState.editorStartHeight = elements.editorContainer.offsetHeight;
+    lintResizeState.lintStartHeight = elements.lintContainer.offsetHeight;
+    
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+    
+    document.addEventListener('mousemove', onLintDrag);
+    document.addEventListener('mouseup', endLintDrag);
+    document.addEventListener('touchmove', onLintDrag, { passive: false });
+    document.addEventListener('touchend', endLintDrag);
+}
+
+function onLintDrag(e) {
+    if (!lintResizeState.isDragging) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const currentY = e.type === 'mousemove' ? e.clientY : e.touches[0].clientY;
+    const deltaY = currentY - lintResizeState.startY;
+    
+    // Handle is on bottom edge of editor: dragging DOWN makes editor TALLER
+    const newEditorHeight = lintResizeState.editorStartHeight + deltaY;
+    const newLintHeight = lintResizeState.lintStartHeight - deltaY;
+    
+    const minEditor = 150;
+    const minLint = 100;
+    const maxLint = window.innerHeight * 0.4;
+    
+    if (newEditorHeight >= minEditor && newLintHeight >= minLint && newLintHeight <= maxLint) {
+        elements.editorContainer.style.flex = 'none';
+        elements.editorContainer.style.height = newEditorHeight + 'px';
+        elements.lintContainer.style.flex = 'none';
+        elements.lintContainer.style.height = newLintHeight + 'px';
+    }
+}
+
+function endLintDrag() {
+    if (!lintResizeState.isDragging) return;
+    
+    lintResizeState.isDragging = false;
+    const handle = elements.resizeHandleLint;
+    if (handle) handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    
+    document.removeEventListener('mousemove', onLintDrag);
+    document.removeEventListener('mouseup', endLintDrag);
+    document.removeEventListener('touchmove', onLintDrag);
+    document.removeEventListener('touchend', endLintDrag);
+}
+
+function adjustLintSplit(delta) {
+    const editorHeight = elements.editorContainer.offsetHeight;
+    const lintHeight = elements.lintContainer.offsetHeight;
+    
+    // ArrowUp (negative delta) = editor shorter, ArrowDown (positive delta) = editor taller
+    const newEditorHeight = editorHeight + delta;
+    const newLintHeight = lintHeight - delta;
+    
+    const minEditor = 150;
+    const minLint = 100;
+    const maxLint = window.innerHeight * 0.4;
+    
+    if (newEditorHeight >= minEditor && newLintHeight >= minLint && newLintHeight <= maxLint) {
+        elements.editorContainer.style.flex = 'none';
+        elements.editorContainer.style.height = newEditorHeight + 'px';
+        elements.lintContainer.style.flex = 'none';
+        elements.lintContainer.style.height = newLintHeight + 'px';
     }
 }
 
@@ -1881,6 +1995,9 @@ function updateLintPreview(result) {
         if (elements.lintContainer) {
             elements.lintContainer.classList.remove('open');
         }
+        if (elements.resizeHandleLint) {
+            elements.resizeHandleLint.classList.remove('open');
+        }
         return;
     }
     
@@ -1918,6 +2035,9 @@ function updateLintPreview(result) {
     if (elements.lintContent) {
         elements.lintContent.innerHTML = html;
         elements.lintContainer.classList.add('open');
+        if (elements.resizeHandleLint) {
+            elements.resizeHandleLint.classList.add('open');
+        }
     }
     
     // Expose function globally for onclick handlers
