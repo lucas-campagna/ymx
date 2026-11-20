@@ -138,7 +138,7 @@ body {
     }
     
     .status {
-        display: block;
+        display: none;
     }
     
     .download-btn {
@@ -645,6 +645,10 @@ body {
     .resize-handle::before {
         width: 48px;
         height: 6px;
+    }
+    
+    .status {
+        display: none;
     }
 }
     .editor-header {
