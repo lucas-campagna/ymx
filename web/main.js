@@ -383,6 +383,8 @@ function initElements() {
         sidebarToggle: document.getElementById('sidebar-toggle'),
         sidebar: document.getElementById('sidebar'),
         sidebarOverlay: document.getElementById('sidebar-overlay'),
+        previewToggle: document.getElementById('preview-toggle'),
+        previewOverlay: document.getElementById('preview-overlay'),
         resizeHandle: document.getElementById('resize-handle-vertical'),
         resizeHandleHorizontal: document.getElementById('resize-handle-horizontal'),
         previewContainer: document.getElementById('preview-container'),
@@ -1075,14 +1077,37 @@ function setupEventListeners() {
         elements.sidebarOverlay.classList.remove('open');
     });
 
-    // Close sidebar on file click (mobile)
+    // Preview toggle for mobile
+    elements.previewToggle.addEventListener('click', () => {
+        elements.previewContainer.classList.toggle('open');
+        elements.previewOverlay.classList.toggle('open');
+    });
+
+    elements.previewOverlay.addEventListener('click', () => {
+        elements.previewContainer.classList.remove('open');
+        elements.previewOverlay.classList.remove('open');
+    });
+
+    // Close preview on file click (mobile) - close both sidebar and preview
     document.addEventListener('click', (e) => {
-        if (window.innerWidth <= 900 && elements.sidebar.classList.contains('open')) {
-            const sidebar = elements.sidebar;
-            const toggle = elements.sidebarToggle;
-            if (!sidebar.contains(e.target) && !toggle.contains(e.target)) {
-                elements.sidebar.classList.remove('open');
-                elements.sidebarOverlay.classList.remove('open');
+        if (window.innerWidth <= 900) {
+            // Close sidebar
+            if (elements.sidebar.classList.contains('open')) {
+                const sidebar = elements.sidebar;
+                const toggle = elements.sidebarToggle;
+                if (!sidebar.contains(e.target) && !toggle.contains(e.target)) {
+                    elements.sidebar.classList.remove('open');
+                    elements.sidebarOverlay.classList.remove('open');
+                }
+            }
+            // Close preview
+            if (elements.previewContainer.classList.contains('open')) {
+                const preview = elements.previewContainer;
+                const toggle = elements.previewToggle;
+                if (!preview.contains(e.target) && !toggle.contains(e.target)) {
+                    elements.previewContainer.classList.remove('open');
+                    elements.previewOverlay.classList.remove('open');
+                }
             }
         }
     });
