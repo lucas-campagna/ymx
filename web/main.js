@@ -1791,7 +1791,9 @@ async function initWasm() {
 }
 
 function updateStatus(text) {
-    elements.status.textContent = text;
+    if (elements.status) {
+        elements.status.textContent = text;
+    }
 }
 
 function showToast(message) {
