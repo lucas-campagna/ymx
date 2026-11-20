@@ -255,6 +255,41 @@ body {
     .main-container {
         padding-left: var(--sidebar-width);
     }
+    
+    /* Lint Resize Handle (Desktop) */
+    .resize-handle-lint {
+        display: block;
+        position: fixed;
+        bottom: 0;
+        left: var(--sidebar-width);
+        right: 0;
+        height: 8px;
+        background: var(--bg-tertiary);
+        border-top: 1px solid var(--border);
+        border-bottom: 1px solid var(--border);
+        cursor: row-resize;
+        z-index: 199;
+        touch-action: none;
+    }
+    
+    .resize-handle-lint::before {
+        content: '';
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 32px;
+        height: 4px;
+        background: var(--fg-muted);
+        border-radius: 2px;
+        opacity: 0.5;
+    }
+    
+    .resize-handle-lint:hover::before,
+    .resize-handle-lint.dragging::before {
+        opacity: 1;
+        background: var(--accent);
+    }
 }
 
 @media (max-width: 900px) {
