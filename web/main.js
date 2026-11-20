@@ -2314,11 +2314,8 @@ async function init() {
     // Initialize WASM
     await initWasm();
     
-    // Open first file by default
-    const firstFile = '/main.yml';
-    if (state.files.has(firstFile)) {
-        openFile(firstFile);
-    }
+    // Load hello-world example by default
+    await loadExampleProject('hello-world');
     
     console.log('YMX Playground initialized');
 }
