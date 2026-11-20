@@ -1459,6 +1459,26 @@ pre.preview-page {
     background-color: rgba(78, 201, 176, 0.1);
 }
 
+/* Glyph margin icons (left margin) */
+.lint-error::before {
+    content: '✕';
+    color: var(--error);
+    font-weight: bold;
+    margin-right: 4px;
+}
+
+.lint-warning::before {
+    content: '⚠';
+    color: var(--warning);
+    margin-right: 4px;
+}
+
+.lint-info::before {
+    content: 'ℹ';
+    color: var(--success);
+    margin-right: 4px;
+}
+
 .lint-preview {
     padding: 12px;
 }

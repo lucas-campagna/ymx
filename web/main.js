@@ -1734,13 +1734,6 @@ async function lint() {
         const result = state.ymxInstance.lint();
         updateLintMarkers(result);
         updateLintPreview(result);
-        
-        // If there are lint findings, show the first one in modal
-        if (result.findings && result.findings.length > 0) {
-            state.lintFindings = result.findings;
-            state.lintCurrentIndex = 0;
-            showLintModal();
-        }
     } catch (error) {
         console.error('Lint error:', error);
     }
@@ -1963,12 +1956,9 @@ async function renderPreview(result) {
         }
         
         case "page": {
-            // Show rendered HTML (page view) with pretty printing
+            // Show rendered HTML (page view)
             const html = result.asHtml();
-            const prettyHtml = prettyPrintHtml(html);
-            preview.innerHTML = `
-                <pre class="preview-page">${escapeHtml(prettyHtml)}</pre>
-            `;
+            preview.innerHTML = html;
             break;
 
         }
