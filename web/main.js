@@ -15,6 +15,8 @@ const state = {
     lintDebounce: null,
     ymxInstance: null,
     ironpressLoaded: false,
+    lintFindings: [],
+    lintCurrentIndex: 0,
 };
 
 // Drag and drop state
@@ -1287,7 +1289,12 @@ function setupEventListeners() {
             });
             btn.classList.add('active');
             btn.setAttribute('aria-selected', 'true');
-            // Download button
+            state.viewMode = btn.dataset.view;
+            scheduleRender();
+        });
+    });
+
+    // Download button
     elements.downloadBtn.addEventListener('click', async () => {
         if (!state.activeFile || !state.ymxInstance) return;
         
