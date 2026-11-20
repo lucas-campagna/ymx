@@ -1,0 +1,15 @@
+{
+  "name": "ymx-web",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "ymx_web_bg.wasm",
+    "ymx_web.js",
+    "ymx_web.d.ts"
+  ],
+  "main": "ymx_web.js",
+  "types": "ymx_web.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
