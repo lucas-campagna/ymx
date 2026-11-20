@@ -1822,14 +1822,14 @@ function scheduleLint() {
 }
 
 async function lint() {
-    if (!state.activeFile || !state.ymxInstance) return;
+    if (!state.ymxInstance) return;
     
-    const fileState = state.files.get(state.activeFile);
-    if (!fileState) return;
-    
-    // Sync editor content to fileState
-    if (editor.getModel()) {
-        fileState.content = editor.getValue();
+    // Sync editor content to fileState if there's an active file
+    if (state.activeFile && editor.getModel()) {
+        const fileState = state.files.get(state.activeFile);
+        if (fileState) {
+            fileState.content = editor.getValue();
+        }
     }
     
     try {
@@ -1854,14 +1854,14 @@ async function lint() {
 }
 
 async function render() {
-    if (!state.activeFile || !state.ymxInstance) return;
+    if (!state.ymxInstance) return;
     
-    const fileState = state.files.get(state.activeFile);
-    if (!fileState) return;
-    
-    // Sync editor content to fileState (in case it was set programmatically)
-    if (editor.getModel()) {
-        fileState.content = editor.getValue();
+    // Sync editor content to fileState if there's an active file
+    if (state.activeFile && editor.getModel()) {
+        const fileState = state.files.get(state.activeFile);
+        if (fileState) {
+            fileState.content = editor.getValue();
+        }
     }
     
     console.log('render: state.files keys =', Array.from(state.files.keys()));
@@ -1911,9 +1911,24 @@ async function render() {
 }
 
 function updateLintMarkers(result) {
-    if (!state.activeFile) return;
+    // Find a file to attach markers to - prefer main.yml, then activeFile, then first .yml file
+    let targetFile = state.activeFile;
+    if (!targetFile) {
+        targetFile = '/main.yml';
+    }
+    if (!state.files.has(targetFile)) {
+        // Find first .yml file
+        for (const [path] of state.files) {
+            if (path.endsWith('.yml') || path.endsWith('.yaml')) {
+                targetFile = path;
+                break;
+            }
+        }
+    }
     
-    const model = models.get(state.activeFile);
+    if (!targetFile) return;
+    
+    const model = models.get(targetFile);
     if (!model) return;
     
     // Store all findings for modal navigation
