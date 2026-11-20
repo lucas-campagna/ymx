@@ -774,7 +774,8 @@ body {
 }
 
 /* Preview Content Styles */
-.preview-page {
+.preview-page,
+pre.preview-page {
     background: white;
     color: #1a1a1a;
     border-radius: 6px;
@@ -783,6 +784,12 @@ body {
     min-height: 300px;
     height: 100%;
     box-sizing: border-box;
+    font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
+    font-size: 0.8rem;
+    line-height: 1.6;
+    overflow-x: auto;
+    white-space: pre;
+    word-break: break-word;
 }
 
 .preview-html {
@@ -1066,11 +1073,18 @@ body {
         max-width: 90vw;
     }
     
-    .preview-page {
+    .preview-page,
+    pre.preview-page {
         padding: 12px;
         min-height: 200px;
         height: 100%;
         box-sizing: border-box;
+        font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
+        font-size: 0.7rem;
+        line-height: 1.6;
+        overflow-x: auto;
+        white-space: pre;
+        word-break: break-word;
     }
     
     .preview-html {

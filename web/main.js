@@ -1806,15 +1806,15 @@ async function renderPreview(result) {
             break;
         }
         
-        case 'page': {
-            // Show rendered HTML (page view)
+        case "page": {
+            // Show rendered HTML (page view) with pretty printing
             const html = result.asHtml();
+            const prettyHtml = prettyPrintHtml(html);
             preview.innerHTML = `
-                <div class="preview-page">
-                    ${html}
-                </div>
+                <pre class="preview-page">${escapeHtml(prettyHtml)}</pre>
             `;
             break;
+
         }
         
         case 'pdf': {
@@ -1867,6 +1867,45 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+
+
+
+function prettyPrintHtml(html) {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    return prettyPrintNode(div, 0).join('\\n');
+}
+
+function prettyPrintNode(node, indent) {
+    const lines = [];
+    const indentStr = '  '.repeat(indent);
+    
+    if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent.trim();
+        if (text) lines.push(indentStr + escapeHtml(text));
+        return lines;
+    }
+    
+    if (node.nodeType === Node.ELEMENT_NODE) {
+        const tagName = node.tagName.toLowerCase();
+        const attrs = Array.from(node.attributes).map(a => a.name + '="' + escapeHtml(a.value) + '"').join(' ');
+        const attrStr = attrs ? ' ' + attrs : '';
+        
+        const voidElements = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'];
+        
+        if (voidElements.includes(tagName)) {
+            lines.push(indentStr + '<' + tagName + attrStr + '>');
+        } else {
+            lines.push(indentStr + '<' + tagName + attrStr + '>');
+            for (const child of node.childNodes) {
+                lines.push(...prettyPrintNode(child, indent + 1));
+            }
+            lines.push(indentStr + '</' + tagName + '>');
+        }
+    }
+    return lines;
+}
+
 
 // ============================================================================
 // Keyboard Shortcuts
