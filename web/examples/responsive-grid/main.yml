@@ -1,0 +1,250 @@
+# Responsive Grid
+# Demonstrates responsive grid layouts
+
+# Grid container
+grid:
+  from: div
+  class: "grid grid-{{cols || 3}} gap-{{gap || 4}}"
+  children: "{{children}}"
+
+# Grid item
+gridItem:
+  from: div
+  class: "grid-item"
+  children: "{{content}}"
+
+# Breakpoint-specific grid
+responsiveGrid:
+  from: div
+  class: "grid"
+  style: |
+    grid-template-columns: repeat(auto-fit, minmax({{minWidth || 250px}}, 1fr));
+    gap: {{gap || 1.5rem}};
+  children: "{{children}}"
+
+# Masonry-like grid
+masonry:
+  from: div
+  class: "masonry"
+  style: |
+    column-count: {{cols || 3}};
+    column-gap: {{gap || 1.5rem}};
+  children: "{{children}}"
+
+masonryItem:
+  from: div
+  class: "masonry-item"
+  style: "break-inside: avoid; margin-bottom: {{gap || 1.5rem}};"
+  children: "{{content}}"
+
+# Flexbox layouts
+flexContainer:
+  from: div
+  class: "flex {{direction || 'row'}} {{wrap || 'wrap'}} {{justify || ''}} {{align || ''}} gap-{{gap || 4}}"
+  children: "{{children}}"
+
+flexItem:
+  from: div
+  class: "flex-item {{grow || ''}} {{shrink || ''}} {{basis || ''}}"
+  children: "{{content}}"
+
+# Sidebar layout
+sidebarLayout:
+  from: div
+  class: "sidebar-layout"
+  children:
+    - from: aside
+      class: "sidebar {{collapsed ? 'collapsed' : ''}}"
+      children: "{{sidebar}}"
+    - from: main
+      class: "main-content"
+      children: "{{content}}"
+
+# Holy grail layout
+holyGrail:
+  from: div
+  class: "holy-grail"
+  children:
+    - from: header
+      class: "header"
+      children: "{{header}}"
+    - from: div
+      class: "body"
+      children:
+        - from: aside
+          class: "sidebar-left"
+          children: "{{leftSidebar}}"
+        - from: main
+          class: "main"
+          children: "{{content}}"
+        - from: aside
+          class: "sidebar-right"
+          children: "{{rightSidebar}}"
+    - from: footer
+      class: "footer"
+      children: "{{footer}}"
+
+# Card grid
+cardGrid:
+  from: div
+  class: "grid grid-{{cols || 3}} gap-{{gap || 4}}"
+  children:
+    $map(cards, card => 
+      div(class: "card") {
+        h3(card.title)
+        p(card.description)
+        div(class: "card-footer") {
+          button(class: "btn btn-primary") { card.action || "Action" }
+        }
+      }
+    )
+
+# Masonry data
+masonryData:
+  - id: 1
+    height: 200
+    content: "Tall card with lots of content that wraps to multiple lines"
+  - id: 2
+    height: 100
+    content: "Short card"
+  - id: 3
+    height: 150
+    content: "Medium height card with some content"
+  - id: 4
+    height: 300
+    content: "Very tall card with lots and lots of content that goes on and on"
+  - id: 5
+    height: 80
+    content: "Tiny"
+  - id: 6
+    height: 250
+    content: "Another tall card with different content here"
+
+# Card data
+cardData:
+  - title: "Card 1"
+    description: "First card in the grid"
+    action: "View"
+  - title: "Card 2"
+    description: "Second card in the grid"
+    action: "View"
+  - title: "Card 3"
+    description: "Third card in the grid"
+    action: "View"
+  - title: "Card 4"
+    description: "Fourth card in the grid"
+    action: "View"
+  - title: "Card 5"
+    description: "Fifth card in the grid"
+    action: "View"
+  - title: "Card 6"
+    description: "Sixth card in the grid"
+    action: "View"
+  - title: "Card 7"
+    description: "Seventh card"
+    action: "View"
+  - title: "Card 8"
+    description: "Eighth card"
+    action: "View"
+  - title: "Card 9"
+    description: "Ninth card"
+    action: "View"
+
+# Main component
+main:
+  from: div
+  class: "container"
+  children:
+    - from: h1
+      children: "Responsive Grid Layouts"
+    - from: p
+      children: "Various grid and layout patterns in YMX"
+    
+    - from: h2
+      children: "Basic Grid (3 columns)"
+    - from: grid
+      cols: 3
+      gap: 4
+      children:
+        $map(cardData, card => 
+          div(class: "card") {
+            h3(card.title)
+            p(card.description)
+          }
+        )
+    
+    - from: h2
+      children: "Responsive Grid (auto-fit)"
+    - from: p
+      children: "Columns adapt to container width (min 250px)"
+    - from: responsiveGrid
+      minWidth: 250px
+      gap: 1.5rem
+      children:
+        $map(cardData, card => 
+          div(class: "card") {
+            h3(card.title)
+            p(card.description)
+          }
+        )
+    
+    - from: h2
+      children: "Masonry Layout"
+    - from: p
+      children: "CSS columns for Pinterest-style layout"
+    - from: masonry
+      cols: 3
+      gap: 1.5rem
+      children:
+        $map(masonryData, item => 
+          div(class: "masonry-item", style: "height: \${item.height}px; background: var(--bg-tertiary); padding: 1rem; border-radius: 8px;") {
+            p(item.content)
+            small(style: "color: var(--fg-muted);") { "Height: \${item.height}px" }
+          }
+        )
+    
+    - from: h2
+      children: "Flexbox Layouts"
+    - from: h3
+      children: "Row with wrap"
+    - from: flexContainer
+      direction: "row"
+      wrap: "wrap"
+      justify: "space-between"
+      gap: 4
+      children:
+        $map([1,2,3,4,5], i => 
+          flexItem(grow: "1", basis: "150px") {
+            div(class: "card", style: "height: 100px;") { "Item \${i}" }
+          }
+        )
+    
+    - from: h3
+      children: "Column layout"
+    - from: flexContainer
+      direction: "column"
+      gap: 4
+      children:
+        $map([1,2,3], i => 
+          flexItem() {
+            div(class: "card", style: "height: 80px;") { "Item \${i}" }
+          }
+        )
+    
+    - from: h3
+      children: "Holy Grail Layout"
+    - from: p
+      children: "Header, footer, two sidebars, main content"
+    - from: holyGrail
+      header: "Header Content"
+      leftSidebar: "Left Sidebar"
+      content: "Main Content Area"
+      rightSidebar: "Right Sidebar"
+      footer: "Footer Content"
+    
+    - from: h2
+      children: "Card Grid (responsive)"
+    - from: cardGrid
+      cols: 4
+      gap: 4
+      cards: "\${cardData}"

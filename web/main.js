@@ -1284,6 +1284,13 @@ function setupEventListeners() {
     // Resize handle for mobile preview
     initResizeHandle();
 
+    // Project selector
+    if (elements.projectSelector) {
+        elements.projectSelector.addEventListener("change", (e) => {
+            loadExampleProject(e.target.value);
+        });
+    }
+
     // View mode buttons
     elements.viewButtons.forEach(btn => {
         btn.addEventListener('click', () => {
@@ -1373,6 +1380,57 @@ function setupEventListeners() {
             showToast('Download failed: ' + err.message);
         }
     });
+}
+
+// Example projects data
+const exampleProjects = {
+    'hello-world': '/examples/hello-world/main.yml',
+    'components-basics': '/examples/components-basics/main.yml',
+    'control-flow': '/examples/control-flow/main.yml',
+    'math-expressions': '/examples/math-expressions/main.yml',
+    'string-manipulation': '/examples/string-manipulation/main.yml',
+    'map-reduce': '/examples/map-reduce/main.yml',
+    'component-library': '/examples/component-library/main.yml',
+    'html-layouts': '/examples/html-layouts/main.yml',
+    'responsive-grid': '/examples/responsive-grid/main.yml',
+    'pdf-generation': '/examples/pdf-generation/main.yml',
+    'alpine-app': '/examples/alpine-app/main.yml',
+    'todo-app': '/examples/todo-app/main.yml',
+    'dashboard': '/examples/dashboard/main.yml'
+};
+
+// Load example project
+async function loadExampleProject(projectKey) {
+    if (!projectKey || !exampleProjects[projectKey]) {
+        if (elements.projectSelector) {
+            elements.projectSelector.value = '';
+        }
+        return;
+    }
+    
+    const url = exampleProjects[projectKey];
+    updateStatus('Loading example...');
+    
+    try {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error('Failed to load example');
+        }
+        const content = await response.text();
+        
+        // Load the example content
+        state.ymxInstance.clear();
+        state.ymxInstance.parse_map(new Map([[projectKey, content]]));
+        
+        // Open the main file
+        openFile('/' + projectKey + '/main.yml');
+        
+        updateStatus('Example loaded: ' + projectKey);
+    } catch (error) {
+        console.error('Failed to load example:', error);
+        showToast('Failed to load example: ' + error.message);
+        updateStatus('Error loading example');
+    }
 }
 
 function initResizeHandle() {
@@ -1755,6 +1813,13 @@ window.addEventListener('resize', () => {
     
     // Reinitialize resize handles on breakpoint change
     initResizeHandle();
+
+    // Project selector
+    if (elements.projectSelector) {
+        elements.projectSelector.addEventListener("change", (e) => {
+            loadExampleProject(e.target.value);
+        });
+    }
 });
 
 // ============================================================================

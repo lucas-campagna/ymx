@@ -1,0 +1,367 @@
+# Dashboard
+# A comprehensive dashboard with metrics, charts, and data tables
+
+# Metric card
+metricCard:
+  from: div
+  class: "metric-card {{trend || ''}}"
+  children:
+    - from: div
+      class: "metric-icon"
+      children: "{{icon}}"
+    - from: div
+      class: "metric-content"
+      children:
+        - from: span
+          class: "metric-label"
+          children: "{{label}}"
+        - from: span
+          class: "metric-value"
+          children: "{{value}}"
+        - from: span
+          class: "metric-change {{trendClass || ''}}"
+          children: "{{change}}"
+
+# Chart placeholder
+chart:
+  from: div
+  class: "chart-container"
+  children:
+    - from: canvas
+      id: "{{id}}"
+      width: "{{width || 400}}"
+      height: "{{height || 200}}"
+
+# Data table
+dataTable:
+  from: div
+  class: "table-container"
+  children:
+    - from: table
+      class: "data-table"
+      children:
+        - from: thead
+          children:
+            - from: tr
+              children:
+                $map(headers, h => th(h))
+        - from: tbody
+          children:
+            $map(rows, row => tr(children: $map(row, cell => td(cell))))
+
+# Activity feed
+activityFeed:
+  from: div
+  class: "activity-feed"
+  children:
+    $map(activities, activity => 
+      div(class: "activity-item") {
+        div(class: "activity-icon {{type}}") { icon }
+        div(class: "activity-content") {
+          div(class: "activity-text") { message }
+          div(class: "activity-time") { time }
+        }
+      }
+    )
+
+# Notification badge
+notificationBadge:
+  from: span
+  class: "notification-badge {{count > 0 ? 'has-notifications' : ''}}"
+  children: "{{count}}"
+
+# Sidebar navigation
+sidebarNav:
+  from: nav
+  class: "sidebar-nav"
+  children:
+    - from: div
+      class: "nav-header"
+      children:
+        - from: h2
+          children: "Dashboard"
+    - from: ul
+      class: "nav-list"
+      children:
+        $map(navItems, item => 
+          li(class: "{{active === item.id ? 'active' : ''}}") {
+            a(href: "#", data-section: item.id) {
+              span(class: "nav-icon") { item.icon }
+              span(class: "nav-label") { item.label }
+              span(class: "nav-badge") { item.badge || '' }
+            }
+          }
+        )
+
+# Header
+header:
+  from: header
+  class: "dashboard-header"
+  children:
+    - from: div
+      class: "header-left"
+      children:
+        - from: h1
+          children: "Dashboard"
+    - from: div
+      class: "header-right"
+      children:
+        - from: div
+          class: "search-box"
+          children:
+            - from: input
+              type: "text"
+              placeholder: "Search..."
+              class: "search-input"
+            - from: span
+              class: "search-icon"
+              children: "🔍"
+        - from: div
+          class: "header-actions"
+          children:
+            - from: button
+              class: "btn btn-icon notification-btn"
+              children:
+                - from: span
+                  class: "icon"
+                  children: "🔔"
+                - from: notificationBadge
+                  count: 3
+            - from: div
+              class: "user-menu"
+              children:
+                - from: div
+                  class: "avatar"
+                  children: "JD"
+                - from: span
+                  class: "username"
+                  children: "John Doe"
+                - from: span
+                  class: "dropdown-icon"
+                  children: "▼"
+
+# Dashboard data
+metrics:
+  - label: "Total Revenue"
+    value: "$127,450"
+    change: "+12.5%"
+    trend: "up"
+    trendClass: "positive"
+    icon: "💰"
+  - label: "Active Users"
+    value: "2,845"
+    change: "+8.2%"
+    trend: "up"
+    trendClass: "positive"
+    icon: "👥"
+  - label: "Conversions"
+    value: "3.24%"
+    change: "-0.5%"
+    trend: "down"
+    trendClass: "negative"
+    icon: "📊"
+  - label: "Avg. Session"
+    value: "4m 32s"
+    change: "+12s"
+    trend: "up"
+    trendClass: "positive"
+    icon: "⏱️"
+
+navItems:
+  - id: "overview"
+    label: "Overview"
+    icon: "📊"
+    badge: ""
+  - id: "analytics"
+    label: "Analytics"
+    icon: "📈"
+    badge: ""
+  - id: "users"
+    label: "Users"
+    icon: "👥"
+    badge: "12"
+  - id: "reports"
+    label: "Reports"
+    icon: "📋"
+    badge: ""
+  - id: "settings"
+    label: "Settings"
+    icon: "⚙️"
+    badge: ""
+
+# Chart data
+chartData:
+  revenue:
+    labels: ["Jan", "Feb", "Mar", "Apr", "May", "Jun"]
+    datasets:
+      - label: "Revenue"
+        data: [65000, 72000, 68000, 75000, 82000, 95000]
+        borderColor: "#3b82f6"
+        backgroundColor: "rgba(59, 130, 246, 0.1)"
+      - label: "Target"
+        data: [60000, 65000, 70000, 75000, 80000, 85000]
+        borderColor: "#22c55e"
+        backgroundColor: "rgba(34, 197, 94, 0.1)"
+        borderDash: [5, 5]
+
+  users:
+    labels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    datasets:
+      - label: "New Users"
+        data: [45, 52, 38, 56, 67, 89, 72]
+        backgroundColor: "rgba(59, 130, 246, 0.8)"
+      - label: "Returning"
+        data: [32, 41, 29, 48, 55, 78, 61]
+        backgroundColor: "rgba(34, 197, 94, 0.8)"
+
+# Table data
+userTableData:
+  headers: ["User", "Email", "Role", "Status", "Last Active", "Actions"]
+  rows:
+    - ["John Smith", "john@example.com", "Admin", "Active", "2 min ago", "Edit"]
+    - ["Sarah Johnson", "sarah@example.com", "Editor", "Active", "1 hr ago", "Edit"]
+    - ["Mike Wilson", "mike@example.com", "Viewer", "Inactive", "3 days ago", "Edit"]
+    - ["Emily Davis", "emily@example.com", "Admin", "Active", "5 min ago", "Edit"]
+    - ["Chris Brown", "chris@example.com", "Editor", "Active", "30 min ago", "Edit"]
+    - ["Lisa Anderson", "lisa@example.com", "Viewer", "Pending", "Never", "Edit"]
+
+# Recent activity
+activities:
+  - type: "success"
+    icon: "✅"
+    message: "New user registered: john@example.com"
+    time: "2 minutes ago"
+  - type: "info"
+    icon: "📝"
+    message: "New report generated: Q4 Analytics"
+    time: "15 minutes ago"
+  - type: "warning"
+    icon: "⚠️"
+    message: "Disk usage at 85% capacity"
+    time: "1 hour ago"
+  - type: "info"
+    icon: "🔔"
+    message: "New comment on report #1245"
+    time: "3 hours ago"
+  - type: "success"
+    icon: "💰"
+    message: "Payment received: $2,450.00"
+    time: "5 hours ago"
+
+# Main dashboard
+main:
+  from: div
+  class: "dashboard"
+  children:
+    - from: header
+    - from: div
+      class: "dashboard-container"
+      children:
+        - from: sidebarNav
+        - from: main
+          class: "dashboard-main"
+          children:
+            - from: div
+              class: "dashboard-header"
+              children:
+                - from: h1
+                  children: "Overview"
+                - from: p
+                  class: "subtitle"
+                  children: "Welcome back! Here's what's happening with your business."
+            
+            - from: div
+              class: "metrics-grid"
+              children:
+                $map(metrics, metric => metricCard(
+                  label: metric.label,
+                  value: metric.value,
+                  change: metric.change,
+                  trend: metric.trend,
+                  trendClass: metric.trendClass,
+                  icon: metric.icon
+                ))
+            
+            - from: div
+              class: "dashboard-grid"
+              children:
+                - from: div
+                  class: "chart-card"
+                  children:
+                    - from: div
+                      class: "chart-header"
+                      children:
+                        - from: h3
+                          children: "Revenue Overview"
+                        - from: select
+                          class: "chart-period"
+                          children:
+                            - from: option
+                              value: "7d"
+                              children: "Last 7 Days"
+                            - from: option
+                              value: "30d"
+                              selected: true
+                              children: "Last 30 Days"
+                            - from: option
+                              value: "90d"
+                              children: "Last 90 Days"
+                    - from: chart
+                      id: "revenueChart"
+                      width: 600
+                      height: 300
+                
+                - from: div
+                  class: "chart-card"
+                  children:
+                    - from: div
+                      class: "chart-header"
+                      children:
+                        - from: h3
+                          children: "User Activity"
+                        - from: select
+                          class: "chart-period"
+                          children:
+                            - from: option
+                              value: "7d"
+                              children: "Last 7 Days"
+                            - from: option
+                              value: "30d"
+                              selected: true
+                              children: "Last 30 Days"
+                    - from: chart
+                      id: "usersChart"
+                      width: 400
+                      height: 300
+            
+            - from: div
+              class: "dashboard-grid"
+              children:
+                - from: div
+                  class: "table-card"
+                  children:
+                    - from: div
+                      class: "card-header"
+                      children:
+                        - from: h3
+                          children: "Recent Users"
+                        - from: button
+                          class: "btn btn-sm btn-secondary"
+                          children: "View All"
+                    - from: dataTable
+                      headers: "\${userTableData.headers}"
+                      rows: "\${userTableData.rows}"
+                
+                - from: div
+                  class: "activity-card"
+                  children:
+                    - from: div
+                      class: "card-header"
+                      children:
+                        - from: h3
+                          children: "Recent Activity"
+                        - from: button
+                          class: "btn btn-sm btn-secondary"
+                          children: "View All"
+                    - from: activityFeed
+                      activities: "\${activities}"

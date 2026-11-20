@@ -1,0 +1,81 @@
+# Control Flow Example
+# Demonstrates $if, $when, and conditional rendering
+
+# Card component
+card:
+  from: div
+  class: "card"
+  children:
+    - from: h3
+      children: "{{title}}"
+    - from: p
+      children: "{{content}}"
+
+# Status badge
+badge:
+  from: span
+  class: "badge badge-{{type || 'default'}}"
+  children: "{{label}}"
+
+# Main component demonstrating control flow
+main:
+  from: div
+  class: "container"
+  children:
+    - from: h1
+      children: "Control Flow ($if, $when)"
+    
+    - from: h2
+      children: "$if - Conditional Rendering"
+    - from: p
+      children: "Show/hide content based on conditions"
+    
+    - from: card
+      title: "Logged In User"
+      content: |
+        $if(user.loggedIn) {
+          Welcome back, {{user.name}}!
+        } $else {
+          Please log in to continue.
+        }
+    
+    - from: h2
+      children: "$when - Multiple Conditions"
+    - from: p
+      children: "Switch-like conditional rendering"
+    
+    - from: card
+      title: "User Role"
+      content: |
+        $when(user.role) {
+          "admin" => { Admin Panel Access }
+          "editor" => { Edit Content }
+          "viewer" => { Read Only Access }
+          * => { Unknown Role }
+        }
+    
+    - from: h2
+      children: "Ternary Expressions"
+    - from: p
+      children: "Inline conditional values"
+    
+    - from: card
+      title: "Status"
+      content: |
+        Status: {{user.active ? "Active" : "Inactive"}}
+        Role: {{user.role == "admin" ? "Administrator" : "User"}}
+        Count: {{count > 0 ? count : "None"}}
+    
+    - from: h2
+      children: "Loops with Conditionals"
+    - from: p
+      children: "Filter and render items conditionally"
+    
+    - from: card
+      title: "Active Items"
+      content: |
+        $map(items, item => 
+          $if(item.active) {
+            {{item.name}} - {{item.value}}
+          }
+        )

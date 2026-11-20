@@ -1,0 +1,395 @@
+# Component Library
+# A comprehensive reusable component library
+
+# Button variants
+btn:
+  from: button
+  class: "btn btn-{{variant || 'primary'}} btn-{{size || 'md'}} {{disabled ? 'disabled' : ''}} {{block ? 'btn-block' : ''}}"
+  disabled: "{{disabled || false}}"
+  children: "{{label}}"
+
+# Icon button
+iconBtn:
+  from: button
+  class: "icon-btn {{variant || ''}}"
+  children: "{{icon}}"
+
+# Input fields
+input:
+  from: input
+  type: "{{type || 'text'}}"
+  placeholder: "{{placeholder || ''}}"
+  value: "{{value || ''}}"
+  class: "form-input {{invalid ? 'invalid' : ''}}"
+  disabled: "{{disabled || false}}"
+
+textarea:
+  from: textarea
+  placeholder: "{{placeholder || ''}}"
+  value: "{{value || ''}}"
+  class: "form-textarea"
+  rows: "{{rows || 4}}"
+
+select:
+  from: select
+  class: "form-select"
+  children: "{{options}}"
+
+option:
+  from: option
+  value: "{{value}}"
+  children: "{{label}}"
+
+# Form group
+formGroup:
+  from: div
+  class: "form-group"
+  children:
+    - from: label
+      children: "{{label}}"
+      for: "{{id}}"
+    - from: "{{input}}"
+    - from: span
+      class: "error-message"
+      children: "{{error || ''}}"
+
+# Card components
+card:
+  from: div
+  class: "card"
+  children:
+    - from: div
+      class: "card-header"
+      children:
+        - from: h3
+          children: "{{title}}"
+        - from: span
+          class: "card-action"
+          children: "{{action || ''}}"
+    - from: div
+      class: "card-body"
+      children: "{{content}}"
+    - from: div
+      class: "card-footer"
+      children: "{{footer || ''}}"
+
+cardGrid:
+  from: div
+  class: "card-grid"
+  children: "{{cards}}"
+
+# Alert/notification
+alert:
+  from: div
+  class: "alert alert-{{type || 'info'}} {{dismissible ? 'alert-dismissible' : ''}}"
+  children:
+    - from: span
+      class: "alert-icon"
+      children: "{{icon || ''}}"
+    - from: span
+      class: "alert-message"
+      children: "{{message}}"
+    - from: button
+      class: "alert-close"
+      children: "×"
+
+# Badge
+badge:
+  from: span
+  class: "badge badge-{{variant || 'default'}}"
+  children: "{{text}}"
+
+# Avatar
+avatar:
+  from: div
+  class: "avatar avatar-{{size || 'md'}}"
+  style: "{{image ? 'background-image: url(\${image})' : ''}}"
+  children: "{{initials || ''}}"
+
+# Dropdown
+dropdown:
+  from: div
+  class: "dropdown"
+  children:
+    - from: button
+      class: "dropdown-toggle"
+      children: "{{trigger}}"
+    - from: div
+      class: "dropdown-menu"
+      children: "{{items}}"
+
+dropdownItem:
+  from: a
+  class: "dropdown-item"
+  href: "{{href || '#'}}"
+  children: "{{label}}"
+
+# Modal
+modal:
+  from: div
+  class: "modal-overlay {{open ? 'open' : ''}}"
+  children:
+    - from: div
+      class: "modal-container"
+      children:
+        - from: div
+          class: "modal-header"
+          children:
+            - from: h3
+              children: "{{title}}"
+            - from: button
+              class: "modal-close"
+              children: "×"
+        - from: div
+          class: "modal-body"
+          children: "{{content}}"
+        - from: div
+          class: "modal-footer"
+          children: "{{footer}}"
+
+# Tabs
+tabs:
+  from: div
+  class: "tabs"
+  children:
+    - from: div
+      class: "tab-list"
+      role: "tablist"
+      children: "{{tabs}}"
+    - from: div
+      class: "tab-panels"
+      children: "{{panels}}"
+
+tab:
+  from: button
+  class: "tab {{active ? 'active' : ''}}"
+  role: "tab"
+  children: "{{label}}"
+
+tabPanel:
+  from: div
+  class: "tab-panel {{active ? 'active' : ''}}"
+  role: "tabpanel"
+  children: "{{content}}"
+
+# Tooltip
+tooltip:
+  from: div
+  class: "tooltip"
+  children:
+    - from: span
+      class: "tooltip-trigger"
+      children: "{{trigger}}"
+    - from: div
+      class: "tooltip-content"
+      children: "{{content}}"
+
+# Table
+table:
+  from: table
+  class: "data-table"
+  children:
+    - from: thead
+      children:
+        - from: tr
+          children: "{{headers}}"
+    - from: tbody
+      children: "{{rows}}"
+
+th:
+  from: th
+  children: "{{label}}"
+
+td:
+  from: td
+  children: "{{value}}"
+
+tr:
+  from: tr
+  children: "{{cells}}"
+
+# Main component - Component Showcase
+main:
+  from: div
+  class: "container"
+  children:
+    - from: h1
+      children: "Component Library"
+    - from: p
+      children: "Comprehensive reusable component library for YMX"
+    
+    - from: h2
+      children: "Buttons"
+    - from: div
+      class: "component-showcase"
+      children:
+        - from: div
+          class: "btn-group"
+          children:
+            - from: btn
+              label: "Primary"
+              variant: "primary"
+            - from: btn
+              label: "Secondary"
+              variant: "secondary"
+            - from: btn
+              label: "Success"
+              variant: "success"
+            - from: btn
+              label: "Danger"
+              variant: "danger"
+            - from: btn
+              label: "Warning"
+              variant: "warning"
+            - from: btn
+              label: "Info"
+              variant: "info"
+        - from: div
+          class: "btn-group"
+          children:
+            - from: btn
+              label: "Small"
+              size: "sm"
+            - from: btn
+              label: "Medium"
+              size: "md"
+            - from: btn
+              label: "Large"
+              size: "lg"
+        - from: div
+          class: "btn-group"
+          children:
+            - from: btn
+              label: "Block Button"
+              block: true
+            - from: btn
+              label: "Disabled"
+              disabled: true
+    
+    - from: h2
+      children: "Form Inputs"
+    - from: div
+      class: "component-showcase"
+      children:
+        - from: formGroup
+          label: "Text Input"
+          id: "text-input"
+          input: input
+            placeholder: "Enter text..."
+        - from: formGroup
+          label: "Email"
+          id: "email-input"
+          input: input
+            type: "email"
+            placeholder: "email@example.com"
+        - from: formGroup
+          label: "Password"
+          id: "password-input"
+          input: input
+            type: "password"
+            placeholder: "********"
+        - from: formGroup
+          label: "Textarea"
+          id: "textarea-input"
+          input: textarea
+            placeholder: "Enter description..."
+            rows: 3
+        - from: formGroup
+          label: "Select"
+          id: "select-input"
+          input: select
+            children:
+              - from: option
+                value: "1"
+                label: "Option 1"
+              - from: option
+                value: "2"
+                label: "Option 2"
+              - from: option
+                value: "3"
+                label: "Option 3"
+    
+    - from: h2
+      children: "Cards"
+    - from: div
+      class: "component-showcase"
+      children:
+        - from: card
+          title: "Basic Card"
+          content: "This is a basic card with title and content."
+        - from: card
+          title: "Card with Footer"
+          content: "This card has a footer section."
+          footer: "Footer content here"
+        - from: cardGrid
+          cards:
+            - from: card
+              title: "Card 1"
+              content: "First card in grid"
+            - from: card
+              title: "Card 2"
+              content: "Second card in grid"
+            - from: card
+              title: "Card 3"
+              content: "Third card in grid"
+    
+    - from: h2
+      children: "Alerts"
+    - from: div
+      class: "component-showcase"
+      children:
+        - from: alert
+          type: "info"
+          message: "This is an informational alert"
+        - from: alert
+          type: "success"
+          message: "Operation completed successfully"
+        - from: alert
+          type: "warning"
+          message: "Please review this warning"
+        - from: alert
+          type: "error"
+          message: "An error occurred"
+    
+    - from: h2
+      children: "Badges"
+    - from: div
+      class: "component-showcase"
+      children:
+        - from: badge
+          text: "Default"
+          variant: "default"
+        - from: badge
+          text: "Primary"
+          variant: "primary"
+        - from: badge
+          text: "Success"
+          variant: "success"
+        - from: badge
+          text: "Warning"
+          variant: "warning"
+        - from: badge
+          text: "Danger"
+          variant: "danger"
+    
+    - from: h2
+      children: "Alerts with Icons"
+    - from: div
+      class: "component-showcase"
+      children:
+        - from: alert
+          type: "info"
+          icon: "ℹ️"
+          message: "Informational message with icon"
+        - from: alert
+          type: "success"
+          icon: "✅"
+          message: "Success with checkmark"
+        - from: alert
+          type: "warning"
+          icon: "⚠️"
+          message: "Warning with warning sign"
+        - from: alert
+          type: "error"
+          icon: "❌"
+          message: "Error with X mark"

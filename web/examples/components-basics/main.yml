@@ -1,0 +1,133 @@
+# Components Basics
+# Demonstrates reusable components with parameters
+
+# Button component with variants
+button:
+  from: button
+  class: "btn btn-{{variant || 'primary'}} btn-{{size || 'md'}}"
+  disabled: "{{disabled || false}}"
+  children: "{{label}}"
+
+# Input component
+input:
+  from: input
+  type: "{{type || 'text'}}"
+  placeholder: "{{placeholder || ''}}"
+  value: "{{value || ''}}"
+  class: "form-input"
+
+# Card component
+card:
+  from: div
+  class: "card"
+  children:
+    - from: div
+      class: "card-header"
+      children:
+        - from: h3
+          children: "{{title}}"
+    - from: div
+      class: "card-body"
+      children: "{{content}}"
+
+# Alert component
+alert:
+  from: div
+  class: "alert alert-{{type || 'info'}}"
+  children:
+    - from: span
+      children: "{{message}}"
+
+# Modal-like component
+modal:
+  from: div
+  class: "modal-overlay"
+  children:
+    - from: div
+      class: "modal-content"
+      children:
+        - from: h2
+          children: "{{title}}"
+        - from: p
+          children: "{{content}}"
+        - from: button
+          label: "{{closeLabel || 'Close'}}"
+          variant: "secondary"
+
+# Main component demonstrating all components
+main:
+  from: div
+  class: "container"
+  children:
+    - from: h1
+      children: "Components Basics"
+    - from: p
+      children: "Reusable components with parameters"
+    
+    - from: h2
+      children: "Buttons"
+    - from: div
+      class: "component-demo"
+      children:
+        - from: button
+          label: "Primary"
+          variant: "primary"
+        - from: button
+          label: "Secondary"
+          variant: "secondary"
+        - from: button
+          label: "Danger"
+          variant: "danger"
+        - from: button
+          label: "Small"
+          size: "sm"
+        - from: button
+          label: "Large"
+          size: "lg"
+        - from: button
+          label: "Disabled"
+          disabled: true
+    
+    - from: h2
+      children: "Cards"
+    - from: div
+      class: "component-demo"
+      children:
+        - from: card
+          title: "Card Title"
+          content: "This is card content with some text."
+        - from: card
+          title: "Another Card"
+          content: "Cards can contain any content including other components."
+    
+    - from: h2
+      children: "Alerts"
+    - from: div
+      class: "component-demo"
+      children:
+        - from: alert
+          type: "info"
+          message: "This is an info alert"
+        - from: alert
+          type: "success"
+          message: "This is a success alert"
+        - from: alert
+          type: "warning"
+          message: "This is a warning alert"
+        - from: alert
+          type: "error"
+          message: "This is an error alert"
+    
+    - from: h2
+      children: "Inputs"
+    - from: div
+      class: "component-demo"
+      children:
+        - from: input
+          placeholder: "Enter text..."
+        - from: input
+          type: "email"
+          placeholder: "Email address"
+        - from: input
+          type: "password"
+          placeholder: "Password"

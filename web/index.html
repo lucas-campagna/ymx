@@ -25,6 +25,30 @@
             <h1 class="logo">YMX Playground</h1>
         </div>
         <div class="header-center">
+            <select class="project-selector" id="project-selector" aria-label="Select example project">
+                <option value="">Select an example...</option>
+                <optgroup label="Getting Started">
+                    <option value="hello-world">Hello World</option>
+                    <option value="components-basics">Components Basics</option>
+                    <option value="control-flow">Control Flow ($if, $when)</option>
+                </optgroup>
+                <optgroup label="Data & Math">
+                    <option value="math-expressions">Math Expressions</option>
+                    <option value="string-manipulation">String Manipulation</option>
+                    <option value="map-reduce">$map / $reduce</option>
+                </optgroup>
+                <optgroup label="Components & Layouts">
+                    <option value="component-library">Component Library</option>
+                    <option value="html-layouts">HTML Layouts (Grid, Cards, Forms)</option>
+                    <option value="responsive-grid">Responsive Grid</option>
+                </optgroup>
+                <optgroup label="Advanced">
+                    <option value="pdf-generation">PDF Generation (Header/Footer)</option>
+                    <option value="alpine-app">Alpine.js Web App</option>
+                    <option value="todo-app">Todo App</option>
+                    <option value="dashboard">Dashboard</option>
+                </optgroup>
+            </select>
         </div>
         <div class="header-right">
             <button class="icon-btn preview-toggle" id="preview-toggle" title="Toggle Preview" aria-label="Toggle Preview">📄</button>

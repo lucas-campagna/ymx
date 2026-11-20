@@ -1,0 +1,370 @@
+# PDF Generation with Header and Footer
+# Demonstrates PDF generation with custom headers and footers using ironpress
+
+# Page template with header/footer
+pageTemplate:
+  from: html
+  lang: "en"
+  children:
+    - from: head
+      children:
+        - from: meta
+          charset: "UTF-8"
+        - from: meta
+          name: "viewport"
+          content: "width=device-width, initial-scale=1.0"
+        - from: title
+          children: "{{title || 'Document'}}"
+        - from: style
+          children: |
+            @page {
+              margin: 2cm 1.5cm 2cm 1.5cm;
+              @top-center {
+                content: element(header);
+                font-size: 10px;
+                color: #666;
+                border-bottom: 1px solid #ddd;
+                padding-bottom: 5px;
+              }
+              @bottom-center {
+                content: element(footer);
+                font-size: 10px;
+                color: #666;
+                border-top: 1px solid #ddd;
+                padding-top: 5px;
+              }
+            }
+            .header {
+              position: running(header);
+              display: flex;
+              justify-content: space-between;
+              padding: 10px 0;
+              font-size: 10px;
+              color: #666;
+              border-bottom: 1px solid #ddd;
+            }
+            .footer {
+              position: running(footer);
+              display: flex;
+              justify-content: space-between;
+              padding: 10px 0;
+              font-size: 10px;
+              color: #666;
+              border-top: 1px solid #ddd;
+            }
+            .page-number::after {
+              content: counter(page);
+            }
+            .page-count::after {
+              content: counter(pages);
+            }
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+              line-height: 1.6;
+              color: #333;
+            }
+            .container {
+              max-width: 800px;
+              margin: 0 auto;
+              padding: 20px;
+            }
+            h1, h2, h3 {
+              color: #2c3e50;
+              margin-top: 1.5em;
+            }
+            .card {
+              border: 1px solid #e0e0e0;
+              border-radius: 8px;
+              padding: 20px;
+              margin: 20px 0;
+              background: #fafafa;
+            }
+            .card-header {
+              font-weight: bold;
+              font-size: 1.2em;
+              margin-bottom: 10px;
+              padding-bottom: 10px;
+              border-bottom: 1px solid #eee;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin: 20px 0;
+            }
+            th, td {
+              border: 1px solid #ddd;
+              padding: 12px;
+              text-align: left;
+            }
+            th {
+              background: #f5f5f5;
+              font-weight: 600;
+            }
+            .badge {
+              display: inline-block;
+              padding: 4px 8px;
+              border-radius: 4px;
+              font-size: 0.85em;
+              font-weight: 500;
+            }
+            .badge-success { background: #d4edda; color: #155724; }
+            .badge-warning { background: #fff3cd; color: #856404; }
+            .badge-danger { background: #f8d7da; color: #721c24; }
+            .badge-info { background: #d1ecf1; color: #0c5460; }
+            .page-break { page-break-before: always; }
+            .no-break { page-break-inside: avoid; }
+            .header-logo {
+              font-size: 18px;
+              font-weight: bold;
+              color: #2c3e50;
+            }
+            .header-title {
+              font-size: 14px;
+              color: #666;
+            }
+    - from: body
+      children:
+        - from: div
+          class: "header"
+          children:
+            - from: div
+              class: "header-logo"
+              children: "{{companyName || 'YMX Corp'}}"
+            - from: div
+              class: "header-title"
+              children: "{{documentTitle || 'Document'}}"
+        - from: div
+          class: "footer"
+          children:
+            - from: span
+              children: "Confidential"
+            - from: span
+              children: "Page "
+            - from: span
+              class: "page-number"
+            - from: span
+              children: " of "
+            - from: span
+              class: "page-count"
+            - from: span
+              children: "{{date || ''}}"
+        - from: div
+          class: "container"
+          children: "{{content}}"
+
+# Report components
+reportHeader:
+  from: div
+  class: "report-header"
+  children:
+    - from: h1
+      children: "{{title}}"
+    - from: p
+      class: "subtitle"
+      children: "{{subtitle}}"
+    - from: div
+      class: "meta"
+      children:
+        - from: span
+          children: "Generated: {{date}}"
+        - from: span
+          children: "By: {{author}}"
+        - from: span
+          children: "Version: {{version}}"
+
+reportSection:
+  from: div
+  class: "report-section"
+  children:
+    - from: h2
+      children: "{{title}}"
+    - from: p
+      children: "{{description}}"
+    - from: div
+      class: "content"
+      children: "{{content}}"
+
+dataTable:
+  from: table
+  class: "data-table"
+  children:
+    - from: thead
+      children:
+        - from: tr
+          children:
+            $map(headers, h => th(h))
+    - from: tbody
+      children:
+        $map(rows, row => tr(cells: $map(row, cell => td(cell))))
+
+# Invoice template
+invoice:
+  from: html
+  lang: "en"
+  children:
+    - from: head
+      children:
+        - from: meta
+          charset: "UTF-8"
+        - from: title
+          children: "Invoice #{{invoiceNumber}}"
+        - from: style
+          children: |
+            @page { margin: 2cm; @top-center { content: element(header); } @bottom-center { content: element(footer); } }
+            .header { position: running(header); display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 2px solid #2c3e50; }
+            .footer { position: running(footer); text-align: center; font-size: 10px; color: #999; border-top: 1px solid #eee; padding: 10px 0; }
+            .company { font-size: 24px; font-weight: bold; color: #2c3e50; }
+            .invoice-title { font-size: 28px; font-weight: bold; color: #e74c3c; text-align: right; }
+            .details { display: flex; justify-content: space-between; margin: 30px 0; }
+            .detail-box { background: #f8f9fa; padding: 15px; border-radius: 8px; min-width: 200px; }
+            .detail-label { font-size: 12px; color: #666; text-transform: uppercase; }
+            .detail-value { font-weight: bold; margin-top: 4px; }
+            table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+            th { background: #2c3e50; color: white; }
+            .totals { text-align: right; margin-top: 20px; }
+            .total-row { display: flex; justify-content: space-between; padding: 8px 0; }
+            .total-final { font-size: 1.2em; font-weight: bold; border-top: 2px solid #2c3e50; padding-top: 12px; }
+    - from: body
+      children:
+        - from: div
+          class: "header"
+          children:
+            - from: div
+              class: "company"
+              children: "{{companyName}}"
+            - from: div
+              class: "invoice-title"
+              children: "INVOICE #{{invoiceNumber}}"
+        - from: div
+          class: "details"
+          children:
+            - from: div
+              class: "detail-box"
+              children:
+                - from: div
+                  class: "detail-label"
+                  children: "Bill To"
+                - from: div
+                  class: "detail-value"
+                  children: "{{clientName}}"
+                - from: div
+                  children: "{{clientAddress}}"
+            - from: div
+              class: "detail-box"
+              children:
+                - from: div
+                  class: "detail-label"
+                  children: "Invoice Date"
+                - from: div
+                  class: "detail-value"
+                  children: "{{invoiceDate}}"
+            - from: div
+              class: "detail-box"
+              children:
+                - from: div
+                  class: "detail-label"
+                  children: "Due Date"
+                - from: div
+                  class: "detail-value"
+                  children: "{{dueDate}}"
+        - from: table
+          children:
+            - from: thead
+              children:
+                - from: tr
+                  children:
+                    - from: th
+                      children: "Description"
+                    - from: th
+                      style: "text-align: right;"
+                      children: "Qty"
+                    - from: th
+                      style: "text-align: right;"
+                      children: "Unit Price"
+                    - from: th
+                      style: "text-align: right;"
+                      children: "Total"
+            - from: tbody
+              children:
+                $map(items, item => tr(
+                  td(item.description),
+                  td(style: "text-align: right;", item.quantity),
+                  td(style: "text-align: right;", item.unitPrice),
+                  td(style: "text-align: right;", item.total)
+                ))
+        - from: div
+          class: "totals"
+          children:
+            - from: div
+              class: "total-row"
+              children:
+                - from: span
+                  children: "Subtotal"
+                - from: span
+                  children: "\${subtotal}"
+            - from: div
+              class: "total-row"
+              children:
+                - from: span
+                  children: "Tax (\${taxRate}%)"
+                - from: span
+                  children: "\${tax}"
+            - from: div
+              class: "total-row total-final"
+              children:
+                - from: span
+                  children: "Total"
+                - from: span
+                  children: "\${total}"
+        - from: div
+          class: "footer"
+          children: "Page {{page}} of {{pages}} - Thank you for your business!"
+
+# Main component - PDF Generation Demo
+main:
+  from: div
+  class: "container"
+  children:
+    - from: h1
+      children: "PDF Generation with Headers & Footers"
+    - from: p
+      children: "Generate professional PDFs with custom headers, footers, and page layouts using ironpress"
+    
+    - from: h2
+      children: "Document with Header/Footer"
+    - from: p
+      children: "This example demonstrates a document template with running headers and footers using CSS @page rules."
+    
+    - from: h2
+      children: "Invoice Template"
+    - from: p
+      children: "Professional invoice template with company details, line items, and totals."
+    
+    - from: h2
+      children: "Report Template"
+    - from: p
+      children: "Professional report template with header, sections, and data tables."
+    
+    - from: div
+      class: "card"
+      children:
+        - from: h3
+          children: "How to Generate PDF"
+        - from: ol
+          children:
+            - from: li
+              children: "Select 'PDF' from the view dropdown"
+            - from: li
+              children: "Click 'Download' to save as PDF"
+            - from: li
+              children: "Or use the ironpress API programmatically"
+        - from: pre
+          children: |
+            // Programmatic PDF generation
+            const ymx = new Ymx();
+            ymx.parse(yamlContent);
+            const mainFn = ymx.__get__('main');
+            const result = mainFn();
+            const pdfBytes = result.asPdf();
+            // Save or display pdfBytes

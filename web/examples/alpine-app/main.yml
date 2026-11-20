@@ -1,0 +1,379 @@
+# Alpine.js Web App
+# A complete web application using Alpine.js for interactivity
+
+# Alpine.js component
+alpineApp:
+  from: div
+  x-data: "app()"
+  children:
+    - from: div
+      class: "app-container"
+      children:
+        - from: header
+          class: "app-header"
+          children:
+            - from: h1
+              children: "Task Manager"
+            - from: button
+              class: "btn btn-primary"
+              "@click": "showAddModal = true"
+              children: "+ New Task"
+        
+        - from: div
+          class: "app-toolbar"
+          children:
+            - from: select
+              x-model: "filter"
+              class: "form-select"
+              children:
+                - from: option
+                  value: "all"
+                  children: "All Tasks"
+                - from: option
+                  value: "active"
+                  children: "Active"
+                - from: option
+                  value: "completed"
+                  children: "Completed"
+            - from: input
+              type: "text"
+              x-model: "search"
+              placeholder: "Search tasks..."
+              class: "form-input"
+        
+        - from: div
+          class: "task-stats"
+          children:
+            - from: span
+              children: "Total: {{tasks.length}}"
+            - from: span
+              children: "Active: {{activeCount}}"
+            - from: span
+              children: "Completed: {{completedCount}}"
+        
+        - from: ul
+          class: "task-list"
+          children:
+            - from: template
+              x-for: "task in filteredTasks"
+              children:
+                - from: li
+                  class: "task-item {{task.completed ? 'completed' : ''}}"
+                  x-transition: "true"
+                  children:
+                    - from: input
+                      type: "checkbox"
+                      x-model: "task.completed"
+                      class: "task-checkbox"
+                    - from: div
+                      class: "task-content"
+                      children:
+                        - from: h4
+                          class: "task-title"
+                          x-text: "task.title"
+                        - from: p
+                          class: "task-description"
+                          x-text: "task.description"
+                        - from: div
+                          class: "task-meta"
+                          children:
+                            - from: span
+                              class: "badge badge-{{task.priority}}"
+                              x-text: "task.priority"
+                            - from: span
+                              x-text: "task.dueDate ? 'Due: ' + task.dueDate : ''"
+                    - from: div
+                      class: "task-actions"
+                      children:
+                        - from: button
+                          class: "btn btn-sm btn-secondary"
+                          @click: "editTask(task)"
+                          children: "Edit"
+                        - from: button
+                          class: "btn btn-sm btn-danger"
+                          @click: "deleteTask(task.id)"
+                          children: "Delete"
+        
+        - from: div
+          x-show: "showAddModal"
+          x-transition: "true"
+          class: "modal-overlay"
+          "@click.self": "showAddModal = false"
+          children:
+            - from: div
+              class: "modal"
+              children:
+                - from: div
+                  class: "modal-header"
+                  children:
+                    - from: h2
+                      children: "Add New Task"
+                    - from: button
+                      class: "modal-close"
+                      @click: "showAddModal = false"
+                      children: "×"
+                - from: form
+                  @submit.prevent: "addTask"
+                  class: "modal-body"
+                  children:
+                    - from: div
+                      class: "form-group"
+                      children:
+                        - from: label
+                          children: "Title"
+                        - from: input
+                          type: "text"
+                          x-model: "newTask.title"
+                          required: true
+                          class: "form-input"
+                          placeholder: "Task title"
+                    - from: div
+                      class: "form-group"
+                      children:
+                        - from: label
+                          children: "Description"
+                        - from: textarea
+                          x-model: "newTask.description"
+                          class: "form-textarea"
+                          rows: 3
+                          placeholder: "Task description"
+                    - from: div
+                      class: "form-row"
+                      children:
+                        - from: div
+                          class: "form-group"
+                          children:
+                            - from: label
+                              children: "Priority"
+                            - from: select
+                              x-model: "newTask.priority"
+                              class: "form-select"
+                              children:
+                                - from: option
+                                  value: "low"
+                                  children: "Low"
+                                - from: option
+                                  value: "medium"
+                                  selected: true
+                                  children: "Medium"
+                                - from: option
+                                  value: "high"
+                                  children: "High"
+                        - from: div
+                          class: "form-group"
+                          children:
+                            - from: label
+                              children: "Due Date"
+                            - from: input
+                              type: "date"
+                              x-model: "newTask.dueDate"
+                              class: "form-input"
+                    - from: div
+                      class: "modal-footer"
+                      children:
+                        - from: button
+                          type: "button"
+                          class: "btn btn-secondary"
+                          @click: "showAddModal = false"
+                          children: "Cancel"
+                        - from: button
+                          type: "submit"
+                          class: "btn btn-primary"
+                          children: "Create Task"
+        
+        - from: div
+          x-show: "editingTask"
+          x-transition: "true"
+          class: "modal-overlay"
+          "@click.self": "editingTask = null"
+          children:
+            - from: div
+              class: "modal"
+              children:
+                - from: div
+                  class: "modal-header"
+                  children:
+                    - from: h2
+                      children: "Edit Task"
+                    - from: button
+                      class: "modal-close"
+                      @click: "editingTask = null"
+                      children: "×"
+                - from: form
+                  @submit.prevent: "updateTask"
+                  class: "modal-body"
+                  children:
+                    - from: div
+                      class: "form-group"
+                      children:
+                        - from: label
+                          children: "Title"
+                        - from: input
+                          type: "text"
+                          x-model: "editingTask.title"
+                          required: true
+                          class: "form-input"
+                    - from: div
+                      class: "form-group"
+                      children:
+                        - from: label
+                          children: "Description"
+                        - from: textarea
+                          x-model: "editingTask.description"
+                          class: "form-textarea"
+                          rows: 3
+                    - from: div
+                      class: "form-row"
+                      children:
+                        - from: div
+                          class: "form-group"
+                          children:
+                            - from: label
+                              children: "Priority"
+                            - from: select
+                              x-model: "editingTask.priority"
+                              class: "form-select"
+                              children:
+                                - from: option
+                                  value: "low"
+                                  children: "Low"
+                                - from: option
+                                  value: "medium"
+                                  children: "Medium"
+                                - from: option
+                                  value: "high"
+                                  children: "High"
+                        - from: div
+                          class: "form-group"
+                          children:
+                            - from: label
+                              children: "Due Date"
+                            - from: input
+                              type: "date"
+                              x-model: "editingTask.dueDate"
+                              class: "form-input"
+                    - from: div
+                      class: "modal-footer"
+                      children:
+                        - from: button
+                          type: "button"
+                          class: "btn btn-secondary"
+                          @click: "editingTask = null"
+                          children: "Cancel"
+                        - from: button
+                          type: "submit"
+                          class: "btn btn-primary"
+                          children: "Save Changes"
+
+# Main component with Alpine.js
+main:
+  from: div
+  x-data: "app()"
+  x-init: "loadTasks()"
+  children:
+    - from: script
+      src: "https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"
+      defer: true
+    - from: script
+      children: |
+        function app() {
+          return {
+            tasks: [],
+            filter: 'all',
+            search: '',
+            showAddModal: false,
+            editingTask: null,
+            newTask: {
+              title: '',
+              description: '',
+              priority: 'medium',
+              dueDate: ''
+            },
+            
+            loadTasks() {
+              const saved = localStorage.getItem('ymx-tasks');
+              this.tasks = saved ? JSON.parse(saved) : this.getDefaultTasks();
+            },
+            
+            getDefaultTasks() {
+              return [
+                { id: 1, title: 'Learn YMX', description: 'Complete the YMX tutorial', completed: true, priority: 'high', dueDate: '2024-01-15' },
+                { id: 2, title: 'Build a component', description: 'Create a reusable button component', completed: false, priority: 'medium', dueDate: '2024-01-20' },
+                { id: 3, title: 'Write tests', description: 'Add unit tests for components', completed: false, priority: 'low', dueDate: '2024-01-25' }
+              ];
+            },
+            
+            saveTasks() {
+              localStorage.setItem('ymx-tasks', JSON.stringify(this.tasks));
+            },
+            
+            get filteredTasks() {
+              let tasks = this.tasks;
+              
+              if (this.filter === 'active') {
+                tasks = tasks.filter(t => !t.completed);
+              } else if (this.filter === 'completed') {
+                tasks = tasks.filter(t => t.completed);
+              }
+              
+              if (this.search) {
+                const search = this.search.toLowerCase();
+                tasks = tasks.filter(t => 
+                  t.title.toLowerCase().includes(search) ||
+                  t.description.toLowerCase().includes(search)
+                );
+              }
+              
+              return tasks;
+            },
+            
+            get activeCount() {
+              return this.tasks.filter(t => !t.completed).length;
+            },
+            
+            get completedCount() {
+              return this.tasks.filter(t => t.completed).length;
+            },
+            
+            addTask() {
+              const task = {
+                id: Date.now(),
+                title: this.newTask.title,
+                description: this.newTask.description,
+                completed: false,
+                priority: this.newTask.priority,
+                dueDate: this.newTask.dueDate,
+                createdAt: new Date().toISOString()
+              };
+              this.tasks.unshift(task);
+              this.saveTasks();
+              this.resetForm();
+              this.showAddModal = false;
+            },
+            
+            resetForm() {
+              this.newTask = { title: '', description: '', priority: 'medium', dueDate: '' };
+            },
+            
+            editTask(task) {
+              this.editingTask = { ...task };
+            },
+            
+            updateTask() {
+              const index = this.tasks.findIndex(t => t.id === this.editingTask.id);
+              if (index !== -1) {
+                this.tasks[index] = { ...this.editingTask };
+                this.saveTasks();
+              }
+              this.editingTask = null;
+            },
+            
+            deleteTask(id) {
+              if (confirm('Delete this task?')) {
+                this.tasks = this.tasks.filter(t => t.id !== id);
+                this.saveTasks();
+              }
+            }
+          };
+        }
+    - from: alpineApp

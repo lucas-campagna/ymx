@@ -1,0 +1,145 @@
+# String Manipulation
+# Demonstrates string operations in YMX
+
+# String utilities
+strings:
+  text: "Hello, YMX World!"
+  words: "apple,banana,cherry,date"
+  spaced: "  hello world  "
+  mixed: "HeLLo WoRLD"
+
+# String operations
+operations:
+  upper: "\${upper(strings.text)}"
+  lower: "\${lower(strings.text)}"
+  trim: "\${trim(strings.spaced)}"
+  split: "\${split(strings.words, ',')}"
+  join: "\${join(operations.split, ' | ')}"
+  length: "\${strings.text.length}"
+  slice: "\${strings.text.slice(7, 10)}"
+  replace: "\${strings.text.replace('World', 'YMX')}"
+  starts: "\${strings.text.startsWith('Hello')}"
+  ends: "\${strings.text.endsWith('!')}"
+  includes: "\${strings.text.includes('YMX')}"
+
+# Template interpolation
+templates:
+  name: "YMX"
+  version: "1.0"
+  template: "\${upper(strings.text)} - v\${version}"
+  formatted: "Welcome to \${upper(\${name})} v\${version}!"
+
+# Main component
+main:
+  from: div
+  class: "container"
+  children:
+    - from: h1
+      children: "String Manipulation"
+    - from: p
+      children: "String operations and template interpolation in YMX"
+    
+    - from: h2
+      children: "Original Strings"
+    - from: div
+      class: "grid"
+      children:
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Original"
+            - from: p
+              children: "\${strings.text}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Words"
+            - from: p
+              children: "\${strings.words}"
+    
+    - from: h2
+      children: "String Operations"
+    - from: div
+      class: "grid"
+      children:
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Uppercase"
+            - from: p
+              children: "\${operations.upper}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Lowercase"
+            - from: p
+              children: "\${operations.lower}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Trim"
+            - from: p
+              children: "\${operations.trim}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Length"
+            - from: p
+              children: "\${operations.length}"
+    
+    - from: h2
+      children: "Split & Join"
+    - from: div
+      class: "card"
+      children:
+        - from: h3
+          children: "Split by comma"
+        - from: p
+          children: "\${operations.split}"
+        - from: h3
+          children: "Joined with ' | '"
+        - from: p
+          children: "\${operations.join}"
+    
+    - from: h2
+      children: "Template Interpolation"
+    - from: div
+      class: "card"
+      children:
+        - from: p
+          children: "Template: \${templates.template}"
+        - from: p
+          children: "Formatted: \${templates.formatted}"
+    
+    - from: h2
+      children: "String Checks"
+    - from: div
+      class: "grid"
+      children:
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Starts with 'Hello'"
+            - from: p
+              children: "\${operations.starts}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Ends with '!'"
+            - from: p
+              children: "\${operations.ends}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Includes 'YMX'"
+            - from: p
+              children: "\${operations.includes}"

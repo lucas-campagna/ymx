@@ -1,0 +1,496 @@
+# Todo App
+# A complete todo application with localStorage persistence
+
+# Task component
+task:
+  from: div
+  class: "task {{completed ? 'completed' : ''}} {{priority}}"
+  children:
+    - from: input
+      type: "checkbox"
+      checked: "{{completed}}"
+      class: "task-checkbox"
+    - from: div
+      class: "task-content"
+      children:
+        - from: h4
+          class: "task-title"
+          children: "{{title}}"
+        - from: p
+          class: "task-description"
+          children: "{{description}}"
+        - from: div
+          class: "task-meta"
+          children:
+            - from: span
+              class: "badge badge-{{priority}}"
+              children: "{{priority}}"
+            - from: span
+              class: "due-date"
+              children: "{{dueDate || 'No due date'}}"
+    - from: div
+      class: "task-actions"
+      children:
+        - from: button
+          class: "btn btn-sm btn-secondary edit-btn"
+          data-id: "{{id}}"
+          children: "Edit"
+        - from: button
+          class: "btn btn-sm btn-danger delete-btn"
+          data-id: "{{id}}"
+          children: "Delete"
+
+# Filter tabs
+filterTabs:
+  from: div
+  class: "filter-tabs"
+  children:
+    - from: button
+      class: "filter-tab {{filter === 'all' ? 'active' : ''}}"
+      data-filter: "all"
+      children: "All ({{allCount}})"
+    - from: button
+      class: "filter-tab {{filter === 'active' ? 'active' : ''}}"
+      data-filter: "active"
+      children: "Active ({{activeCount}})"
+    - from: button
+      class: "filter-tab {{filter === 'completed' ? 'active' : ''}}"
+      data-filter: "completed"
+      children: "Completed ({{completedCount}})"
+
+# Add task form
+addTaskForm:
+  from: form
+  class: "add-task-form"
+  id: "add-task-form"
+  children:
+    - from: div
+      class: "form-group"
+      children:
+        - from: label
+          children: "Title"
+        - from: input
+          type: "text"
+          name: "title"
+          placeholder: "What needs to be done?"
+          required: true
+    - from: div
+      class: "form-row"
+      children:
+        - from: div
+          class: "form-group"
+          children:
+            - from: label
+              children: "Priority"
+            - from: select
+              name: "priority"
+              children:
+                - from: option
+                  value: "low"
+                  children: "Low"
+                - from: option
+                  value: "medium"
+                  selected: true
+                  children: "Medium"
+                - from: option
+                  value: "high"
+                  children: "High"
+        - from: div
+          class: "form-group"
+          children:
+            - from: label
+              children: "Due Date"
+            - from: input
+              type: "date"
+              name: "dueDate"
+    - from: div
+      class: "form-group"
+      children:
+        - from: label
+          children: "Description"
+        - from: textarea
+          name: "description"
+          placeholder: "Optional description"
+          rows: 3
+    - from: button
+      type: "submit"
+      class: "btn btn-primary btn-block"
+      children: "Add Task"
+
+# Stats bar
+statsBar:
+  from: div
+  class: "stats-bar"
+  children:
+    - from: div
+      class: "stat"
+      children:
+        - from: span
+          class: "stat-value"
+          children: "{{totalCount}}"
+        - from: span
+          class: "stat-label"
+          children: "Total"
+    - from: div
+      class: "stat"
+      children:
+        - from: span
+          class: "stat-value"
+          children: "{{activeCount}}"
+        - from: span
+          class: "stat-label"
+          children: "Active"
+    - from: div
+      class: "stat"
+      children:
+        - from: span
+          class: "stat-value"
+          children: "{{completedCount}}"
+        - from: span
+          class: "stat-label"
+          children: "Done"
+
+# Main component with vanilla JS
+main:
+  from: div
+  class: "todo-app"
+  children:
+    - from: div
+      class: "app-header"
+      children:
+        - from: h1
+          children: "Todo App"
+        - from: p
+          class: "subtitle"
+          children: "Stay organized, get things done"
+    
+    - from: addTaskForm
+    
+    - from: statsBar
+    
+    - from: filterTabs
+    
+    - from: ul
+      class: "task-list"
+      id: "task-list"
+      children: ""
+    
+    - from: div
+      class: "empty-state"
+      id: "empty-state"
+      style: "display: none;"
+      children:
+        - from: p
+          children: "No tasks yet. Add one above!"
+        - from: p
+          class: "hint"
+          children: "Tasks are saved in your browser"
+    
+    - from: script
+      children: |
+        // Todo App State
+        const state = {
+          tasks: [],
+          filter: 'all',
+          nextId: 1
+        };
+        
+        // DOM Elements
+        const elements = {
+          form: document.getElementById('add-task-form'),
+          taskList: document.getElementById('task-list'),
+          emptyState: document.getElementById('empty-state'),
+          filterTabs: document.querySelectorAll('.filter-tab'),
+          stats: {
+            total: document.querySelector('.stat:first-child .stat-value'),
+            active: document.querySelector('.stat:nth-child(2) .stat-value'),
+            completed: document.querySelector('.stat:nth-child(3) .stat-value')
+          },
+          filterCounts: {
+            all: document.querySelector('[data-filter="all"]'),
+            active: document.querySelector('[data-filter="active"]'),
+            completed: document.querySelector('[data-filter="completed"]')
+          }
+        };
+        
+        // Initialize
+        function init() {
+          loadTasks();
+          renderTasks();
+          updateStats();
+          bindEvents();
+        }
+        
+        // Load tasks from localStorage
+        function loadTasks() {
+          const saved = localStorage.getItem('todo-tasks');
+          if (saved) {
+            state.tasks = JSON.parse(saved);
+            state.nextId = Math.max(...state.tasks.map(t => t.id), 0) + 1;
+          }
+        }
+        
+        // Save tasks to localStorage
+        function saveTasks() {
+          localStorage.setItem('todo-tasks', JSON.stringify(state.tasks));
+        }
+        
+        // Render tasks based on current filter
+        function renderTasks() {
+          const filtered = getFilteredTasks();
+          elements.taskList.innerHTML = '';
+          
+          if (filtered.length === 0) {
+            elements.taskList.style.display = 'none';
+            elements.emptyState.style.display = 'block';
+            return;
+          }
+          
+          elements.taskList.style.display = 'block';
+          elements.emptyState.style.display = 'none';
+          
+          filtered.forEach(task => {
+            const li = document.createElement('li');
+            li.className = `task ${task.completed ? 'completed' : ''} ${task.priority}`;
+            li.dataset.id = task.id;
+            li.innerHTML = `
+              <input type="checkbox" class="task-checkbox" ${task.completed ? 'checked' : ''} data-id="${task.id}">
+              <div class="task-content">
+                <h4 class="task-title">${escapeHtml(task.title)}</h4>
+                ${task.description ? `<p class="task-description">${escapeHtml(task.description)}</p>` : ''}
+                <div class="task-meta">
+                  <span class="badge badge-${task.priority}">${task.priority}</span>
+                  <span class="due-date">${task.dueDate ? formatDate(task.dueDate) : 'No due date'}</span>
+                </div>
+              </div>
+              <div class="task-actions">
+                <button class="btn btn-sm btn-secondary edit-btn" data-id="${task.id}">Edit</button>
+                <button class="btn btn-sm btn-danger delete-btn" data-id="${task.id}">Delete</button>
+              </div>
+            `;
+            elements.taskList.appendChild(li);
+          });
+        }
+        
+        // Get filtered tasks based on current filter
+        function getFilteredTasks() {
+          switch (state.filter) {
+            case 'active':
+              return state.tasks.filter(t => !t.completed);
+            case 'completed':
+              return state.tasks.filter(t => t.completed);
+            default:
+              return state.tasks;
+          }
+        }
+        
+        // Update statistics
+        function updateStats() {
+          const total = state.tasks.length;
+          const active = state.tasks.filter(t => !t.completed).length;
+          const completed = state.tasks.filter(t => t.completed).length;
+          
+          elements.stats.total.textContent = total;
+          elements.stats.active.textContent = active;
+          elements.stats.completed.textContent = completed;
+          
+          elements.filterCounts.all.textContent = `All (${total})`;
+          elements.filterCounts.active.textContent = `Active (${active})`;
+          elements.filterCounts.completed.textContent = `Completed (${completed})`;
+        }
+        
+        // Format date for display
+        function formatDate(dateStr) {
+          if (!dateStr) return 'No due date';
+          const date = new Date(dateStr);
+          return date.toLocaleDateString();
+        }
+        
+        // Escape HTML
+        function escapeHtml(text) {
+          const div = document.createElement('div');
+          div.textContent = text;
+          return div.innerHTML;
+        }
+        
+        // Bind event listeners
+        function bindEvents() {
+          // Form submission
+          elements.form.addEventListener('submit', e => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            addTask({
+              title: formData.get('title'),
+              priority: formData.get('priority'),
+              dueDate: formData.get('dueDate') || null,
+              description: formData.get('description') || ''
+            });
+            e.target.reset();
+          });
+          
+          // Task list events (delegation)
+          elements.taskList.addEventListener('click', e => {
+            const taskEl = e.target.closest('.task');
+            if (!taskEl) return;
+            const id = parseInt(taskEl.dataset.id);
+            
+            if (e.target.classList.contains('task-checkbox')) {
+              toggleTask(id);
+            } else if (e.target.classList.contains('delete-btn')) {
+              deleteTask(id);
+            } else if (e.target.classList.contains('edit-btn')) {
+              editTask(id);
+            }
+          });
+          
+          // Filter tabs
+          elements.filterTabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+              state.filter = tab.dataset.filter;
+              elements.filterTabs.forEach(t => t.classList.toggle('active', t === tab));
+              renderTasks();
+            });
+          });
+        }
+        
+        // Add new task
+        function addTask(data) {
+          const task = {
+            id: state.nextId++,
+            title: data.title,
+            description: data.description,
+            completed: false,
+            priority: data.priority,
+            dueDate: data.dueDate,
+            createdAt: new Date().toISOString()
+          };
+          state.tasks.unshift(task);
+          saveTasks();
+          renderTasks();
+          updateStats();
+        }
+        
+        // Toggle task completion
+        function toggleTask(id) {
+          const task = state.tasks.find(t => t.id === id);
+          if (task) {
+            task.completed = !task.completed;
+            saveTasks();
+            renderTasks();
+            updateStats();
+          }
+        }
+        
+        // Delete task
+        function deleteTask(id) {
+          if (confirm('Delete this task?')) {
+            state.tasks = state.tasks.filter(t => t.id !== id);
+            saveTasks();
+            renderTasks();
+            updateStats();
+          }
+        }
+        
+        // Edit task (simplified - could open a modal)
+        function editTask(id) {
+          const task = state.tasks.find(t => t.id === id);
+          if (!task) return;
+          
+          const newTitle = prompt('Edit title:', task.title);
+          if (newTitle !== null && newTitle.trim()) {
+            task.title = newTitle.trim();
+            saveTasks();
+            renderTasks();
+          }
+        }
+        
+        // Start the app
+        init();
+      </script>
+    - from: div
+      class: "todo-container"
+      children:
+        - from: div
+          class: "app-header"
+          children:
+            - from: h1
+              children: "Todo App"
+            - from: p
+              class: "subtitle"
+              children: "Stay organized, get things done"
+        
+        - from: form
+          class: "add-task-form"
+          id: "add-task-form"
+          children:
+            - from: div
+              class: "form-group"
+              children:
+                - from: label
+                  children: "Title"
+                - from: input
+                  type: "text"
+                  name: "title"
+                  placeholder: "What needs to be done?"
+                  required: true
+            - from: div
+              class: "form-row"
+              children:
+                - from: div
+                  class: "form-group"
+                  children:
+                    - from: label
+                      children: "Priority"
+                    - from: select
+                      name: "priority"
+                      children:
+                        - from: option
+                          value: "low"
+                          children: "Low"
+                        - from: option
+                          value: "medium"
+                          selected: true
+                          children: "Medium"
+                        - from: option
+                          value: "high"
+                          children: "High"
+                - from: div
+                  class: "form-group"
+                  children:
+                    - from: label
+                      children: "Due Date"
+                    - from: input
+                      type: "date"
+                      name: "dueDate"
+            - from: div
+              class: "form-group"
+              children:
+                - from: label
+                  children: "Description"
+                - from: textarea
+                  name: "description"
+                  placeholder: "Optional description"
+                  rows: 3
+            - from: button
+              type: "submit"
+              class: "btn btn-primary btn-block"
+              children: "Add Task"
+        
+        - from: statsBar
+        
+        - from: filterTabs
+        
+        - from: ul
+          class: "task-list"
+          id: "task-list"
+        
+        - from: div
+          class: "empty-state"
+          id: "empty-state"
+          style: "display: none;"
+          children:
+            - from: p
+              children: "No tasks yet. Add one above!"
+            - from: p
+              class: "hint"
+              children: "Tasks are saved in your browser"

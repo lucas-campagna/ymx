@@ -1,0 +1,40 @@
+# Hello World Example
+# This demonstrates basic YMX syntax
+
+# Define a reusable card component
+card:
+  from: div
+  class: "card"
+  children:
+    - from: h2
+      children: "{{title}}"
+    - from: p
+      children: "{{message}}"
+
+# Define a button component
+button:
+  from: button
+  class: "btn btn-{{variant || 'primary'}}"
+  children: "{{label}}"
+
+# Main component - this is what gets rendered
+main:
+  from: div
+  class: "container"
+  children:
+    - from: h1
+      children: "Hello, YMX!"
+    - from: p
+      children: "Welcome to the YMX Playground"
+    - from: card
+      title: "Welcome Card"
+      message: "This is a simple YMX example"
+    - from: card
+      title: "Reusable Components"
+      message: "Components can be reused with different props"
+    - from: button
+      label: "Click Me"
+      variant: "primary"
+    - from: button
+      label: "Secondary"
+      variant: "secondary"

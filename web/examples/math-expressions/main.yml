@@ -1,0 +1,126 @@
+# Math Expressions
+# Demonstrates mathematical operations in YMX
+
+# Calculator component
+calculator:
+  a: 10
+  b: 5
+  sum: "\${a + b}"
+  diff: "\${a - b}"
+  product: "\${a * b}"
+  quotient: "\${a / b}"
+  power: "\${a ** b}"
+  modulo: "\${a % b}"
+
+# Advanced math
+advanced:
+  pi: 3.14159
+  radius: 5
+  area: "\${pi * radius ** 2}"
+  circumference: "\${2 * pi * radius}"
+  volume: "\${4/3 * pi * radius ** 3}"
+
+# Number formatting
+formatter:
+  name: "YMX"
+  version: 1
+  price: 99.99
+  tax: 0.08
+  display: "\${upper(name)} v\${version}"
+  total: "\${price * (1 + tax)}"
+  formatted: "\${\${price}.toFixed(2)}"
+
+# Random and utilities
+utils:
+  random: "\${Math.random()}"
+  randomInt: "\${Math.floor(Math.random() * 100) + 1}"
+  min: "\${Math.min(10, 20, 5)}"
+  max: "\${Math.max(10, 20, 5)}"
+  abs: "\${Math.abs(-42)}"
+  sqrt: "\${Math.sqrt(144)}"
+  round: "\${Math.round(3.7)}"
+  floor: "\${Math.floor(3.7)}"
+  ceil: "\${Math.ceil(3.2)}"
+
+# Main component
+main:
+  from: div
+  class: "container"
+  children:
+    - from: h1
+      children: "Math Expressions"
+    - from: p
+      children: "Mathematical operations in YMX"
+    
+    - from: h2
+      children: "Basic Operations"
+    - from: div
+      class: "grid"
+      children:
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Calculator (a=10, b=5)"
+            - from: p
+              children: "Sum: \${calculator.sum}"
+            - from: p
+              children: "Diff: \${calculator.diff}"
+            - from: p
+              children: "Product: \${calculator.product}"
+            - from: p
+              children: "Quotient: \${calculator.quotient}"
+            - from: p
+              children: "Power: \${calculator.power}"
+            - from: p
+              children: "Modulo: \${calculator.modulo}"
+    
+    - from: h2
+      children: "Geometry (r=5)"
+    - from: div
+      class: "card"
+      children:
+        - from: h3
+          children: "Circle Calculations"
+        - from: p
+          children: "Area: \${advanced.area}"
+        - from: p
+          children: "Circumference: \${advanced.circumference}"
+        - from: p
+          children: "Sphere Volume: \${advanced.volume}"
+    
+    - from: h2
+      children: "Number Formatting"
+    - from: div
+      class: "card"
+      children:
+        - from: p
+          children: "Display: \${formatter.display}"
+        - from: p
+          children: "Total with tax: \${formatter.total}"
+        - from: p
+          children: "Formatted price: \${formatter.formatted}"
+    
+    - from: h2
+      children: "Utility Functions"
+    - from: div
+      class: "card"
+      children:
+        - from: p
+          children: "Random: \${utils.random}"
+        - from: p
+          children: "Random int (1-100): \${utils.randomInt}"
+        - from: p
+          children: "Min(10,20,5): \${utils.min}"
+        - from: p
+          children: "Max(10,20,5): \${utils.max}"
+        - from: p
+          children: "Abs(-42): \${utils.abs}"
+        - from: p
+          children: "Sqrt(144): \${utils.sqrt}"
+        - from: p
+          children: "Round(3.7): \${utils.round}"
+        - from: p
+          children: "Floor(3.7): \${utils.floor}"
+        - from: p
+          children: "Ceil(3.2): \${utils.ceil}"

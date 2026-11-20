@@ -1,0 +1,204 @@
+# $map / $reduce
+# Demonstrates array transformation and aggregation
+
+# Sample data
+data:
+  numbers: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  users:
+    - name: "Alice"
+      age: 25
+      score: 85
+    - name: "Bob"
+      age: 30
+      score: 92
+    - name: "Charlie"
+      age: 35
+      score: 78
+    - name: "Diana"
+      age: 28
+      score: 95
+  products:
+    - name: "Laptop"
+      price: 999
+      category: "electronics"
+    - name: "Mouse"
+      price: 29
+      category: "electronics"
+    - name: "Book"
+      price: 19
+      category: "books"
+    - from: div
+      class: "card"
+      children:
+        - from: h3
+          children: "Filtered"
+        - from: p
+          children: "Filtered items"
+
+# $map examples
+map_examples:
+  doubled: "\${$map(data.numbers, n => n * 2)}"
+  squared: "\${$map(data.numbers, n => n ** 2)}"
+  names: "\${$map(data.users, u => u.name)}"
+  upperNames: "\${$map(data.users, u => upper(u.name))}"
+  withBonus: "\${$map(data.users, u => merge(u, {bonus: u.score * 0.1}))}"
+  productNames: "\${$map(data.products, p => p.name)}"
+  prices: "\${$map(data.products, p => p.price)}"
+  formatted: "\${$map(data.products, p => '\${p.name}: \${p.price}')}"
+
+# $reduce examples
+reduce_examples:
+  sum: "\${$reduce(data.numbers, (acc, n) => acc + n, 0)}"
+  product: "\${$reduce(data.numbers, (acc, n) => acc * n, 1)}"
+  max: "\${$reduce(data.numbers, (acc, n) => n > acc ? n : acc, data.numbers[0])}"
+  min: "\${$reduce(data.numbers, (acc, n) => n < acc ? n : acc, data.numbers[0])}"
+  totalScore: "\${$reduce(data.users, (acc, u) => acc + u.score, 0)}"
+  avgScore: "\${reduce_examples.totalScore / data.users.length}"
+  concatenated: "\${$reduce(data.users, (acc, u) => acc + ', ' + u.name, '')}"
+  totalPrice: "\${$reduce(data.products, (acc, p) => acc + p.price, 0)}"
+  categories: "\${$reduce(data.products, (acc, p) => merge(acc, {[\${p.category}]: (acc[\${p.category}] || 0) + 1}), {})}"
+
+# Chaining map and reduce
+chained:
+  sumOfSquares: "\${$reduce($map(data.numbers, n => n ** 2), (acc, n) => acc + n, 0)}"
+  avgAge: "\${$reduce($map(data.users, u => u.age), (acc, a) => acc + a, 0) / data.users.length}"
+  totalElectronics: "\${$reduce($map($filter(data.products, p => p.category == 'electronics'), p => p.price), (acc, p) => acc + p, 0)}"
+
+# Main component
+main:
+  from: div
+  class: "container"
+  children:
+    - from: h1
+      children: "$map / $reduce"
+    - from: p
+      children: "Array transformation and aggregation in YMX"
+    
+    - from: h2
+      children: "Source Data"
+    - from: div
+      class: "grid"
+      children:
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Numbers"
+            - from: pre
+              children: "\${data.numbers}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Users"
+            - from: pre
+              children: "\${data.users}"
+    
+    - from: h2
+      children: "$map - Transform Arrays"
+    - from: div
+      class: "grid"
+      children:
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Doubled"
+            - from: pre
+              children: "\${map_examples.doubled}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Squared"
+            - from: pre
+              children: "\${map_examples.squared}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Names"
+            - from: pre
+              children: "\${map_examples.names}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "With Bonus"
+            - from: pre
+              children: "\${map_examples.withBonus}"
+    
+    - from: h2
+      children: "$reduce - Aggregate Arrays"
+    - from: div
+      class: "grid"
+      children:
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Sum"
+            - from: p
+              children: "\${reduce_examples.sum}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Product"
+            - from: p
+              children: "\${reduce_examples.product}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Max"
+            - from: p
+              children: "\${reduce_examples.max}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Min"
+            - from: p
+              children: "\${reduce_examples.min}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Avg Score"
+            - from: p
+              children: "\${reduce_examples.avgScore}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Categories"
+            - from: pre
+              children: "\${reduce_examples.categories}"
+    
+    - from: h2
+      children: "Chained Operations"
+    - from: div
+      class: "grid"
+      children:
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Sum of Squares"
+            - from: p
+              children: "\${chained.sumOfSquares}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Avg Age"
+            - from: p
+              children: "\${chained.avgAge}"
+        - from: div
+          class: "card"
+          children:
+            - from: h3
+              children: "Electronics Total"
+            - from: p
+              children: "\${chained.totalElectronics}"

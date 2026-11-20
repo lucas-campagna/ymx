@@ -1,0 +1,303 @@
+# HTML Layouts
+# Demonstrates HTML rendering with grids, cards, forms, and layouts
+
+# Layout components
+container:
+  from: div
+  class: "container"
+  children: "{{children}}"
+
+row:
+  from: div
+  class: "row"
+  children: "{{children}}"
+
+col:
+  from: div
+  class: "col-{{size || 12}} col-md-{{md || 6}} col-lg-{{lg || 4}}"
+  children: "{{children}}"
+
+# Page layout
+page:
+  from: div
+  class: "page"
+  children:
+    - from: header
+      class: "page-header"
+      children:
+        - from: nav
+          class: "navbar"
+          children:
+            - from: a
+              class: "navbar-brand"
+              href: "#"
+              children: "YMX App"
+            - from: ul
+              class: "nav-links"
+              children:
+                - from: li
+                  children:
+                    - from: a
+                      href: "#home"
+                      children: "Home"
+                - from: li
+                  children:
+                    - from: a
+                      href: "#features"
+                      children: "Features"
+                - from: li
+                  children:
+                    - from: a
+                      href: "#pricing"
+                      children: "Pricing"
+                - from: li
+                  children:
+                    - from: a
+                      href: "#contact"
+                      children: "Contact"
+    - from: main
+      class: "page-main"
+      children: "{{content}}"
+    - from: footer
+      class: "page-footer"
+      children:
+        - from: p
+          children: "© 2024 YMX. All rights reserved."
+
+# Hero section
+hero:
+  from: section
+  class: "hero"
+  children:
+    - from: div
+      class: "hero-content"
+      children:
+        - from: h1
+          children: "{{title}}"
+        - from: p
+          class: "hero-subtitle"
+          children: "{{subtitle}}"
+        - from: div
+          class: "hero-actions"
+          children:
+            - from: button
+              class: "btn btn-primary btn-lg"
+              children: "{{ctaText || 'Get Started' }}"
+            - from: button
+              class: "btn btn-secondary btn-lg"
+              children: "{{secondaryText || 'Learn More' }}"
+
+# Feature grid
+features:
+  from: section
+  class: "features"
+  children:
+    - from: h2
+      class: "section-title"
+      children: "{{title}}"
+    - from: p
+      class: "section-subtitle"
+      children: "{{subtitle}}"
+    - from: div
+      class: "feature-grid"
+      children: "{{features}}"
+
+featureCard:
+  from: div
+  class: "feature-card"
+  children:
+    - from: div
+      class: "feature-icon"
+      children: "{{icon}}"
+    - from: h3
+      children: "{{title}}"
+    - from: p
+      children: "{{description}}"
+
+# Pricing card
+pricingCard:
+  from: div
+  class: "pricing-card {{featured ? 'featured' : ''}}"
+  children:
+    - from: h3
+      children: "{{name}}"
+    - from: div
+      class: "price"
+      children:
+        - from: span
+          class: "amount"
+          children: "\${{{price}}}"
+        - from: span
+          class: "period"
+          children: "/{{period || 'month'}}"
+    - from: ul
+      class: "features"
+      children:
+        - from: li
+          children: "{{feature1}}"
+        - from: li
+          children: "{{feature2}}"
+        - from: li
+          children: "{{feature3}}"
+    - from: button
+      class: "btn {{featured ? 'btn-primary' : 'btn-secondary'}} btn-block"
+      children: "{{cta || 'Get Started' }}"
+
+# Form layout
+formLayout:
+  from: form
+  class: "form-layout"
+  children:
+    - from: h2
+      children: "{{title}}"
+    - from: div
+      class: "form-row"
+      children:
+        - from: div
+          class: "form-group"
+          children:
+            - from: label
+              children: "First Name"
+            - from: input
+              type: "text"
+              placeholder: "John"
+        - from: div
+          class: "form-group"
+          children:
+            - from: label
+              children: "Last Name"
+            - from: input
+              type: "text"
+              placeholder: "Doe"
+    - from: div
+      class: "form-group"
+      children:
+        - from: label
+          children: "Email"
+        - from: input
+          type: "email"
+          placeholder: "you@example.com"
+    - from: div
+      class: "form-group"
+      children:
+        - from: label
+          children: "Message"
+        - from: textarea
+          placeholder: "Your message..."
+          rows: 4
+    - from: button
+      type: "submit"
+      class: "btn btn-primary btn-block"
+      children: "Submit"
+
+# Data for features
+featureData:
+  - title: "Fast"
+    description: "Lightning fast performance with minimal overhead"
+    icon: "⚡"
+  - title: "Simple"
+    description: "Clean, intuitive API that's easy to learn"
+    icon: "✨"
+  - title: "Powerful"
+    description: "Advanced features for complex applications"
+    icon: "🚀"
+  - title: "Flexible"
+    description: "Adapt to any project structure"
+    icon: "🔧"
+  - title: "Open Source"
+    description: "Free to use and contribute"
+    icon: "📖"
+  - title: "Documented"
+    description: "Comprehensive guides and examples"
+    icon: "📚"
+
+# Pricing data
+pricingData:
+  - name: "Starter"
+    price: 0
+    period: "month"
+    feature1: "Up to 5 projects"
+    feature2: "Basic components"
+    feature3: "Community support"
+    cta: "Start Free"
+  - name: "Pro"
+    price: 29
+    period: "month"
+    feature1: "Unlimited projects"
+    feature2: "All components"
+    feature2: "Priority support"
+    feature3: "Custom components"
+    cta: "Get Started"
+    featured: true
+  - name: "Enterprise"
+    price: 99
+    period: "month"
+    feature1: "Unlimited everything"
+    feature2: "Dedicated support"
+    feature2: "Custom integrations"
+    feature3: "SLA guarantee"
+    cta: "Contact Sales"
+
+# Main layout
+main:
+  from: page
+  content:
+    - from: hero
+      title: "Build Better UIs with YMX"
+      subtitle: "Component-based, declarative, and powerful"
+      ctaText: "Get Started"
+      secondaryText: "View Examples"
+    
+    - from: features
+      title: "Why Choose YMX?"
+      subtitle: "Everything you need to build modern UIs"
+      features: "\${featureData}"
+    
+    - from: section
+      class: "pricing"
+      children:
+        - from: h2
+          class: "section-title"
+          children: "Simple Pricing"
+        - from: p
+          class: "section-subtitle"
+          children: "Choose the plan that's right for you"
+        - from: div
+          class: "pricing-grid"
+          children:
+            - from: pricingCard
+              name: "Starter"
+              price: 0
+              period: "month"
+              feature1: "Up to 5 projects"
+              feature2: "Basic components"
+              feature3: "Community support"
+              cta: "Start Free"
+            - from: pricingCard
+              name: "Pro"
+              price: 29
+              period: "month"
+              feature1: "Unlimited projects"
+              feature2: "All components"
+              feature3: "Priority support"
+              cta: "Get Started"
+              featured: true
+            - from: pricingCard
+              name: "Enterprise"
+              price: 99
+              period: "month"
+              feature1: "Unlimited everything"
+              feature2: "Dedicated support"
+              feature3: "Custom integrations"
+              cta: "Contact Sales"
+    
+    - from: section
+      class: "cta-section"
+      children:
+        - from: h2
+          children: "Ready to Get Started?"
+        - from: p
+          children: "Join thousands of developers building with YMX"
+        - from: button
+          class: "btn btn-primary btn-lg"
+          children: "Start Building Today"
