@@ -778,26 +778,7 @@ body {
     outline-offset: -2px;
 }
 
-@media (min-width: 901px) {
-    .resize-handle-horizontal {
-        display: block;
-    }
-    
-    .main-container {
-        flex-direction: row;
-    }
-    
-    .editor-container {
-        flex: 1 1 auto;
-        min-width: 300px;
-    }
-    
-    .preview-container {
-        flex: 0 0 420px;
-        max-width: 100%;
-        min-width: 200px;
-    }
-}
+
 
 @media (max-width: 900px) {
     .preview-container {
